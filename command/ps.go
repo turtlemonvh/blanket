@@ -13,7 +13,13 @@ import (
 
 Like `docker ps`
 
-Lists running tasks and queued tasks
+Lists
+- running tasks
+- queued tasks (with -a)
+
+Other commands list
+- task types
+- workers and their status
 
 
 */

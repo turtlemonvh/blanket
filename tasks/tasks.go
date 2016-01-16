@@ -3,6 +3,8 @@ package tasks
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/satori/go.uuid"
+	"time"
 )
 
 /*
@@ -91,15 +93,28 @@ http://unix.stackexchange.com/questions/149730/how-do-command-line-tools-have-th
 
 // Arguments are typed per task
 type TaskType struct {
-	CreatedTs     int               `json:"createdTs"`
-	LastUpdatedTs int               `json:"lastUpdatedTs"`
+	Id            string            `json:"id"`
+	CreatedTs     int64             `json:"createdTs"`
+	LastUpdatedTs int64             `json:"lastUpdatedTs"`
 	Type          string            `json:"type"`
 	DefaultEnv    map[string]string `json:"defaultEnv"`
 	ConfigPath    string            `json:"configPath"` // path to config directory
 }
 
+func NewTaskType(typeName string, defaultEnv map[string]string) (TaskType, error) {
+	id := uuid.NewV4().String()
+	return TaskType{
+		Id:            id,
+		CreatedTs:     time.Now().Unix(),
+		LastUpdatedTs: time.Now().Unix(),
+		Type:          typeName,
+		DefaultEnv:    defaultEnv,
+		ConfigPath:    fmt.Sprintf("tasks/%s/", id),
+	}, nil
+}
+
 func (t *TaskType) String() string {
-	return fmt.Sprintf("%s - %d", t.Type, t.CreatedTs)
+	return fmt.Sprintf("%s (%s) [%d]", t.Type, t.Id, t.CreatedTs)
 }
 
 func (t *TaskType) ToJSON() (string, error) {
@@ -107,17 +122,25 @@ func (t *TaskType) ToJSON() (string, error) {
 	return string(bts), err
 }
 
-// Tasks inherit all the arguments of a tasktype + more
+// Tasks inherit all the environment params of a tasktype + more
+func (t *TaskType) NewTask(envOverrides map[string]string) (Task, error) {
+	return Task{
+		CreatedTs:     time.Now().Unix(),
+		LastUpdatedTs: time.Now().Unix(),
+		TypeId:        t.Id,
+		ExecEnv:       envOverrides,
+	}, nil
+}
 
 type Task struct {
-	CreatedTs     int               `json:"createdTs"`
-	LastUpdatedTs int               `json:"lastUpdatedTs"`
-	Type          int               `json:"type"` // id of the the task type in the database
+	CreatedTs     int64             `json:"createdTs"`
+	LastUpdatedTs int64             `json:"lastUpdatedTs"`
+	TypeId        string            `json:"type"`
 	ExecEnv       map[string]string `json:"defaultEnv"`
 }
 
 func (t *Task) String() string {
-	return fmt.Sprintf("%d - %d", t.Type, t.CreatedTs)
+	return fmt.Sprintf("%d [%d]", t.TypeId, t.CreatedTs)
 }
 
 func (t *Task) ToJSON() (string, error) {
