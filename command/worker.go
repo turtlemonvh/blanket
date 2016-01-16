@@ -8,9 +8,27 @@ https://github.com/takama/daemon
 import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/kardianos/osext"
+	"github.com/spf13/cobra"
 	_ "os/exec"
 	"strings"
 )
+
+var workerConf WorkerConf
+var workerCmd = &cobra.Command{
+	Use:   "worker",
+	Short: "Run a worker with capabilities defined by tags",
+	Run: func(cmd *cobra.Command, args []string) {
+		InitializeConfig()
+		workerConf.RunWorker()
+	},
+}
+
+func init() {
+	workerCmd.Flags().StringVarP(&workerConf.Tags, "tags", "t", "", "Tags defining capabilities of this worker")
+	workerCmd.Flags().StringVar(&workerConf.Logfile, "logfile", "", "Logfile to use")
+	workerCmd.Flags().BoolVarP(&workerConf.Daemon, "daemon", "d", false, "Run as a daemon")
+	RootCmd.AddCommand(workerCmd)
+}
 
 type WorkerConf struct {
 	Tags       string

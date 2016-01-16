@@ -1,6 +1,9 @@
 package main
 
+import (
+	"github.com/turtlemonvh/blanket/command"
+)
+
 func main() {
-	cmd := GetMainCommand()
-	cmd.Execute()
+	command.RootCmd.Execute()
 }
