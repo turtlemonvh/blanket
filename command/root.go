@@ -30,6 +30,7 @@ func InitializeConfig() {
 	// Add reloads for select config values
 	// https://github.com/spf13/viper#watching-and-re-reading-config-files
 	viper.SetDefault("port", 8773)
+	viper.SetDefault("database", "blanket.db")
 	viper.SetConfigName("blanket")
 	viper.AddConfigPath("/etc/blanket/")
 	viper.AddConfigPath("$HOME/.blanket")

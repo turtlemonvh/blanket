@@ -1,2 +1,6 @@
 blanket
-
+blanket.db
+blanket.json
+blanket.toml
+blanket.yml
+blanket.yaml
