@@ -23,7 +23,6 @@ import (
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/tasks"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -35,6 +34,26 @@ func openDatabase() *bolt.DB {
 	return db
 }
 
+/*
+	FIXME:
+	- we probably want to allow the user to import a set of tasks instead of having defaults
+	- actually, a default task that runs an arbitrary command on the command line would be useful
+	- we'll need to create the directory for it
+
+	- may want to move initialization into a separate init command; this is what django does
+	- then just check for valid initialization in startup
+
+	- include a timeout for all tasks
+	- include task state
+	- include progress %
+	- allow tasks to lauch sub tasks
+
+	- make scripts editable in the interface (like bamboo)
+
+	- task types should always be read from disk
+	- task should include a hash of the config file of the task type
+*/
+
 func setUpDatabase() error {
 	db := openDatabase()
 	defer db.Close()
@@ -42,33 +61,11 @@ func setUpDatabase() error {
 	// Set up base task types
 	err := db.Update(func(tx *bolt.Tx) error {
 		var err error
-		b := tx.Bucket([]byte("tasktypes"))
+
+		// Create tasks bucket
+		b := tx.Bucket([]byte("tasks"))
 		if b == nil {
-			b, err = tx.CreateBucket([]byte("tasktypes"))
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-
-		// Scan through all entries looking for one with the name
-		c := b.Cursor()
-		echoExists := false
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			fmt.Printf("'%s' :: %s\n", k, v)
-			if string(k) == "echotask" {
-				echoExists = true
-				break
-			}
-		}
-
-		if !echoExists {
-			// Create tasktype
-			echoTaskType, _ := tasks.NewTaskType("echotask", map[string]string{})
-			outStr, err := echoTaskType.ToJSON()
-			if err != nil {
-				log.Fatal(err)
-			}
-			err = b.Put([]byte(echoTaskType.Id), []byte(outStr))
+			b, err = tx.CreateBucket([]byte("tasks"))
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -102,28 +99,11 @@ func Serve() {
 	})
 
 	r.GET("/task/", func(c *gin.Context) {
-
-		bashTask, _ := tasks.NewTaskType("Frogs", map[string]string{
-			"NFISH": "5000",
-		})
-
-		var result []tasks.Task
-		for i := 0; i < 10; i++ {
-			newTask, _ := bashTask.NewTask(map[string]string{
-				"NTURTLES": "100",
-				"COUNT":    strconv.Itoa(i),
-			})
-			result = append(result, newTask)
-		}
-		c.JSON(200, result)
-	})
-
-	r.GET("/task_type/", func(c *gin.Context) {
 		result := "["
 		if err := db.View(func(tx *bolt.Tx) error {
-			b := tx.Bucket([]byte("tasktypes"))
+			b := tx.Bucket([]byte("tasks"))
 			if b == nil {
-				return fmt.Errorf("Database not formatted correctly; bucket 'tasktypes' does not exist")
+				return fmt.Errorf("Database not formatted correctly; bucket 'tasks' does not exist")
 			}
 
 			c := b.Cursor()
@@ -145,6 +125,36 @@ func Serve() {
 		result += "]"
 
 		c.Header("Content-Type", "application/json")
+		c.String(http.StatusOK, result)
+	})
+
+	r.GET("/task_type/", func(c *gin.Context) {
+		c.Header("Content-Type", "application/json")
+
+		// Read from disk
+		result := "["
+
+		tts, err := tasks.ReadTypes()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"error": err.Error(),
+			}).Warn("Error reading task types")
+			c.String(http.StatusInternalServerError, "[]")
+			return
+		}
+		for _, tt := range tts {
+			js, err := tt.ToJSON()
+			if err != nil {
+				log.WithFields(log.Fields{
+					"error": err.Error(),
+				}).Warn("Error marshalling task type to json")
+				c.String(http.StatusInternalServerError, "[]")
+				return
+			}
+			result += js
+		}
+
+		result += "]"
 		c.String(http.StatusOK, result)
 	})
 

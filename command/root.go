@@ -31,6 +31,9 @@ func InitializeConfig() {
 	// https://github.com/spf13/viper#watching-and-re-reading-config-files
 	viper.SetDefault("port", 8773)
 	viper.SetDefault("database", "blanket.db")
+	viper.SetDefault("tasks.types_path", "types")
+	viper.SetDefault("tasks.results_path", "results")
+
 	viper.SetConfigName("blanket")
 	viper.AddConfigPath("/etc/blanket/")
 	viper.AddConfigPath("$HOME/.blanket")
