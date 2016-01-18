@@ -7,7 +7,9 @@ import (
 	"github.com/spf13/viper"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"text/template"
 )
 
@@ -37,20 +39,41 @@ var psCmd = &cobra.Command{
 }
 
 type PSConf struct {
-	All   bool
-	Quiet bool
+	All        bool
+	Quiet      bool
+	State      string
+	Type       string
+	Tags       string
+	ParsedTags []string
 }
 
 func init() {
 	// Add options for tags, state, and view template
-	psCmd.Flags().BoolVarP(&psConf.All, "all", "a", false, "Print both queued and completed tasks")
+	psCmd.Flags().BoolVarP(&psConf.All, "all", "a", false, "Print tasks in all states")
+	psCmd.Flags().StringVarP(&psConf.State, "state", "s", "RUNNING", "Only list tasks in this state")
+	psCmd.Flags().StringVarP(&psConf.Type, "type", "t", "", "Only list tasks of this type")
+	psCmd.Flags().StringVar(&psConf.Tags, "tags", "", "Only list tasks with these tags (comma separated)")
 	psCmd.Flags().BoolVarP(&psConf.Quiet, "quiet", "q", false, "Print ids only")
 	RootCmd.AddCommand(psCmd)
 }
 
 func (c *PSConf) ListTasks() {
-	// Use RootConfig to decide what port to hit
-	res, err := http.Get(fmt.Sprintf("http://localhost:%d/task/", viper.GetInt("port")))
+	v := url.Values{}
+	if c.State != "" && !c.All {
+		v.Set("state", strings.ToUpper(c.State))
+	}
+	if c.Type != "" {
+		v.Set("type", c.Type)
+	}
+	if c.Tags != "" {
+		v.Set("tags", c.Tags)
+	}
+	paramsString := v.Encode()
+	reqURL := fmt.Sprintf("http://localhost:%d/task/", viper.GetInt("port"))
+	if paramsString != "" {
+		reqURL += "?" + paramsString
+	}
+	res, err := http.Get(reqURL)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
@@ -84,7 +107,7 @@ func (c *PSConf) ListTasks() {
 		"tags":          "Tags",
 	}
 
-	if !c.Quiet {
+	if !c.Quiet && len(tasks) != 0 {
 		tmpl.Execute(os.Stdout, headerRow)
 	}
 	for _, t := range tasks {

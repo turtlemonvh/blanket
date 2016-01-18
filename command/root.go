@@ -21,7 +21,7 @@ var CfgFile string
 func init() {
 	//cobra.OnInitialize(initConfig)
 	RootCmd.PersistentFlags().Int32P("port", "p", 8773, "Port the server will run on")
-	RootCmd.PersistentFlags().StringVarP(&CfgFile, "config", "c", "", "config file (default is path/config.yaml|json|toml)")
+	RootCmd.PersistentFlags().StringVarP(&CfgFile, "config", "c", "", "config file (default is blanket.yaml|json|toml)")
 	RootCmd.AddCommand(versionCmd)
 	blanketCmdV = RootCmd
 }

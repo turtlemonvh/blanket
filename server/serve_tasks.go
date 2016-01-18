@@ -11,6 +11,7 @@ import (
 	"github.com/turtlemonvh/blanket/tasks"
 	"net/http"
 	"path"
+	"strings"
 )
 
 func getTasks(c *gin.Context) {
@@ -19,7 +20,21 @@ func getTasks(c *gin.Context) {
 	result := "["
 
 	// Get information for limiting response
-	// tags, type,
+	// tags, type, state
+	var taskTags []string
+	tags := c.Query("tags")
+	if tags != "" {
+		taskTags = strings.Split(tags, ",")
+	}
+	taskType := c.Query("type")
+	taskState := c.Query("state")
+
+	log.WithFields(log.Fields{
+		"params":    c.Request.URL.Query(),
+		"taskTags":  taskTags,
+		"taskType":  taskType,
+		"taskState": taskState,
+	}).Info("Request params")
 
 	if err := DB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
@@ -31,6 +46,39 @@ func getTasks(c *gin.Context) {
 		c := b.Cursor()
 		isFirst := true
 		for k, v := c.First(); k != nil; k, v = c.Next() {
+
+			// Create an object from bytes
+			t := tasks.Task{}
+			json.Unmarshal(v, &t)
+
+			// Filter results
+			if taskType != "" && t.TypeId != taskType {
+				continue
+			}
+			if taskState != "" && t.State != taskState {
+				continue
+			}
+
+			if len(taskTags) > 0 {
+				// all tags must match
+				hasTags := true
+				for _, requestedTag := range taskTags {
+					found := false
+					for _, existingTag := range t.Tags {
+						if requestedTag == existingTag {
+							found = true
+						}
+					}
+					if !found {
+						hasTags = false
+						break
+					}
+				}
+				if !hasTags {
+					continue
+				}
+			}
+
 			if !isFirst {
 				result += ","
 			}

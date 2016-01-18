@@ -26,8 +26,6 @@ func getTaskTypes(c *gin.Context) {
 		return
 	}
 
-	log.WithFields(log.Fields{"tts": tts}).Info("Task types")
-
 	isFirst := true
 	for _, tt := range tts {
 		js, err := tt.ToJSON()

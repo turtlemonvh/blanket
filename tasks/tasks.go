@@ -42,7 +42,7 @@ func ReadTypes() ([]TaskType, error) {
 
 		tt, err := ReadTaskTypeFromFilepath(filepath)
 		if err != nil {
-			log.Error("%s", err.Error())
+			log.Error(err.Error())
 			continue
 		}
 
