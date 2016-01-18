@@ -8,6 +8,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"path"
 	"regexp"
@@ -37,33 +38,12 @@ func ReadTypes() ([]TaskType, error) {
 	}
 
 	for _, dirEntry := range dirEntries {
-		// Check that this is a TOML file
-		if dirEntry.IsDir() {
-			continue
-		}
-		configFilename := path.Join(typesDir, dirEntry.Name())
-		if !validConfigfileName.MatchString(configFilename) {
-			continue
-		}
+		filepath := path.Join(typesDir, dirEntry.Name())
 
-		configFile, err := os.Open(configFilename)
+		tt, err := ReadTaskTypeFromFilepath(filepath)
 		if err != nil {
-			// FIXME: Handle this more elegantly
-			return nil, err
-		}
-		defer configFile.Close()
-
-		tt, err := ReadTaskType(configFile)
-		if err != nil {
-			// FIXME: Handle this more elegantly
-			return nil, err
-		}
-		tt.ConfigFile = configFilename
-
-		// Ignore errors in finding checksum for now
-		cs, err := lib.Checksum(configFilename)
-		if err == nil {
-			tt.ConfigVersionHash = cs
+			log.Printf("ERROR: %s", err.Error())
+			continue
 		}
 
 		taskTypes = append(taskTypes, tt)
@@ -72,7 +52,42 @@ func ReadTypes() ([]TaskType, error) {
 	return taskTypes, nil
 }
 
-func ReadTaskType(configFile io.Reader) (TaskType, error) {
+func ReadTaskTypeFromFilepath(filepath string) (TaskType, error) {
+	// Check that the file exists and is a TOML file
+	fi, err := os.Stat(filepath)
+	if err != nil {
+		return TaskType{}, err
+	}
+	if fi.IsDir() {
+		return TaskType{}, fmt.Errorf("Path points to a directory")
+	}
+	if !validConfigfileName.MatchString(filepath) {
+		return TaskType{}, fmt.Errorf("Not a valid TOML file")
+	}
+
+	configFile, err := os.Open(filepath)
+	if err != nil {
+		// FIXME: Handle this more elegantly
+		return TaskType{}, err
+	}
+	defer configFile.Close()
+
+	tt, err := readTaskType(configFile)
+	if err != nil {
+		// FIXME: Handle this more elegantly
+		return TaskType{}, err
+	}
+	tt.ConfigFile = filepath
+
+	// Ignore errors in finding checksum for now
+	cs, err := lib.Checksum(filepath)
+	if err == nil {
+		tt.ConfigVersionHash = cs
+	}
+	return tt, nil
+}
+
+func readTaskType(configFile io.Reader) (TaskType, error) {
 	tt := TaskType{}
 	tt.Config = viper.New()
 	tt.Config.SetConfigType("toml")
@@ -102,22 +117,32 @@ func (t *TaskType) ToJSON() (string, error) {
 
 // Tasks inherit all the environment params of a tasktype + more
 func (t *TaskType) NewTask(envOverrides map[string]string) (Task, error) {
+	// FIXME: Merge environment variables
+	// Take any files and copy them into directory
+	taskId := uuid.NewV4().String()
 	return Task{
-		Id:            uuid.NewV4().String(),
+		Id:            taskId,
 		CreatedTs:     time.Now().Unix(),
 		LastUpdatedTs: time.Now().Unix(),
 		TypeId:        t.Config.GetString("name"),
+		ResultDir:     path.Join(viper.GetString("tasks.results_path"), taskId),
+		State:         "WAIT",
+		Progress:      0,
 		ExecEnv:       envOverrides,
 	}, nil
 }
 
 type Task struct {
-	Id            string            `json:"id"`
+	Id            string            `json:"id"` // uuid; change to id that includes time
 	CreatedTs     int64             `json:"createdTs"`
-	LastUpdatedTs int64             `json:"lastUpdatedTs"`
-	TypeId        string            `json:"type"`
-	ResultDir     string            `json"resultDir"`
-	ExecEnv       map[string]string `json:"defaultEnv"`
+	StartedTs     int64             `json:"startedTs"`     // when it started running
+	LastUpdatedTs int64             `json:"lastUpdatedTs"` // last time any information changed
+	TypeId        string            `json:"type"`          // String name
+	ResultDir     string            `json"resultDir"`      // Full path
+	State         string            `json"state"`          // WAIT, START, RUN, SUCCESS/ERROR
+	Progress      int               `json"progress"`       // 0-100
+	ExecEnv       map[string]string `json:"defaultEnv"`    // Combined with default env
+	Tags          []string          `json:"tags"`          // tags for capabilities of workers
 }
 
 func (t *Task) String() string {

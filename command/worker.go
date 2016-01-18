@@ -60,3 +60,7 @@ func (c *WorkerConf) RunWorker() {
 		//cmd.Start()
 	}
 }
+
+func (c *WorkerConf) GetTask() {
+	// Call the REST api and get a task with the required tags
+}

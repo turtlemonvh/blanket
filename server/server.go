@@ -21,10 +21,10 @@ import (
 	"github.com/boltdb/bolt"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
-	"github.com/turtlemonvh/blanket/tasks"
-	"net/http"
 	"time"
 )
+
+var DB *bolt.DB
 
 func openDatabase() *bolt.DB {
 	db, err := bolt.Open(viper.GetString("database"), 0666, &bolt.Options{Timeout: 1 * time.Second})
@@ -55,11 +55,11 @@ func openDatabase() *bolt.DB {
 */
 
 func setUpDatabase() error {
-	db := openDatabase()
-	defer db.Close()
+	DB = openDatabase()
+	defer DB.Close()
 
 	// Set up base task types
-	err := db.Update(func(tx *bolt.Tx) error {
+	err := DB.Update(func(tx *bolt.Tx) error {
 		var err error
 
 		// Create tasks bucket
@@ -75,7 +75,6 @@ func setUpDatabase() error {
 	})
 
 	return err
-
 }
 
 func Serve() {
@@ -84,8 +83,8 @@ func Serve() {
 	if err := setUpDatabase(); err != nil {
 		log.Fatal(err)
 	}
-	db := openDatabase()
-	defer db.Close()
+	DB = openDatabase()
+	defer DB.Close()
 
 	// Basic info routes
 	r := gin.Default()
@@ -98,65 +97,14 @@ func Serve() {
 		})
 	})
 
-	r.GET("/task/", func(c *gin.Context) {
-		result := "["
-		if err := db.View(func(tx *bolt.Tx) error {
-			b := tx.Bucket([]byte("tasks"))
-			if b == nil {
-				return fmt.Errorf("Database not formatted correctly; bucket 'tasks' does not exist")
-			}
+	r.GET("/task/", getTasks)
+	r.GET("/task/:id", getTask) // fetch just 1 by id
+	r.POST("/task/", postTask)  // create a new one
+	//r.PUT("/task/", updateTask)    // update progress
+	//r.DELETE("/task/", removeTask) // delete all information, including killing if running
 
-			c := b.Cursor()
-			isFirst := true
-			for k, v := c.First(); k != nil; k, v = c.Next() {
-				if !isFirst {
-					result += ","
-				}
-				result += string(v)
-				isFirst = false
-			}
-
-			return nil
-		}); err != nil {
-			c.Header("Content-Type", "application/json")
-			c.String(http.StatusInternalServerError, "[]")
-			return
-		}
-		result += "]"
-
-		c.Header("Content-Type", "application/json")
-		c.String(http.StatusOK, result)
-	})
-
-	r.GET("/task_type/", func(c *gin.Context) {
-		c.Header("Content-Type", "application/json")
-
-		// Read from disk
-		result := "["
-
-		tts, err := tasks.ReadTypes()
-		if err != nil {
-			log.WithFields(log.Fields{
-				"error": err.Error(),
-			}).Warn("Error reading task types")
-			c.String(http.StatusInternalServerError, "[]")
-			return
-		}
-		for _, tt := range tts {
-			js, err := tt.ToJSON()
-			if err != nil {
-				log.WithFields(log.Fields{
-					"error": err.Error(),
-				}).Warn("Error marshalling task type to json")
-				c.String(http.StatusInternalServerError, "[]")
-				return
-			}
-			result += js
-		}
-
-		result += "]"
-		c.String(http.StatusOK, result)
-	})
+	r.GET("/task_type/", getTaskTypes)
+	r.GET("/task_type/:name", getTaskType)
 
 	// Start server
 	log.WithFields(log.Fields{
