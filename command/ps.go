@@ -84,7 +84,7 @@ func (c *PSConf) ListTasks() {
 	dec := json.NewDecoder(res.Body)
 	dec.Decode(&tasks)
 
-	templateString := "{{.id}} {{.type}} {{.state}} \n"
+	templateString := "{{.id}} {{.type}} {{.state}} {{.tags}} \n"
 	if c.Quiet {
 		templateString = "{{.id}}\n"
 	}

@@ -153,19 +153,14 @@ func postTask(c *gin.Context) {
 
 	// Load environment variables
 	var defaultEnv map[string]string
-	if req["defaultEnv"] != nil {
-		defaultEnv = cast.ToStringMapString(req["defaultEnv"])
+	if req["environment"] != nil {
+		defaultEnv = cast.ToStringMapString(req["environment"])
 		if len(defaultEnv) == 0 {
-			log.WithFields(log.Fields{"defaultEnv": req["defaultEnv"]}).Info("defaultEnv is not a map[string]string")
-			c.String(http.StatusBadRequest, `{"error": "The 'defaultEnv' parameter must be a map of string keys to string values."}`)
+			log.WithFields(log.Fields{"environment": req["environment"]}).Info("environment is not a map[string]string")
+			c.String(http.StatusBadRequest, `{"error": "The 'environment' parameter must be a map of string keys to string values."}`)
 			return
 		}
 	}
-
-	log.WithFields(log.Fields{
-		"defaultEnv":     defaultEnv,
-		"req.defaultEnv": req["defaultEnv"],
-	}).Info("Environment variable mixing in request")
 
 	t, err := tt.NewTask(defaultEnv)
 	if err != nil {

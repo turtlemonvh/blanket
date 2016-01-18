@@ -125,6 +125,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 
 	// Merge environment variables
 	// FIXME: Take any files and copy them into directory
+	// FIXME: This should happen at execution time
 	mixedEnv := t.EnvironmentVars()
 	for k, v := range childEnv {
 		mixedEnv[k] = v
@@ -137,6 +138,11 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 		"parentEnv": t.Config.GetStringMapString("environment"),
 	}).Info("Environment variable mixing results for task")
 
+	log.WithFields(log.Fields{
+		"taskId": taskId,
+		"tags":   t.Config.GetStringSlice("tags"),
+	}).Info("Tag mixing results for task")
+
 	return Task{
 		Id:            taskId,
 		CreatedTs:     time.Now().Unix(),
@@ -146,6 +152,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 		State:         "WAIT",
 		Progress:      0,
 		ExecEnv:       mixedEnv,
+		Tags:          t.Config.GetStringSlice("tags"),
 	}, nil
 }
 
