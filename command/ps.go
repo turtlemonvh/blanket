@@ -1,12 +1,14 @@
 package command
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"text/template"
 )
 
 /*
@@ -35,11 +37,14 @@ var psCmd = &cobra.Command{
 }
 
 type PSConf struct {
-	All bool
+	All   bool
+	Quiet bool
 }
 
 func init() {
-	psCmd.Flags().BoolVarP(&psConf.All, "all", "a", false, "Print an extended list")
+	// Add options for tags, state, and view template
+	psCmd.Flags().BoolVarP(&psConf.All, "all", "a", false, "Print both queued and completed tasks")
+	psCmd.Flags().BoolVarP(&psConf.Quiet, "quiet", "q", false, "Print ids only")
 	RootCmd.AddCommand(psCmd)
 }
 
@@ -51,6 +56,38 @@ func (c *PSConf) ListTasks() {
 	}
 
 	defer res.Body.Close()
-	tasks, err := ioutil.ReadAll(res.Body)
-	fmt.Printf(string(tasks))
+
+	var tasks []map[string]interface{}
+	dec := json.NewDecoder(res.Body)
+	dec.Decode(&tasks)
+
+	templateString := "{{.id}} {{.type}} {{.state}} \n"
+	if c.Quiet {
+		templateString = "{{.id}}\n"
+	}
+	tmpl, err := template.New("tasks").Parse(templateString)
+	if err != nil {
+		log.Fatalf(err.Error())
+	}
+
+	// FIXME: Clean up formatting to make fields the same size
+	headerRow := map[string]interface{}{
+		"id":            fmt.Sprintf("%-36s", "Id"),
+		"createdTs":     "CreatedTs",
+		"startedTs":     "StartedTs",
+		"lastUpdatedTs": "LastUpdatedTs",
+		"type":          "TypeId",
+		"resultDir":     "ResultDir",
+		"state":         "State",
+		"progress":      "Progress",
+		"defaultEnv":    "ExecEnv",
+		"tags":          "Tags",
+	}
+
+	if !c.Quiet {
+		tmpl.Execute(os.Stdout, headerRow)
+	}
+	for _, t := range tasks {
+		tmpl.Execute(os.Stdout, t)
+	}
 }

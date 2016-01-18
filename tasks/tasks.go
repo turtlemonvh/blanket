@@ -3,12 +3,12 @@ package tasks
 import (
 	"encoding/json"
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"github.com/satori/go.uuid"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib"
 	"io"
 	"io/ioutil"
-	"log"
 	"os"
 	"path"
 	"regexp"
@@ -42,7 +42,7 @@ func ReadTypes() ([]TaskType, error) {
 
 		tt, err := ReadTaskTypeFromFilepath(filepath)
 		if err != nil {
-			log.Printf("ERROR: %s", err.Error())
+			log.Error("%s", err.Error())
 			continue
 		}
 
@@ -115,11 +115,28 @@ func (t *TaskType) ToJSON() (string, error) {
 	return string(bts), err
 }
 
+func (t *TaskType) EnvironmentVars() map[string]string {
+	return t.Config.GetStringMapString("environment")
+}
+
 // Tasks inherit all the environment params of a tasktype + more
-func (t *TaskType) NewTask(envOverrides map[string]string) (Task, error) {
-	// FIXME: Merge environment variables
-	// Take any files and copy them into directory
+func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 	taskId := uuid.NewV4().String()
+
+	// Merge environment variables
+	// FIXME: Take any files and copy them into directory
+	mixedEnv := t.EnvironmentVars()
+	for k, v := range childEnv {
+		mixedEnv[k] = v
+	}
+
+	log.WithFields(log.Fields{
+		"taskId":    taskId,
+		"mixedEnv":  mixedEnv,
+		"childEnv":  childEnv,
+		"parentEnv": t.Config.GetStringMapString("environment"),
+	}).Info("Environment variable mixing results for task")
+
 	return Task{
 		Id:            taskId,
 		CreatedTs:     time.Now().Unix(),
@@ -128,7 +145,7 @@ func (t *TaskType) NewTask(envOverrides map[string]string) (Task, error) {
 		ResultDir:     path.Join(viper.GetString("tasks.results_path"), taskId),
 		State:         "WAIT",
 		Progress:      0,
-		ExecEnv:       envOverrides,
+		ExecEnv:       mixedEnv,
 	}, nil
 }
 
@@ -138,9 +155,9 @@ type Task struct {
 	StartedTs     int64             `json:"startedTs"`     // when it started running
 	LastUpdatedTs int64             `json:"lastUpdatedTs"` // last time any information changed
 	TypeId        string            `json:"type"`          // String name
-	ResultDir     string            `json"resultDir"`      // Full path
-	State         string            `json"state"`          // WAIT, START, RUN, SUCCESS/ERROR
-	Progress      int               `json"progress"`       // 0-100
+	ResultDir     string            `json:"resultDir"`     // Full path
+	State         string            `json:"state"`         // WAIT, START, RUN, SUCCESS/ERROR
+	Progress      int               `json:"progress"`      // 0-100
 	ExecEnv       map[string]string `json:"defaultEnv"`    // Combined with default env
 	Tags          []string          `json:"tags"`          // tags for capabilities of workers
 }

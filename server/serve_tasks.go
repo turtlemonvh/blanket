@@ -18,6 +18,9 @@ func getTasks(c *gin.Context) {
 
 	result := "["
 
+	// Get information for limiting response
+	// tags, type,
+
 	if err := DB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
 		if b == nil {
@@ -111,6 +114,11 @@ func postTask(c *gin.Context) {
 		}
 	}
 
+	log.WithFields(log.Fields{
+		"defaultEnv":     defaultEnv,
+		"req.defaultEnv": req["defaultEnv"],
+	}).Info("Environment variable mixing in request")
+
 	t, err := tt.NewTask(defaultEnv)
 	if err != nil {
 		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
@@ -125,7 +133,6 @@ func postTask(c *gin.Context) {
 		}
 		js, err := t.ToJSON()
 		if err != nil {
-			c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
 			return err
 		}
 		b.Put([]byte(t.Id), []byte(js))
@@ -137,4 +144,26 @@ func postTask(c *gin.Context) {
 	}
 
 	c.String(http.StatusCreated, fmt.Sprintf(`{"id": "%s"}`, t.Id))
+}
+
+// Always returns 200, even if item doesn't exist
+// FIXME: Remove directory, don't remove if currently running unless ?force=True
+func removeTask(c *gin.Context) {
+	taskId := c.Param("id")
+	c.Header("Content-Type", "application/json")
+
+	if err := DB.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("tasks"))
+		if b == nil {
+			errorString := "Database format error: Bucket 'tasks' does not exist."
+			return fmt.Errorf(errorString)
+		}
+		err := b.Delete([]byte(taskId))
+		return err
+	}); err != nil {
+		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		c.String(http.StatusInternalServerError, errMsg)
+		return
+	}
+	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId))
 }

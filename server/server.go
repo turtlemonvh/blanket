@@ -101,7 +101,7 @@ func Serve() {
 	r.GET("/task/:id", getTask) // fetch just 1 by id
 	r.POST("/task/", postTask)  // create a new one
 	//r.PUT("/task/", updateTask)    // update progress
-	//r.DELETE("/task/", removeTask) // delete all information, including killing if running
+	r.DELETE("/task/:id", removeTask) // delete all information, including killing if running
 
 	r.GET("/task_type/", getTaskTypes)
 	r.GET("/task_type/:name", getTaskType)
