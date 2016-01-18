@@ -17,25 +17,31 @@ import (
 func getTasks(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
-	result := "["
-
-	// Get information for limiting response
-	// tags, type, state
-	var taskTags []string
-	tags := c.Query("tags")
+	// Tags that each task must contain
+	var requiredTaskTags []string
+	tags := c.Query("requiredTags")
 	if tags != "" {
-		taskTags = strings.Split(tags, ",")
+		requiredTaskTags = strings.Split(tags, ",")
 	}
+
+	// The total set of tags each task is allowed to contain
+	var maxTaskTags []string
+	maxTags := c.Query("maxTags")
+	if maxTags != "" {
+		maxTaskTags = strings.Split(maxTags, ",")
+	}
+
 	taskType := c.Query("type")
 	taskState := c.Query("state")
 
 	log.WithFields(log.Fields{
-		"params":    c.Request.URL.Query(),
-		"taskTags":  taskTags,
-		"taskType":  taskType,
-		"taskState": taskState,
+		"requiredTaskTags": requiredTaskTags,
+		"maxTaskTags":      maxTaskTags,
+		"taskType":         taskType,
+		"taskState":        taskState,
 	}).Info("Request params")
 
+	result := "["
 	if err := DB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
 		if b == nil {
@@ -59,10 +65,10 @@ func getTasks(c *gin.Context) {
 				continue
 			}
 
-			if len(taskTags) > 0 {
-				// all tags must match
+			// all tags in requiredTaskTags must be present on every task
+			if len(requiredTaskTags) > 0 {
 				hasTags := true
-				for _, requestedTag := range taskTags {
+				for _, requestedTag := range requiredTaskTags {
 					found := false
 					for _, existingTag := range t.Tags {
 						if requestedTag == existingTag {
@@ -75,6 +81,26 @@ func getTasks(c *gin.Context) {
 					}
 				}
 				if !hasTags {
+					continue
+				}
+			}
+
+			// all tags on each task must be present in maxTaskTags
+			if len(maxTaskTags) > 0 {
+				taskHasExtraTags := false
+				for _, existingTag := range t.Tags {
+					found := false
+					for _, allowedTag := range maxTaskTags {
+						if allowedTag == existingTag {
+							found = true
+						}
+					}
+					if !found {
+						taskHasExtraTags = true
+						break
+					}
+				}
+				if taskHasExtraTags {
 					continue
 				}
 			}

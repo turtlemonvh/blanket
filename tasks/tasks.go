@@ -39,13 +39,11 @@ func ReadTypes() ([]TaskType, error) {
 
 	for _, dirEntry := range dirEntries {
 		filepath := path.Join(typesDir, dirEntry.Name())
-
 		tt, err := ReadTaskTypeFromFilepath(filepath)
 		if err != nil {
 			log.Error(err.Error())
 			continue
 		}
-
 		taskTypes = append(taskTypes, tt)
 	}
 
@@ -94,10 +92,13 @@ func readTaskType(configFile io.Reader) (TaskType, error) {
 	tt.Config.SetDefault("timeout", 60)
 	tt.Config.SetDefault("merge_stdout_stderr", false)
 
-	// Check that required fields are set
-
 	tt.Config.ReadConfig(configFile)
 	tt.LoadedTs = time.Now().Unix()
+
+	// Check that required fields are set
+	if tt.Config.GetString("command") == "" {
+		return tt, fmt.Errorf("TaskType config file is missing required field 'command'.")
+	}
 
 	return tt, nil
 }

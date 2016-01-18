@@ -39,12 +39,13 @@ var psCmd = &cobra.Command{
 }
 
 type PSConf struct {
-	All        bool
-	Quiet      bool
-	State      string
-	Type       string
-	Tags       string
-	ParsedTags []string
+	All          bool
+	Quiet        bool
+	State        string
+	Type         string
+	RequiredTags string
+	MaxTags      string
+	ParsedTags   []string
 }
 
 func init() {
@@ -52,7 +53,8 @@ func init() {
 	psCmd.Flags().BoolVarP(&psConf.All, "all", "a", false, "Print tasks in all states")
 	psCmd.Flags().StringVarP(&psConf.State, "state", "s", "RUNNING", "Only list tasks in this state")
 	psCmd.Flags().StringVarP(&psConf.Type, "type", "t", "", "Only list tasks of this type")
-	psCmd.Flags().StringVar(&psConf.Tags, "tags", "", "Only list tasks with these tags (comma separated)")
+	psCmd.Flags().StringVar(&psConf.RequiredTags, "requiredTags", "", "Only list tasks whose tags are a superset of these tags (comma separated)")
+	psCmd.Flags().StringVar(&psConf.MaxTags, "maxTags", "", "Only list tasks whose tags are a subset of these tags (comma separated)")
 	psCmd.Flags().BoolVarP(&psConf.Quiet, "quiet", "q", false, "Print ids only")
 	RootCmd.AddCommand(psCmd)
 }
@@ -65,8 +67,11 @@ func (c *PSConf) ListTasks() {
 	if c.Type != "" {
 		v.Set("type", c.Type)
 	}
-	if c.Tags != "" {
-		v.Set("tags", c.Tags)
+	if c.RequiredTags != "" {
+		v.Set("requiredTags", c.RequiredTags)
+	}
+	if c.MaxTags != "" {
+		v.Set("maxTags", c.MaxTags)
 	}
 	paramsString := v.Encode()
 	reqURL := fmt.Sprintf("http://localhost:%d/task/", viper.GetInt("port"))

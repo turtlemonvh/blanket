@@ -6,11 +6,19 @@ https://github.com/takama/daemon
 */
 
 import (
+	"encoding/json"
+	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/kardianos/osext"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/tasks"
+	"math"
+	"net/http"
+	"net/url"
 	_ "os/exec"
 	"strings"
+	"time"
 )
 
 var workerConf WorkerConf
@@ -58,9 +66,54 @@ func (c *WorkerConf) RunWorker() {
 		// - needs to
 		//cmd := exec.Command(path, "worker", "--logfile", "")
 		//cmd.Start()
+	} else {
+		c.LaunchWorker()
 	}
 }
 
-func (c *WorkerConf) GetTask() {
+func (c *WorkerConf) LaunchWorker() {
+	for {
+		t, err := c.GetTask()
+		if err == nil {
+			fmt.Printf("SUCCESS :: found task :: %s | %s | %s \n", t.Id, t.TypeId, t.Tags)
+		} else {
+			fmt.Printf("ERROR :: could not find task :: %s \n", err.Error())
+			fmt.Println("ERROR :: Trying again in 5 seconds")
+		}
+
+		// Wait a little while
+		time.Sleep(5000 * time.Millisecond)
+	}
+}
+
+func (c *WorkerConf) GetTask() (tasks.Task, error) {
 	// Call the REST api and get a task with the required tags
+	// The worker needs to make sure it has all the tags of whatever task it requests
+	v := url.Values{}
+	v.Set("state", "WAIT")
+	v.Set("maxTags", c.Tags)
+	paramsString := v.Encode()
+	reqURL := fmt.Sprintf("http://localhost:%d/task/", viper.GetInt("port")) + "?" + paramsString
+	res, err := http.Get(reqURL)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	defer res.Body.Close()
+
+	// Handle response by looking for item with latest timestamp
+	var respTasks []tasks.Task
+	dec := json.NewDecoder(res.Body)
+	dec.Decode(&respTasks)
+
+	// FIXME: Handle empty results
+
+	var latestTask tasks.Task
+	lowestTimestamp := int64(math.MaxInt64)
+	for _, task := range respTasks {
+		if task.CreatedTs < lowestTimestamp {
+			latestTask = task
+		}
+	}
+
+	return latestTask, nil
 }
