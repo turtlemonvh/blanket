@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	log "github.com/Sirupsen/logrus"
-	//"github.com/boltdb/bolt"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/tasks"

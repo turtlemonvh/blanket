@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 )
 
 func getTasks(c *gin.Context) {
@@ -185,6 +186,9 @@ func modifyTaskInTransaction(taskId string, f func(t *tasks.Task) error) error {
 		err = f(&t)
 		if err != nil {
 			return err
+		} else {
+			fmt.Printf("Bumping LastUpdatedTs")
+			t.LastUpdatedTs = time.Now().Unix()
 		}
 
 		err = saveTaskToBucket(t, bucket)
@@ -234,6 +238,7 @@ func updateTaskState(c *gin.Context) {
 			if t.State != "WAIT" {
 				return fmt.Errorf("Cannot transition to START state from state %s", t.State)
 			}
+			t.StartedTs = time.Now().Unix()
 		case "WAIT":
 			// FIXME: Can go back to WAIT after START or RUNNING if requeued
 			return fmt.Errorf("Cannot transition to WAIT state from any other state")

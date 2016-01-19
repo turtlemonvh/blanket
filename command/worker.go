@@ -75,8 +75,10 @@ func (c *WorkerConf) RunWorker() {
 	}
 }
 
+// FIXME: Once working on a task, send logs of errors into its logfiles
 func (c *WorkerConf) LaunchWorker() {
 	for {
+		// Wait at the start of the loop so early exits wait
 		time.Sleep(5000 * time.Millisecond)
 
 		t, err := c.FindTask()
@@ -88,15 +90,9 @@ func (c *WorkerConf) LaunchWorker() {
 			fmt.Printf("WARNING :: found no matching tasks \n")
 			fmt.Println("INFO :: Trying again in 5 seconds")
 			continue
-		} else {
-			fmt.Printf("SUCCESS :: found task :: %s | %s | %s \n", t.Id, t.TypeId, t.Tags)
 		}
 
-		if t.Id == "" {
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			time.Sleep(5000 * time.Millisecond)
-			continue
-		}
+		fmt.Printf("SUCCESS :: found task :: %s | %s | %s \n", t.Id, t.TypeId, t.Tags)
 
 		err = c.MarkTask(t, "START")
 		if err != nil {
@@ -116,7 +112,7 @@ func (c *WorkerConf) LaunchWorker() {
 
 		// Try to lock the task for editing
 
-		// Evaluate template and print out result
+		// Evaluate template
 		tmpl, err := template.New("tasks").Parse(tt.Config.GetString("command"))
 		if err != nil {
 			fmt.Printf("ERROR :: problem parsing 'command' parameter as go template :: %s \n", err.Error())
@@ -132,15 +128,15 @@ func (c *WorkerConf) LaunchWorker() {
 		}
 		cmd := exec.Command("bash", "-c", cmdString.String())
 
+		// Set up output files and configure the task to run in the correct location
 		err = os.MkdirAll(t.ResultDir, os.ModePerm)
 		if err != nil {
 			fmt.Printf("ERROR :: failed to create scratch directory for task :: %s \n", err.Error())
 			fmt.Println("INFO :: Trying again in 5 seconds")
 			continue
 		}
-		stdoutPath := path.Join(t.ResultDir, fmt.Sprintf("%s.stdout.log", t.Id))
-		stderrPath := path.Join(t.ResultDir, fmt.Sprintf("%s.stderr.log", t.Id))
-
+		stdoutPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stdout.log"))
+		stderrPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stderr.log"))
 		stdoutFile, err := os.Create(stdoutPath)
 		if err != nil {
 			fmt.Printf("ERROR :: failed to create stdout file for task :: %s \n", err.Error())
@@ -155,11 +151,11 @@ func (c *WorkerConf) LaunchWorker() {
 			continue
 		}
 		defer stderrFile.Close()
-
 		cmd.Stdout = stdoutFile
 		cmd.Stderr = stderrFile
 		cmd.Dir = t.ResultDir
 
+		// Modify execution environment with env variables
 		// e.g. http://craigwickesser.com/2015/02/golang-cmd-with-custom-environment/
 		env := os.Environ()
 		for k, v := range t.ExecEnv {
@@ -233,7 +229,6 @@ func (c *WorkerConf) FindTask() (tasks.Task, error) {
 	dec.Decode(&respTasks)
 
 	// FIXME: Handle empty results
-
 	var latestTask tasks.Task
 	lowestTimestamp := int64(math.MaxInt64)
 	for _, task := range respTasks {

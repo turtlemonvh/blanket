@@ -16,6 +16,23 @@ Running tests
     # For everything
     go test github.com/turtlemonvh/blanket/...
 
+
+View tasks
+
+    curl -s -X GET localhost:8773/task/ | python -mjson.tool
+    # OR
+    ./blanket ps -a
+
+Add a new task
+
+    curl -s -X POST localhost:8773/task/ -d'{"type": "bash_task", "defaultEnv": {"PANDAS": "four", "Frogs": 5, "CATS": 2}}'
+
+Delete a task
+
+    curl -s -X DELETE localhost:8773/task/b200f6de-0453-46c9-9c70-5dad63db3ebb | python -mjson.tool    
+    # OR
+    ./blanket ps -q | tail -n5 | xargs -I {} ./blanket rm {}
+
 Docs
 
 * https://golang.org/pkg/testing/
@@ -58,6 +75,7 @@ blanket task stop <task> <task_id>
 blanket ps
 
 - list tasks that are running, are queued to run, or have recently run + some basic stats (like top or docker ps)
+- `-q` to list just ids
 
 >>> Others
 
@@ -65,8 +83,7 @@ blanket ps
 - list running jobs
 - show curses interface for monitoring progress (top)
 - list task types
-- add/remove task type
-- add/remove job
+- add/remove task
 
 
 ## Data Model
@@ -180,7 +197,8 @@ BashTask
     - variables include task id, date
 - stdout
 - stderr
-
+- list of tailable log files
+    - for showing on UI
 
 PythonTask
 
@@ -192,11 +210,34 @@ PythonTask
 
 ## To Do
 
+Short List
+
+- Serve up log files
+    - provide hyperlink to URL in json body
+- Copy in files
+    - allow a list of glob patterns to include or exclude, or a link to a file listing glob patterns
+    - this will allow python task to work
+- Clean up formatting of ps command
+- When deleting, delete directories too
+    - Command to clean up orphaned directories
+- put results into directories with task name as top directory
+    - allow the directory structure underneath to be configurable
+        - e.g. dates, just ids, etc
+- make it work with windows
+- get rid of name field for task types and derive from file name
+    - this makes it easier to track
+
+
 Look over
 
 - https://github.com/ajvb/kala
     - similar
     - time based task scheduler
+- https://github.com/mesos/chronos
+    - executes sh scripts
+- http://docs.celeryproject.org/en/latest/reference/
+    - celery api
+
 
 MVP
 
@@ -205,7 +246,6 @@ MVP
 - keep all log files
 - allow lots of parameters
 - allow launching via http, basic ui, or command line
-
 
 Task Execution workflow
 
@@ -243,7 +283,7 @@ Important details
     * The default installation will be super simple, but we want to make it very easy to customize
     * Some customization
         * Task types, database driver, queue driver
-    * We will probably do this by defining types in msgpack files and allowing anything in any lanuage to eveluate and pass items back and forth
+    * We will probably do this by defining types in msgpack files and allowing anything in any language to evaluate and pass items back and forth
 * The web UI is optional, and not included by default
     * We include an easy to use json/rest interface
     * We will probably include a simple curses interface too
@@ -259,6 +299,7 @@ Task States
 
 
 Things defined in task config file
+
 - logfiles or stdout/stderr for process
 - default environment variables
 - bash command as a string
@@ -266,7 +307,7 @@ Things defined in task config file
     - e.g. make sure an executable exists, is at a given value; credential files exist
     - these are just bash scripts too
 - files to ignore when
-    - taking directory hash (versioning)
+    - taking directory hash (versioning) : .blanketignore
     - evaluating files as templates
     - copying input files to scratch directory
 - any input files posted
@@ -274,9 +315,9 @@ Things defined in task config file
 
 
 - base task is a bash task
-    - each task has its own directory
-    - each directory has a TOML conf file that defines the task
-        - TOML file allows override of task type
+    - each task has its own TOML file
+    - TOML files can point to multiple directories
+        - each directory section can specify options for what files to copy over
     - also include python task type as a plugin
         - plugins are just directories dropped in /opt/blanket/plugins/
         - the python executor just defines a base class that has hooks for updating and other fanciness
@@ -354,8 +395,55 @@ https://github.com/hashicorp/consul/blob/master/main.go
     - uses Go's build in SSL capabilities to configure itself; can use your key files or make its own
 
 
+## REST API
+
+- POST new task of a given type
+    - get back id
+- GET tasks
+    - with tags
+        - find the highest priority task based off fair scheduling
+    - want to show list of upcoming based on workers available
+        - also show if any have no qualified workers
+
+workers
+- e.g. 
+    - http://flower.readthedocs.org/en/latest/api.html
+    - https://github.com/ajvb/kala#overview-of-routes
+- GET
+- DELETE (stop)
+- POST (add a new one with certain tags)
+
+
+- task type options
+- option to upload files as part of task execution
+    - params
+        - env variables; also available in templates
+        - files
+        - settings (override values on a per task basis)
+
+
+- Task states; move to a different bucket
+    - QUEUED
+    - STARTING
+    - RUNNING
+    - SUCCESS/ERROR
+- option to requeue
+- mark each task with a TTL and a start time
+    - if not finished, retry according to retry policy
+
+
 ## Extra
 
 - Cookie cutter / quickstart that generates an example project for people to get started developing wrapper in various languages with docs included
-
+- Allow path to task information to be on a specific machine accessible over ssh
+- Scheduling / future execution
+- Mark tasks so that only 1 version of the task can be running at a time
+- Task dependencies
+    - similar to airflow and bamboo
+- add `?v` argument to provide pretty printed output
+- allow TOML file inheritance, starting with a different base task type
+    - https://github.com/spf13/viper/blob/master/viper.go#L938
+    - to start, everything is bash
+- fs abstraction
+    - https://github.com/spf13/afero
 
