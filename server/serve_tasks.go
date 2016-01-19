@@ -123,12 +123,13 @@ func getTasks(c *gin.Context) {
 	c.String(http.StatusOK, result)
 }
 
+// Doesn't read task in; assumes value is valid JSON for speed
 func getTask(c *gin.Context) {
 	taskId := c.Param("id")
 	c.Header("Content-Type", "application/json")
 
 	result := ""
-	if err := DB.View(func(tx *bolt.Tx) error {
+	err := DB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
 		if b == nil {
 			errorString := "Database format error: Bucket 'tasks' does not exist."
@@ -136,13 +137,152 @@ func getTask(c *gin.Context) {
 		}
 		result += string(b.Get([]byte(taskId)))
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
 
 	c.String(http.StatusOK, result)
+}
+
+func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
+	b = tx.Bucket([]byte("tasks"))
+	if b == nil {
+		err = fmt.Errorf("Database format error: Bucket 'tasks' does not exist.")
+	}
+	return
+}
+
+func fetchTaskFromBucket(taskId string, b *bolt.Bucket) (t tasks.Task, err error) {
+	result := b.Get([]byte(taskId))
+	err = json.Unmarshal(result, &t)
+	return
+}
+
+func saveTaskToBucket(t tasks.Task, b *bolt.Bucket) (err error) {
+	js, err := t.ToJSON()
+	if err != nil {
+		return err
+	}
+	b.Put([]byte(t.Id), []byte(js))
+	return nil
+}
+
+func modifyTaskInTransaction(taskId string, f func(t *tasks.Task) error) error {
+	err := DB.Update(func(tx *bolt.Tx) error {
+		bucket, err := fetchTaskBucket(tx)
+		if err != nil {
+			return err
+		}
+		t, err := fetchTaskFromBucket(taskId, bucket)
+		if err != nil {
+			return err
+		}
+
+		// Main function; accepts a task object and can perform checks and modify it
+		err = f(&t)
+		if err != nil {
+			return err
+		}
+
+		err = saveTaskToBucket(t, bucket)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	return err
+}
+
+/*
+All updates must happen in a single transaction
+
+e.g. for a worker to start work
+- find a valid task
+- mark it in progress
+- save it
+~~~
+- that all has to happen in 1 step
+
+For other updates it is less crucial.
+
+*/
+func updateTaskState(c *gin.Context) {
+	taskId := c.Param("id")
+	newState := c.Query("state")
+	c.Header("Content-Type", "application/json")
+
+	validState := false
+	for _, state := range tasks.ValidTaskStates {
+		if state == newState {
+			validState = true
+			break
+		}
+	}
+	if !validState {
+		errMsg := fmt.Sprintf(`{"error": "'%s' is not a valid task state"}`, newState)
+		c.String(http.StatusBadRequest, errMsg)
+		return
+	}
+
+	err := modifyTaskInTransaction(taskId, func(t *tasks.Task) error {
+		// Perform some checks that this is a valid transition
+		switch newState {
+		case "START":
+			if t.State != "WAIT" {
+				return fmt.Errorf("Cannot transition to START state from state %s", t.State)
+			}
+		case "WAIT":
+			// FIXME: Can go back to WAIT after START or RUNNING if requeued
+			return fmt.Errorf("Cannot transition to WAIT state from any other state")
+		case "RUNNING":
+			if t.State != "START" {
+				return fmt.Errorf("Cannot transition to RUNNING state from state %s", t.State)
+			}
+		case "ERROR":
+			if t.State != "RUNNING" {
+				return fmt.Errorf("Cannot transition to ERROR state from state %s", t.State)
+			}
+		case "SUCCESS":
+			if t.State != "RUNNING" {
+				return fmt.Errorf("Cannot transition to SUCCESS state from state %s", t.State)
+			}
+		}
+		t.State = newState
+		return nil
+	})
+	if err != nil {
+		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		c.String(http.StatusInternalServerError, errMsg)
+		return
+	}
+	c.String(http.StatusOK, "{}")
+}
+
+func updateTaskProgress(c *gin.Context) {
+	taskId := c.Param("id")
+	progress := c.Query("progress")
+	c.Header("Content-Type", "application/json")
+
+	iProgress, err := cast.ToIntE(progress)
+	if err != nil || iProgress > 100 || iProgress < 0 {
+		errMsg := fmt.Sprintf(`{"error": "The required parameter 'progress' is not a valid integer between 0 and 100."}`)
+		c.String(http.StatusBadRequest, errMsg)
+		return
+	}
+
+	err = modifyTaskInTransaction(taskId, func(t *tasks.Task) error {
+		t.Progress = iProgress
+		return nil
+	})
+	if err != nil {
+		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		c.String(http.StatusInternalServerError, errMsg)
+		return
+	}
+	c.String(http.StatusOK, "{}")
 }
 
 // FIXME: Also grab tags, files

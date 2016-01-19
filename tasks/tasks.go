@@ -157,6 +157,8 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 	}, nil
 }
 
+var ValidTaskStates = []string{"WAIT", "START", "RUNNING", "ERROR", "SUCCESS"}
+
 type Task struct {
 	Id            string            `json:"id"` // uuid; change to id that includes time
 	CreatedTs     int64             `json:"createdTs"`
@@ -179,6 +181,16 @@ func (t *Task) ToJSON() (string, error) {
 	return string(bts), err
 }
 
+// FIXME: Move some of the complexity out of worker and into here
 func (t *Task) Execute() error {
+	// Fetch the task type for this task
+	filepath := path.Join(viper.GetString("tasks.types_path"), fmt.Sprintf("%s.toml", t.TypeId))
+	tt, err := ReadTaskTypeFromFilepath(filepath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("tt", tt)
+
 	return nil
 }
