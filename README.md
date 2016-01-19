@@ -226,7 +226,10 @@ Short List
 - make it work with windows
 - get rid of name field for task types and derive from file name
     - this makes it easier to track
-
+- add a type field to the TOML files
+    - bash, docker, python
+- allow progress by writing to a .progress file (a single integer) in addition to curl
+    - push to 100 when finished
 
 Look over
 
@@ -259,7 +262,7 @@ Task Execution workflow
     - /opt/blanket/scratch/task/<task type>/<task id>
 - hash of config directory for task type is taken
     - new record for that task type is added to db
-    - can exclude files with a .versionignore file
+    - can exclude files with a .blanketignore file
 - context variables are merged with default env
     - some default ones are added for the task
         - BLANKET_WORKING_DIR
@@ -274,7 +277,7 @@ Task Execution workflow
 
 Important details
 
-* The task state is not the state when the task is added, but when it is executed
+* The task config is not locked when the task is added, but when it is executed
     * if you change the input files in the time between when a task is added and when it is executed, you will execute the new version of the task
 * TOML files drive all configuration for tasks
     * We'll probably eventually have a web ui for drafting these
@@ -446,4 +449,9 @@ workers
     - to start, everything is bash
 - fs abstraction
     - https://github.com/spf13/afero
+- pagination of results
+- moving tasks in different states to different buckets
+    - would make scanning to find new tasks faster if all ERROR/SUCCESS tasks weren't in the same place
+- make some good examples
+- write some tests
 
