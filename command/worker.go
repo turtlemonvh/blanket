@@ -11,15 +11,19 @@ import (
 	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/kardianos/osext"
+	"github.com/spf13/cast"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/tasks"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"os/user"
 	"path"
+	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -92,7 +96,11 @@ func (c *WorkerConf) LaunchWorker() {
 			continue
 		}
 
-		fmt.Printf("SUCCESS :: found task :: %s | %s | %s \n", t.Id, t.TypeId, t.Tags)
+		log.WithFields(log.Fields{
+			"taskId": t.Id,
+			"typeId": t.TypeId,
+			"tags":   t.Tags,
+		}).Info("SUCCESS: Found task")
 
 		// Fetch information about the task type
 		ttFilepath := path.Join(viper.GetString("tasks.types_path"), fmt.Sprintf("%s.toml", t.TypeId))
@@ -154,6 +162,14 @@ func (c *WorkerConf) LaunchWorker() {
 		cmd.Stderr = stderrFile
 		cmd.Dir = t.ResultDir
 
+		filesToInclude := toSliceStringSlice(tt.Config.Get("files_to_include"))
+		err = CopyFiles(filesToInclude, t.ResultDir)
+		if err != nil {
+			fmt.Printf("ERROR :: failed copy files for task :: %s \n", err.Error())
+			fmt.Println("INFO :: Trying again in 5 seconds")
+			continue
+		}
+
 		// Modify execution environment with env variables
 		// e.g. http://craigwickesser.com/2015/02/golang-cmd-with-custom-environment/
 		env := os.Environ()
@@ -189,6 +205,122 @@ func (c *WorkerConf) LaunchWorker() {
 		fmt.Println("SUCCESS :: Ran task successfully")
 		fmt.Println("INFO :: Proceeding with next task in 5 seconds")
 	}
+}
+
+func toSliceStringSlice(i interface{}) [][]string {
+	s := cast.ToSlice(i)
+	var r [][]string
+	for _, v := range s {
+		r = append(r, cast.ToStringSlice(v))
+	}
+	return r
+}
+
+func CopyFiles(files [][]string, resultDir string) error {
+	for icFile, cFile := range files {
+		if len(cFile) < 1 {
+			return fmt.Errorf("The array of file information for item %d in the list 'files_to_include' must have at least 1 component", icFile)
+		}
+		src := cFile[0]
+		// Dest path is always relative
+		dest := resultDir
+		if len(cFile) > 1 {
+			dest = path.Join(resultDir, cFile[1])
+
+			// Create it if it doesn't exist
+			err := os.MkdirAll(resultDir, os.ModePerm)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Clean up / source path
+		// FIXME: May want to do this a different way by calling to the shell and running `cd <path>; pwd -P`
+		usr, err := user.Current()
+		if err != nil {
+			return err
+		}
+		src = strings.Replace(src, "~", usr.HomeDir, 1)
+		if !filepath.IsAbs(src) {
+			src = path.Join(viper.GetString("tasks.types_path"), src)
+		}
+		log.WithFields(log.Fields{"src": src, "dest": dest}).Info("Copying files from src to dest")
+
+		var filesToCopy []string
+		matches, err := filepath.Glob(src)
+		if err != nil {
+			return err
+		}
+		for _, fileMatch := range matches {
+			// Check to make sure it is a file
+			fileInfo, err := os.Stat(fileMatch)
+			if err != nil {
+				return err
+			}
+
+			if !fileInfo.IsDir() {
+				filesToCopy = append(filesToCopy, fileMatch)
+			} else {
+				// Walk directory tree
+				err = filepath.Walk(fileMatch, func(path string, f os.FileInfo, err error) error {
+					if !f.IsDir() {
+						filesToCopy = append(filesToCopy, path)
+					}
+					return nil
+				})
+				if err != nil {
+					return err
+				}
+			}
+
+		}
+
+		/*
+			absSrc, _ := filepath.Abs(src)
+			log.WithFields(log.Fields{
+				"matches":     matches,
+				"filesToCopy": filesToCopy,
+				"src":         src,
+				"absSrc":      absSrc,
+			}).Info("Stats before copying")
+		*/
+
+		// Actual copy function
+		for _, fileToCopy := range filesToCopy {
+			s, err := os.Open(fileToCopy)
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+
+			destFilepath := path.Join(dest, path.Base(fileToCopy))
+
+			// Create path it if it doesn't exist
+			err = os.MkdirAll(filepath.Dir(destFilepath), os.ModePerm)
+			if err != nil {
+				return err
+			}
+
+			/*
+				log.WithFields(log.Fields{
+					"src":  fileToCopy,
+					"dest": destFilepath,
+				}).Info("Copying a single file from src to dest")
+			*/
+
+			d, err := os.Create(destFilepath)
+			defer d.Close()
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(d, s); err != nil {
+				return err
+			}
+			d.Close()
+		}
+	}
+
+	return nil
 }
 
 func (c *WorkerConf) TransitionTaskState(t tasks.Task, state string, extraVars map[string]string) error {
