@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/tasks"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -369,7 +370,7 @@ func removeTask(c *gin.Context) {
 	taskId := c.Param("id")
 	c.Header("Content-Type", "application/json")
 
-	if err := DB.Update(func(tx *bolt.Tx) error {
+	err := DB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
 		if b == nil {
 			errorString := "Database format error: Bucket 'tasks' does not exist."
@@ -377,10 +378,21 @@ func removeTask(c *gin.Context) {
 		}
 		err := b.Delete([]byte(taskId))
 		return err
-	}); err != nil {
+	})
+	if err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
+
+	// Remove result directory
+	// FIXME: Grab from json instead
+	err = os.RemoveAll(path.Join(viper.GetString("tasks.results_path"), taskId))
+	if err != nil {
+		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		c.String(http.StatusInternalServerError, errMsg)
+		return
+	}
+
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId))
 }

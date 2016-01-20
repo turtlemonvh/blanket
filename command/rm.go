@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path"
 )
 
 /*
@@ -62,10 +61,4 @@ func (c *RmConf) RemoveTask(taskId string) {
 		log.Fatalf(err.Error())
 	}
 	defer resp.Body.Close()
-
-	// Remove result directory
-	err = os.RemoveAll(path.Join(viper.GetString("tasks.results_path"), taskId))
-	if err != nil {
-		log.Fatalf(err.Error())
-	}
 }

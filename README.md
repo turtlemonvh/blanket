@@ -25,7 +25,10 @@ View tasks
 
 Add a new task
 
-    curl -s -X POST localhost:8773/task/ -d'{"type": "bash_task", "defaultEnv": {"PANDAS": "four", "Frogs": 5, "CATS": 2}}'
+    # Add 3 different tasks with different params
+    curl -s -X POST localhost:8773/task/ -d'{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2}}'
+    curl -X POST localhost:8773/task/ -d'{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2, "DEFAULT_COMMAND": "cd ~ && ls -lah"}}'
+    curl -X POST localhost:8773/task/ -d'{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}'
 
 Delete a task
 
