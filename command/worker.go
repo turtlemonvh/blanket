@@ -94,13 +94,6 @@ func (c *WorkerConf) LaunchWorker() {
 
 		fmt.Printf("SUCCESS :: found task :: %s | %s | %s \n", t.Id, t.TypeId, t.Tags)
 
-		err = c.MarkTask(t, "START")
-		if err != nil {
-			fmt.Printf("ERROR :: failed to transition task to state START :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-
 		// Fetch information about the task type
 		ttFilepath := path.Join(viper.GetString("tasks.types_path"), fmt.Sprintf("%s.toml", t.TypeId))
 		tt, err := tasks.ReadTaskTypeFromFilepath(ttFilepath)
@@ -111,6 +104,12 @@ func (c *WorkerConf) LaunchWorker() {
 		}
 
 		// Try to lock the task for editing
+		err = c.TransitionTaskState(t, "START", map[string]string{"typeDigest": tt.ConfigVersionHash})
+		if err != nil {
+			fmt.Printf("ERROR :: failed to transition task to state START :: %s \n", err.Error())
+			fmt.Println("INFO :: Trying again in 5 seconds")
+			continue
+		}
 
 		// Evaluate template
 		tmpl, err := template.New("tasks").Parse(tt.Config.GetString("command"))
@@ -163,7 +162,7 @@ func (c *WorkerConf) LaunchWorker() {
 		}
 		cmd.Env = env
 
-		err = c.MarkTask(t, "RUNNING")
+		err = c.TransitionTaskState(t, "RUNNING", make(map[string]string))
 		if err != nil {
 			fmt.Printf("ERROR :: failed to transition task to state RUNNING :: %s \n", err.Error())
 			fmt.Println("INFO :: Trying again in 5 seconds")
@@ -173,7 +172,7 @@ func (c *WorkerConf) LaunchWorker() {
 		err = cmd.Start()
 		if err != nil {
 			fmt.Printf("ERROR :: problems starting task execution :: %s \n", err.Error())
-			c.MarkTask(t, "ERROR")
+			c.TransitionTaskState(t, "ERROR", make(map[string]string))
 			fmt.Println("INFO :: Trying again in 5 seconds")
 			continue
 		}
@@ -181,21 +180,24 @@ func (c *WorkerConf) LaunchWorker() {
 		err = cmd.Wait()
 		if err != nil {
 			fmt.Printf("ERROR :: problems finishing task execution :: %s \n", err.Error())
-			c.MarkTask(t, "ERROR")
+			c.TransitionTaskState(t, "ERROR", make(map[string]string))
 			fmt.Println("INFO :: Trying again in 5 seconds")
 			continue
 		}
 
-		err = c.MarkTask(t, "SUCCESS")
+		err = c.TransitionTaskState(t, "SUCCESS", make(map[string]string))
 		fmt.Println("SUCCESS :: Ran task successfully")
 		fmt.Println("INFO :: Proceeding with next task in 5 seconds")
 	}
 }
 
-func (c *WorkerConf) MarkTask(t tasks.Task, state string) error {
-	v := url.Values{}
-	v.Set("state", state) // START, RUNNING, ERROR/SUCCESS
-	paramsString := v.Encode()
+func (c *WorkerConf) TransitionTaskState(t tasks.Task, state string, extraVars map[string]string) error {
+	urlParams := url.Values{}
+	urlParams.Set("state", state) // START, RUNNING, ERROR/SUCCESS
+	for k, v := range extraVars {
+		urlParams.Set(k, v)
+	}
+	paramsString := urlParams.Encode()
 	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/state", viper.GetInt("port"), t.Id) + "?" + paramsString
 	req, err := http.NewRequest("PUT", reqURL, nil)
 	if err != nil {

@@ -149,6 +149,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 		CreatedTs:     time.Now().Unix(),
 		LastUpdatedTs: time.Now().Unix(),
 		TypeId:        t.Config.GetString("name"),
+		TypeDigest:    "",
 		ResultDir:     path.Join(viper.GetString("tasks.results_path"), taskId),
 		State:         "WAIT",
 		Progress:      0,
@@ -160,12 +161,13 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 var ValidTaskStates = []string{"WAIT", "START", "RUNNING", "ERROR", "SUCCESS"}
 
 type Task struct {
-	Id            string            `json:"id"` // uuid; change to id that includes time
-	CreatedTs     int64             `json:"createdTs"`
+	Id            string            `json:"id"`            // uuid; change to id that includes time
+	CreatedTs     int64             `json:"createdTs"`     // when it was first added to the database
 	StartedTs     int64             `json:"startedTs"`     // when it started running
 	LastUpdatedTs int64             `json:"lastUpdatedTs"` // last time any information changed
 	TypeId        string            `json:"type"`          // String name
 	ResultDir     string            `json:"resultDir"`     // Full path
+	TypeDigest    string            `json:"typeDigest"`    // version hash of config file
 	State         string            `json:"state"`         // WAIT, START, RUN, SUCCESS/ERROR
 	Progress      int               `json:"progress"`      // 0-100
 	ExecEnv       map[string]string `json:"defaultEnv"`    // Combined with default env

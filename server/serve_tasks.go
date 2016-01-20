@@ -187,7 +187,6 @@ func modifyTaskInTransaction(taskId string, f func(t *tasks.Task) error) error {
 		if err != nil {
 			return err
 		} else {
-			fmt.Printf("Bumping LastUpdatedTs")
 			t.LastUpdatedTs = time.Now().Unix()
 		}
 
@@ -216,6 +215,7 @@ For other updates it is less crucial.
 func updateTaskState(c *gin.Context) {
 	taskId := c.Param("id")
 	newState := c.Query("state")
+	typeDigest := c.Query("typeDigest")
 	c.Header("Content-Type", "application/json")
 
 	validState := false
@@ -239,6 +239,8 @@ func updateTaskState(c *gin.Context) {
 				return fmt.Errorf("Cannot transition to START state from state %s", t.State)
 			}
 			t.StartedTs = time.Now().Unix()
+			t.TypeDigest = typeDigest
+			t.Progress = 0
 		case "WAIT":
 			// FIXME: Can go back to WAIT after START or RUNNING if requeued
 			return fmt.Errorf("Cannot transition to WAIT state from any other state")
@@ -254,6 +256,7 @@ func updateTaskState(c *gin.Context) {
 			if t.State != "RUNNING" {
 				return fmt.Errorf("Cannot transition to SUCCESS state from state %s", t.State)
 			}
+			t.Progress = 100
 		}
 		t.State = newState
 		return nil
