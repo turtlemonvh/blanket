@@ -33,6 +33,13 @@ Delete a task
     # OR
     ./blanket ps -q | tail -n5 | xargs -I {} ./blanket rm {}
 
+    # Remove all
+    ./blanket ps -a -q | xargs -I {} ./blanket rm {}
+
+Run worker with certain capabilities
+
+    ./blanket worker -t unix,bash,python,python2,python27
+
 Docs
 
 * https://golang.org/pkg/testing/
@@ -76,6 +83,21 @@ blanket ps
 
 - list tasks that are running, are queued to run, or have recently run + some basic stats (like top or docker ps)
 - `-q` to list just ids
+- change over to `blanket ls`
+    - blanket ls tasks
+        - completed, by tag
+        - highlight tasks with no workers available to process them
+    - blanket ls tasktypes
+        - still read only here
+    - blanket ls workers
+        - list by capability
+
+blanket rm
+
+- change to
+    - blanket rm task <id>
+    - blanket rm worker <id>
+
 
 >>> Others
 
@@ -214,12 +236,15 @@ Short List
 
 - Serve up log files
     - provide hyperlink to URL in json body
-- Copy in files
-    - allow a list of glob patterns to include or exclude, or a link to a file listing glob patterns
-    - this will allow python task to work
+    - also allow the user to view streaming stdout/stderr
+        - http://kvz.io/blog/2013/07/12/prefix-streaming-stdout-and-stderr-in-golang/
 - Clean up formatting of ps command
-- When deleting, delete directories too
-    - Command to clean up orphaned directories
+    - https://golang.org/pkg/text/tabwriter/
+    - https://github.com/olekukonko/tablewriter
+    - https://socketloop.com/references/golang-text-tabwriter-newwriter-function-and-write-method-example
+    - https://github.com/docker/docker/blob/master/api/client/ps.go
+    - https://github.com/docker/docker/blob/master/api/client/formatter/formatter.go
+        - uses tabwriter
 - put results into directories with task name as top directory
     - allow the directory structure underneath to be configurable
         - e.g. dates, just ids, etc
@@ -230,6 +255,10 @@ Short List
     - bash, docker, python
 - allow progress by writing to a .progress file (a single integer) in addition to curl
     - push to 100 when finished
+- launch new workers over http
+- view workers via ps
+    - keep list of workers in database so have reference to pids
+
 
 Look over
 
@@ -240,6 +269,10 @@ Look over
     - executes sh scripts
 - http://docs.celeryproject.org/en/latest/reference/
     - celery api
+- https://github.com/RichardKnop/machinery
+    - celery replica in golang
+- https://github.com/glycerine/goq
+    - sungridengine replica in golang with encryption
 
 
 MVP
@@ -349,6 +382,8 @@ Things defined in task config file
     - in go (or maybe even python, since just doing stdin/stdout, not direct RPC)
 
 
+Workers
+
 - script to launch workers of a given type
     - option to run as daemon
     - windows daemon is not supported
@@ -361,7 +396,11 @@ Things defined in task config file
     - should be able to list workers and delete them by tag, pid, or all of them
 - log their information (tags, status updates) to a file
     - blanket_worker.<pid>.log
+- launch as daemon
+    - https://groups.google.com/forum/#!topic/golang-nuts/shST-SDqIp4
+    - see Evernote notebook: https://www.evernote.com/shard/s98/nl/2147483647/d1949bb5-cdf1-4422-8773-862276c6bd36/
 
+Helper scripts
 
 - Script to load fake data into database
 - Directory for scripts
@@ -454,4 +493,9 @@ workers
     - would make scanning to find new tasks faster if all ERROR/SUCCESS tasks weren't in the same place
 - make some good examples
 - write some tests
+- set up hugo to generate api docs
+    - https://gohugo.io/overview/introduction/
+    - render into a single page
+        - https://gohugo.io/extras/toc/
+
 
