@@ -296,21 +296,26 @@ func updateTaskProgress(c *gin.Context) {
 	c.String(http.StatusOK, "{}")
 }
 
-// FIXME: Also grab tags, files
-// http://stackoverflow.com/questions/26773724/curl-http-post-file-upload-using-curl-data-in-linux-command-line
+// FIXME: Also grab extra tags
 func postTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
-	// Read in request body, check for validity, and add to database
-
+	// FIXME: This is not working for plain old json without application type
+	// Request body has content before the call to FormFile; this seems to result in parsing the clears the body value
+	// In other tests, I seemed to find that if you parse the body first then the form data is empty
+	// It turns out if we set the content type of the request to `application/json` before parsing if it, things work
 	log.Info("content-type: ", c.Request.Header.Get("Content-Type"))
-
-	// FIXME: This is not working for plain old json without application type; where does data go?
 
 	// Look for type and default env
 	var req map[string]interface{}
 	var taskData io.ReadCloser
-	taskData, _, err := c.Request.FormFile("data")
+	var err error
+
+	if !strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
+		c.Request.Header.Set("Content-Type", "application/json")
+	}
+
+	taskData, _, err = c.Request.FormFile("data")
 	if err != nil {
 		// Try the form value field in case not passed as file
 		dv := c.Request.FormValue("data")
@@ -318,7 +323,6 @@ func postTask(c *gin.Context) {
 			taskData = ioutil.NopCloser(strings.NewReader(dv))
 			log.Info("Using FormValue as data source")
 		} else {
-			// No form values are available, grab from body instead
 			taskData = c.Request.Body
 			log.Info("Using request.body as data source")
 		}
@@ -335,6 +339,7 @@ func postTask(c *gin.Context) {
 		return
 	}
 
+	// Check required fields
 	if req["type"] == nil {
 		c.String(http.StatusBadRequest, `{"error": "Request is missing required field 'type'."}`)
 		return
@@ -363,26 +368,23 @@ func postTask(c *gin.Context) {
 		}
 	}
 
+	// Create task object
 	t, err := tt.NewTask(defaultEnv)
 	if err != nil {
 		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
 		return
 	}
 
-	// Create output dir
-	err = os.MkdirAll(t.ResultDir, os.ModePerm)
-	if err != nil {
-		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
-		return
-	}
-
-	// Read any files
-	// List files
+	// Read any uploaded files
 	if c.Request.MultipartForm != nil {
-		log.Info("Starting loop over form files")
+		// Create output dir to put files in
+		err = os.MkdirAll(t.ResultDir, os.ModePerm)
+		if err != nil {
+			c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+			return
+		}
 
 		for filename, _ := range c.Request.MultipartForm.File {
-			log.Info("Form file found: ", filename)
 			if filename == "data" {
 				continue
 			}
@@ -394,16 +396,15 @@ func postTask(c *gin.Context) {
 			}
 			defer uploadedFile.Close()
 
-			// Copy file to disk
+			// Copy uploaded file to directory where task will be run
 			// For now we just put it on on this machine; we can record the ip address of where it lives later
 			writtenUploadedFile, err := os.Create(path.Join(t.ResultDir, filename))
 			defer writtenUploadedFile.Close()
 			io.Copy(writtenUploadedFile, uploadedFile)
 		}
-	} else {
-		log.Info("No form data, skipping loop")
 	}
 
+	// Save task to database
 	if err = DB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
 		if b == nil {
