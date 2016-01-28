@@ -177,12 +177,13 @@ Short List
 - Allow configurable executors
     - copy command into tmp file; run with bash, zsh, bat
     - make it use a different executor depending on OS (put this in viper)
+    - test on windows
     - e.g. http://ss64.com/nt/syntax-run.html
     - http://stackoverflow.com/questions/4571244/creating-a-bat-file-for-python-script
-- allow filling in files as templates
-    - have glob patterns to match templates (relative to where they will be copied into)
 - get rid of name field for task types and derive from file name
     - this makes it easier to track
+- allow filling in files as templates
+    - have glob patterns to match templates (relative to where they will be copied into)
 - Clean up formatting of ps command
     - https://golang.org/pkg/text/tabwriter/
     - https://github.com/olekukonko/tablewriter
@@ -193,20 +194,25 @@ Short List
 - put results into directories with task name as top directory
     - allow the directory structure underneath to be configurable
         - e.g. dates, just ids, etc
-- make it work with windows
-- add a type field to the TOML files
-    - bash, docker, python
-- allow progress by writing to a .progress file (a single integer) in addition to curl
 - launch new workers over http
-- view workers via ps
+- view worker status via ps
     - keep list of workers in database so have reference to pids
-- stream logfiles
-    - also allow the user to view streaming stdout/stderr
-        - http://kvz.io/blog/2013/07/12/prefix-streaming-stdout-and-stderr-in-golang/
 - controlling running tasks
     - stop / restart
 - clean up logging to be more consistent
     - make it configurable in terms of verbosity
+
+- stream logfiles (long polling / websockets)
+    - check how supervisord web does it
+        - https://github.com/Supervisor/supervisor/blob/master/supervisor/ui/tail.html
+        - https://github.com/Supervisor/supervisor/blob/master/supervisor/http.py#L140
+    - in golang
+        - https://github.com/hpcloud/tail
+        - http://stackoverflow.com/questions/19292113/not-buffered-http-responsewritter-in-golang
+    - also allow the user to view streaming stdout/stderr
+        - http://kvz.io/blog/2013/07/12/prefix-streaming-stdout-and-stderr-in-golang/
+- allow progress by writing to a .progress file (a single integer) in addition to curl
+
 
 Look over
 
