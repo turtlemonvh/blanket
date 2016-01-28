@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/tasks"
+	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
@@ -295,17 +297,41 @@ func updateTaskProgress(c *gin.Context) {
 }
 
 // FIXME: Also grab tags, files
+// http://stackoverflow.com/questions/26773724/curl-http-post-file-upload-using-curl-data-in-linux-command-line
 func postTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	// Read in request body, check for validity, and add to database
 
+	log.Info("content-type: ", c.Request.Header.Get("Content-Type"))
+
+	// FIXME: This is not working for plain old json without application type; where does data go?
+
 	// Look for type and default env
-	decoder := json.NewDecoder(c.Request.Body)
 	var req map[string]interface{}
-	err := decoder.Decode(&req)
+	var taskData io.ReadCloser
+	taskData, _, err := c.Request.FormFile("data")
 	if err != nil {
-		c.String(http.StatusBadRequest, `{"error": "Error decoding JSON in request body."}`)
+		// Try the form value field in case not passed as file
+		dv := c.Request.FormValue("data")
+		if dv != "" {
+			taskData = ioutil.NopCloser(strings.NewReader(dv))
+			log.Info("Using FormValue as data source")
+		} else {
+			// No form values are available, grab from body instead
+			taskData = c.Request.Body
+			log.Info("Using request.body as data source")
+		}
+	} else {
+		log.Info("Using FormFile as data source")
+	}
+
+	decoder := json.NewDecoder(taskData)
+	err = decoder.Decode(&req)
+	if err != nil {
+		// Getting EOF error unless application/json
+		//c.String(http.StatusBadRequest, `{"error": "Error decoding JSON in request body / form field."}`)
+		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
 		return
 	}
 
@@ -341,6 +367,41 @@ func postTask(c *gin.Context) {
 	if err != nil {
 		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
 		return
+	}
+
+	// Create output dir
+	err = os.MkdirAll(t.ResultDir, os.ModePerm)
+	if err != nil {
+		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+		return
+	}
+
+	// Read any files
+	// List files
+	if c.Request.MultipartForm != nil {
+		log.Info("Starting loop over form files")
+
+		for filename, _ := range c.Request.MultipartForm.File {
+			log.Info("Form file found: ", filename)
+			if filename == "data" {
+				continue
+			}
+
+			uploadedFile, _, err := c.Request.FormFile(filename)
+			if err != nil {
+				c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+				return
+			}
+			defer uploadedFile.Close()
+
+			// Copy file to disk
+			// For now we just put it on on this machine; we can record the ip address of where it lives later
+			writtenUploadedFile, err := os.Create(path.Join(t.ResultDir, filename))
+			defer writtenUploadedFile.Close()
+			io.Copy(writtenUploadedFile, uploadedFile)
+		}
+	} else {
+		log.Info("No form data, skipping loop")
 	}
 
 	if err = DB.Update(func(tx *bolt.Tx) error {

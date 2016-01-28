@@ -30,6 +30,20 @@ Add a new task
     curl -X POST localhost:8773/task/ -d'{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2, "DEFAULT_COMMAND": "cd ~ && ls -lah"}}'
     curl -X POST localhost:8773/task/ -d'{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}'
 
+    # FIXME: Works with this (passing content-type header), but not the above
+    # Did work on commit c8c94eff69c2c75039826e1f4cbe6b2e100efc9c
+    curl -X POST localhost:8773/task/ -d'{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}' -H "Content-Type: application/json"
+
+Add a task and upload some data files with it. Files will be placed at the root of the directory where the task runs.
+
+    # Task data inline
+    curl -X POST localhost:8773/task/ -F data='{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}' -F blanket.json=@blanket.json
+
+    # Task data as another file named "data"
+    echo '{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}' > data.json
+    curl -X POST localhost:8773/task/ -F data=@data.json -F blanket.json=@blanket.json
+
+
 Delete a task
 
     curl -s -X DELETE localhost:8773/task/b200f6de-0453-46c9-9c70-5dad63db3ebb | python -mjson.tool    
