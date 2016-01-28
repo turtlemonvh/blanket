@@ -133,6 +133,7 @@ func (c *WorkerConf) LaunchWorker() {
 			fmt.Println("INFO :: Trying again in 5 seconds")
 			continue
 		}
+		// FIXME: Don't just use bash; use python, zsh, etc configured via viper
 		cmd := exec.Command("bash", "-c", cmdString.String())
 
 		// Set up output files and configure the task to run in the correct location

@@ -179,7 +179,11 @@ Queue
 
 Short List
 
-- allow upload files
+- Allow configurable executors
+    - copy command into tmp file; run with bash, zsh, bat
+    - make it use a different executor depending on OS (put this in viper)
+    - e.g. http://ss64.com/nt/syntax-run.html
+    - http://stackoverflow.com/questions/4571244/creating-a-bat-file-for-python-script
 - allow filling in files as templates
     - have glob patterns to match templates (relative to where they will be copied into)
 - get rid of name field for task types and derive from file name
