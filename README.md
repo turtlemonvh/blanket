@@ -52,6 +52,8 @@ Run worker with certain capabilities
 
     ./blanket worker -t unix,bash,python,python2,python27
 
+====================
+
 Docs
 
 * https://golang.org/pkg/testing/
@@ -174,14 +176,13 @@ Queue
 
 Short List
 
+- Make use of timeout
 - Allow configurable executors
     - copy command into tmp file; run with bash, zsh, bat
     - make it use a different executor depending on OS (put this in viper)
     - test on windows
     - e.g. http://ss64.com/nt/syntax-run.html
     - http://stackoverflow.com/questions/4571244/creating-a-bat-file-for-python-script
-- get rid of name field for task types and derive from file name
-    - this makes it easier to track
 - allow filling in files as templates
     - have glob patterns to match templates (relative to where they will be copied into)
 - Clean up formatting of ps command
@@ -194,14 +195,18 @@ Short List
 - put results into directories with task name as top directory
     - allow the directory structure underneath to be configurable
         - e.g. dates, just ids, etc
-- launch new workers over http
-- view worker status via ps
-    - keep list of workers in database so have reference to pids
+- workers
+    - launch new workers over http / worker -d command
+    - view worker status via ps
+        - keep list of workers in database so have reference to pids
+    - send worker logs to a file in addition to stdout
+        - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
 - controlling running tasks
     - stop / restart
+    - configurable # restarts
+        - # times allowed, whether they go in new directories
 - clean up logging to be more consistent
     - make it configurable in terms of verbosity
-
 - stream logfiles (long polling / websockets)
     - check how supervisord web does it
         - https://github.com/Supervisor/supervisor/blob/master/supervisor/ui/tail.html
@@ -211,7 +216,18 @@ Short List
         - http://stackoverflow.com/questions/19292113/not-buffered-http-responsewritter-in-golang
     - also allow the user to view streaming stdout/stderr
         - http://kvz.io/blog/2013/07/12/prefix-streaming-stdout-and-stderr-in-golang/
-- allow progress by writing to a .progress file (a single integer) in addition to curl
+- make some good examples
+- write some tests
+    - esp. for glob copy method
+        - move this to its own thing and open source it
+        - include expanduser function (like in python)
+            - right now we just replace `~`
+            - we should instead replace `^~/` or `/~/` so we don't replace file names with ~ in them
+- set up hugo to generate api docs
+    - https://gohugo.io/overview/introduction/
+    - render into a single page
+        - https://gohugo.io/extras/toc/
+- allow progress by writing to a .progress file (a single integer followed by an arbitraty string) in addition to curl
 
 
 Look over
@@ -227,7 +243,6 @@ Look over
     - celery replica in golang
 - https://github.com/glycerine/goq
     - sungridengine replica in golang with encryption
-
 
 MVP
 
@@ -433,9 +448,13 @@ workers
 
 ## Extra
 
-
+- cross compiling
+    - should be able to combile for centos, ubuntu, windows, mac in 32bit/64bit versions all at once
+    - http://dave.cheney.net/2015/08/22/cross-compilation-with-go-1-5
+- command line completion
+    - cobra has this built in, but will probably have to work with build system / makfile to get this right
 - include weights for fair queuing
-- template extensions
+- include template extensions
     - https://github.com/leekchan/gtf
 - multiple template formats
     - like mandrill: http://blog.mandrill.com/handlebars-for-templates-and-dynamic-content.html
@@ -458,34 +477,31 @@ workers
         - input string is request json, output string is response json
 - pluggable result store
     - allow writing to a tmp directory and then storing on s3
-- use render to output templates content
+- use render to output templates content in responses
     - https://github.com/unrolled/render#gin
-- Cookie cutter / quickstart that generates an example project for people to get started developing wrapper in various languages with docs included
 - Scheduling / future execution
     - should be able to set min start date for a task
     - periodic scheduling would be good too, though this is pretty easy with cron, so not a big deal
 - Mark tasks so that only 1 version of the task can be running at a time
+    - e.g. tasks operating on a spreadsheet
+    - max_concurrent_tasks
 - Task dependencies
     - similar to airflow and bamboo
 - add `?v` argument to provide pretty printed output
 - allow TOML file inheritance, starting with a different base task type
     - https://github.com/spf13/viper/blob/master/viper.go#L938
     - to start, everything is bash
-- fs abstraction
-    - https://github.com/spf13/afero
 - pagination of results
 - moving tasks in different states to different buckets
     - would make scanning to find new tasks faster if all ERROR/SUCCESS tasks weren't in the same place
-- make some good examples
-- write some tests
-- set up hugo to generate api docs
-    - https://gohugo.io/overview/introduction/
-    - render into a single page
-        - https://gohugo.io/extras/toc/
 - recommended tool for making your thing available
     - https://ngrok.com/
 - allow uploading created files to s3
     - this should probably just be part of the task, but uploading and then clearing the directory would be a common cool task
+- fs abstraction
+    - https://github.com/spf13/afero
+- Cookie cutter / quickstart
+    - generates an example project for people to get started developing wrapper in various languages with docs included
 - distributed:
     - Allow path to task information to be on a specific machine accessible over ssh
     - workers on other machines would be great

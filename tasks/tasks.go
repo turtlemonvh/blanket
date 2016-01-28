@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -76,6 +77,7 @@ func ReadTaskTypeFromFilepath(filepath string) (TaskType, error) {
 		return TaskType{}, err
 	}
 	tt.ConfigFile = filepath
+	tt.Config.Set("name", strings.Split(path.Base(filepath), ".toml")[0])
 
 	// Ignore errors in finding checksum for now
 	cs, err := lib.Checksum(filepath)
