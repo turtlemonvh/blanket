@@ -89,6 +89,9 @@ func Serve() {
 	// Basic info routes
 	r := gin.Default()
 
+	// Make the result dir browseable
+	r.StaticFS("/results", gin.Dir(viper.GetString("tasks.results_path"), true))
+
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"version": "0.1",

@@ -59,7 +59,6 @@ Docs
 
 ## API
 
-
 blanket server
 
 - launches server
@@ -162,85 +161,15 @@ Queue
     - adding and removing may be slow, but lots of sequential reads can happen at the same time
 
 
-BaseTaskType
-
-- name
-- description
-- input vars / settings
-    - these may all be typed, or not
-- config file
-    - TOML file
-- duration
-    - default 1 minute
-- weight
-    - default 1
-~~~
-- steal code from here for saving items in boltdb
-    - https://github.com/djherbis/stow
-
-BaseTask
-
-- task id
-- TaskType (fk)
-- % complete: 0-100
-    - auto changed to 100 when complete
-- input vars / settings
-    - map[string]string
-- times
-    - time_created
-    - time_queued
-    - time_started
-    - time_finished
-- status
-    - STARTING
-    - QUEUED
-    - RUNNING
-    - FAILED/SUCCESS
-- commands
-    - start
-    - stop/kill
-    - status
-    - NO: restart
-- duration and weight
-    - can override type values
-
-
-TaskStatus
-
-- task_id
-- status
-- time
-> Used to track progress of task along with % complete
-
-
-BashTask
-
-- template for bash script
-- input files
-- output files
-    - names of files can be populated by variables
-    - variables include task id, date
-- stdout
-- stderr
-- list of tailable log files
-    - for showing on UI
-
-PythonTask
-
-- include a python base class for task that includes feedback
-- this should go in a separate directory
-    - /plugins/python/
-
-
-
 ## To Do
 
 Short List
 
-- Serve up log files
-    - provide hyperlink to URL in json body
-    - also allow the user to view streaming stdout/stderr
-        - http://kvz.io/blog/2013/07/12/prefix-streaming-stdout-and-stderr-in-golang/
+- allow upload files
+- allow filling in files as templates
+    - have glob patterns to match templates (relative to where they will be copied into)
+- get rid of name field for task types and derive from file name
+    - this makes it easier to track
 - Clean up formatting of ps command
     - https://golang.org/pkg/text/tabwriter/
     - https://github.com/olekukonko/tablewriter
@@ -252,16 +181,19 @@ Short List
     - allow the directory structure underneath to be configurable
         - e.g. dates, just ids, etc
 - make it work with windows
-- get rid of name field for task types and derive from file name
-    - this makes it easier to track
 - add a type field to the TOML files
     - bash, docker, python
 - allow progress by writing to a .progress file (a single integer) in addition to curl
-    - push to 100 when finished
 - launch new workers over http
 - view workers via ps
     - keep list of workers in database so have reference to pids
-
+- stream logfiles
+    - also allow the user to view streaming stdout/stderr
+        - http://kvz.io/blog/2013/07/12/prefix-streaming-stdout-and-stderr-in-golang/
+- controlling running tasks
+    - stop / restart
+- clean up logging to be more consistent
+    - make it configurable in terms of verbosity
 
 Look over
 
@@ -281,6 +213,7 @@ Look over
 MVP
 
 - use to run ansible tasks
+- use to queue tasks for OCR app
 - provide log of past runs, and queue for upcoming runs
 - keep all log files
 - allow lots of parameters
@@ -438,7 +371,9 @@ https://github.com/hashicorp/consul/blob/master/main.go
     - SSL and basic auth
     - basic auth creds are in config file
     - uses Go's build in SSL capabilities to configure itself; can use your key files or make its own
-
+- check out iron.io for data model and UI
+    - http://www.iron.io/
+    - https://www.google.com/search?q=iron.io+dashboard&source=lnms&tbm=isch
 
 ## REST API
 
@@ -479,9 +414,37 @@ workers
 
 ## Extra
 
+
+- include weights for fair queuing
+- template extensions
+    - https://github.com/leekchan/gtf
+- multiple template formats
+    - like mandrill: http://blog.mandrill.com/handlebars-for-templates-and-dynamic-content.html
+    - https://github.com/aymerick/raymond
+    - https://github.com/flosch/pongo2
+    - https://github.com/lestrrat/go-xslate
+    - https://github.com/benbjohnson/ego
+    - https://github.com/sipin/gorazor
+    - ** this is an ideal candidate for plugin design
+- autoscheduling of backups
+    - list interval in config
+    - when starting up, check if newest backup is too old, if so snapshot immediately
+    - schedule next snapshot immediately after running first one
+- pluggable queue / datastore
+    - use amazon RDS (as queue and datastore) to start to make distributed large deployments easy
+        - RDS would maintain information about instances connected, workers available
+        - using RDS and https://golang.org/pkg/database/sql/ means any sql database is ok
+    - each type just has to implement a certain interface
+        - for most, send string, get back string
+        - input string is request json, output string is response json
+- pluggable result store
+    - allow writing to a tmp directory and then storing on s3
+- use render to output templates content
+    - https://github.com/unrolled/render#gin
 - Cookie cutter / quickstart that generates an example project for people to get started developing wrapper in various languages with docs included
-- Allow path to task information to be on a specific machine accessible over ssh
 - Scheduling / future execution
+    - should be able to set min start date for a task
+    - periodic scheduling would be good too, though this is pretty easy with cron, so not a big deal
 - Mark tasks so that only 1 version of the task can be running at a time
 - Task dependencies
     - similar to airflow and bamboo
@@ -500,5 +463,23 @@ workers
     - https://gohugo.io/overview/introduction/
     - render into a single page
         - https://gohugo.io/extras/toc/
-
+- recommended tool for making your thing available
+    - https://ngrok.com/
+- allow uploading created files to s3
+    - this should probably just be part of the task, but uploading and then clearing the directory would be a common cool task
+- distributed:
+    - Allow path to task information to be on a specific machine accessible over ssh
+    - workers on other machines would be great
+    - can start with single master
+    - could do a distributed concensus thing so that nodes find each other; 1 is the master
+        - replicates data operations to all downsteam followers (WAL tailing)
+        - uses a merkle tree to ensure sections of database stay in sync: https://en.wikipedia.org/wiki/Merkle_tree
+    - paths to data are prepended with ip
+    - workers on each node can be launched with different capabilties
+        - would have to have the exe running on each node so they could talk to each other
+        - each one would need to be able to launch workers
+    - ** we don't really want to recreate a distributed database, so single master is probably ok
+        - can even add a command to switch master over to a different node
+        - can lock server, database contents out over HTTP, switch the master to the new node, and start back up
+        - if a node is not the master, all it does it forward requests onto the master node
 
