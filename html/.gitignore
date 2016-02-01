@@ -1,3 +1,5 @@
 node_modules
-app/css
+src/css
+dev
+public
 

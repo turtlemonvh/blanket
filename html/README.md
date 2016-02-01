@@ -20,4 +20,10 @@
     * https://browsersync.io/docs/gulp/
 * angular js
     * https://angularjs.org/
-    * hosted on cdn
+
+
+## TODO
+
+* integrate stuff from html5bp
+    * https://github.com/h5bp/html5-boilerplate/tree/5.3.0
+
