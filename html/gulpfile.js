@@ -160,22 +160,22 @@ var sassTask = function(options){
             .pipe(browserSync.stream());
     }
 }
-gulp.task('sass', sassTask({ dest: PUB_DIR_BASE + "/css" }));
-gulp.task('sass-dev', sassTask({ dest: DEV_DIR_BASE + "/css" }));
+gulp.task('build-sass', sassTask({ dest: PUB_DIR_BASE + "/css" }));
+gulp.task('build-sass-dev', sassTask({ dest: DEV_DIR_BASE + "/css" }));
 
-gulp.task("build", ["build-common-lib", "build-app", "sass", "build-html"]);
-gulp.task("build-dev", ["build-common-lib-dev", "build-app-dev", "sass-dev", "build-html-dev"]);
+gulp.task("build", ["build-common-lib", "build-app", "build-sass", "build-html"]);
+gulp.task("build-dev", ["build-common-lib-dev", "build-app-dev", "build-sass-dev", "build-html-dev"]);
 
 
 // Static Server + watching scss/html files
-gulp.task('serve', function() {
+gulp.task('serve', ['build-dev'], function() {
 
     browserSync.init({
         server: DEV_DIR_BASE
     });
 
     gulp.watch(SRC_DIR_BASE + "/js/**/*.js", ['build-app-dev']);
-    gulp.watch(SRC_DIR_BASE + "/scss/**/*.scss", ['sass-dev']);
+    gulp.watch(SRC_DIR_BASE + "/scss/**/*.scss", ['build-sass-dev']);
     gulp.watch(SRC_DIR_BASE + "/*.html", ['build-html-dev']);
     gulp.watch(DEV_DIR_BASE + "/*.html").on('change', browserSync.reload);
 });

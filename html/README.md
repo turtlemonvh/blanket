@@ -2,11 +2,21 @@
 
 ## Quick start
 
+Running locally with reload on change:
+
     # Install
     npm install
 
-    # Run dev server
+    # Run dev server; build content too
     gulp serve
+
+Building compressed/minified version
+
+    gulp build
+
+Checking syntax of js files
+
+    gulp lint
 
 ## Tech stack
 
