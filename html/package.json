@@ -1,0 +1,20 @@
+{
+  "name": "blanket-ui",
+  "version": "1.0.0",
+  "description": "Web app for working with blanket.",
+  "main": "gulpfile.js",
+  "devDependencies": {
+    "browser-sync": "^2.11.1",
+    "gulp": "^3.9.0",
+    "gulp-sass": "^2.1.1"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "guthub.com/turtlemonvh/blanket"
+  },
+  "author": "Timothy Van Heest",
+  "license": "MIT"
+}
