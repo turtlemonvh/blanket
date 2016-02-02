@@ -20,6 +20,7 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/boltdb/bolt"
 	"github.com/gin-gonic/gin"
+	"github.com/rs/cors"
 	"github.com/spf13/viper"
 	"time"
 )
@@ -86,8 +87,14 @@ func Serve() {
 	DB = openDatabase()
 	defer DB.Close()
 
+	// https://godoc.org/github.com/rs/cors
+	c := cors.New(cors.Options{
+		AllowedOrigins: []string{"*"},
+	})
+
 	// Basic info routes
 	r := gin.Default()
+	r.Use(gin.WrapF(c.HandlerFunc))
 
 	// Make the result dir browseable
 	r.StaticFS("/results", gin.Dir(viper.GetString("tasks.results_path"), true))

@@ -1,5 +1,7 @@
 @import "bootstrap";
 
-.red {
-    color: red
+// http://stackoverflow.com/questions/18153234/center-a-column-using-twitter-bootstrap-3
+.col-centered {
+    float: none;
+    margin: 0 auto;
 }

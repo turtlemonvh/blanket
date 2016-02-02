@@ -1,25 +1,66 @@
 <head>
   <link rel="stylesheet" href="css/main.css">
-  <script src="js/app/app.min.js"></script>
   <script src="js/lib/common.min.js"></script>
+  <script src="js/app/app.min.js"></script>
 </head>
-<body>
-    Hi there
+<body ng-app="blanketApp">
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-md-10 col-centered" ng-controller="TaskListCtl">
+                <h2>Tasks</h2>
+                <table class="table table-condensed">
+                    <thead> 
+                        <tr>
+                            <th>#</th>
+                            <th>Id</th>
+                            <th>Type</th>
+                            <th>Tags</th>
+                            <th>Date Created</th>
+                            <th>Date Started</th>
+                            <th>Date Last Updated</th>
+                            <th>State</th>
+                        </tr> 
+                    </thead>
+                    <tbody ng-repeat="task in tasks">
+                        <tr>
+                            <th scope="row">{{ ($index+1) }}</th>
+                            <td><a href="{{baseUrl}}/task/{{task.id}}">{{ task.id }}</a></td>
+                            <td><a href="{{baseUrl}}/task_type/{{task.type}}">{{ task.type }}</a></td>
+                            <td>{{ task.tags.join(', ') }}</td>
+                            <td>{{ task.createdTs | date:'medium' }}</td>
+                            <td>{{ task.startedTs | date:'medium' }}</td>
+                            <td>{{ task.lastUpdatedTs | date:'medium' }}</td>
+                            <td> <span class="label label-{{ task.labelClass }}">{{ task.state }}</span> </td>
+                        </tr>
+                    </tbody>
+                </table>
 
-    <table class="table table-condensed">
-        <thead> 
-            <tr> <th>#</th> <th>Column heading</th> <th>Column heading</th> <th>Column heading</th> </tr> 
-        </thead>
-        <tbody>
-            <tr class="active"> <th scope="row">1</th> <td>Column content</td> <td>Column content</td> <td>Column content</td> </tr>
-            <tr> <th scope="row">2</th> <td>Column content</td> <td>Column content</td> <td>Column content</td> </tr>
-            <tr class="success"> <th scope="row">3</th> <td>Column content</td> <td>Column content</td> <td>Column content</td> </tr>
-            <tr> <th scope="row">4</th> <td>Column content</td> <td>Column content</td> <td>Column content</td> </tr>
-            <tr class="info"> <th scope="row">5</th> <td>Column content</td> <td>Column content</td> <td>Column content</td> </tr>
-            <tr> <th scope="row">6</th> <td>Column content</td> <td>Column content</td> <td>Column content</td> </tr>
-            <tr class="warning"> <th scope="row">7</th> <td>Column content</td> <td>Column content</td> <td>Column content</td> </tr>
-            <tr> <th scope="row">8</th> <td>Column content</td> <td>Column content</td> <td>Column content</td> </tr>
-            <tr class="danger"> <th scope="row">9</th> <td>Column content</td> <td>Column content</td> <td>Column content</td> </tr> 
-        </tbody>
-    </table>
+                <h2>Task Types</h2>
+                <table class="table table-condensed">
+                    <thead> 
+                        <tr>
+                            <th>#</th>
+                            <th>Name</th>
+                            <th>Tags</th>
+                            <th>Date Loaded</th>
+                            <th>Config File</th>
+                            <th>Current Version</th>
+                        </tr> 
+                    </thead>
+                    <tbody ng-repeat="taskType in taskTypes">
+                        <tr>
+                            <th scope="row">{{ ($index+1) }}</th>
+                            <td><a href="{{baseUrl}}/task_type/{{taskType.name}}">{{ taskType.name }}</a></td>
+                            <td>{{ taskType.tags.join(', ') }}</td>
+                            <td>{{ taskType._loaded_ts | date:'medium' }}</td>
+                            <td> {{ taskType._config_file }} </td>
+                            <td> {{ taskType._version_hash }} </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+            </div> <!-- End TaskListCtl -->
+        </div>
+    </div>
+
 </body>

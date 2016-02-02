@@ -28,7 +28,8 @@ const APP_DEV_DIR = "./dev/js/app/";
 const EXTERNAL_LIBS = {
     jquery: "./node_modules/jquery/dist/jquery.min.js",
     angular: "./node_modules/angular/angular.min.js",
-    bootstrap: "./node_modules/bootstrap/dist/js/bootstrap.min.js"
+    bootstrap: "./node_modules/bootstrap/dist/js/bootstrap.min.js",
+    lodash: "./bower_components/lodash/dist/lodash.min.js"
 };
 
 const SIZE_OPTS = {

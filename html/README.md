@@ -36,4 +36,9 @@ Checking syntax of js files
 
 * integrate stuff from html5bp
     * https://github.com/h5bp/html5-boilerplate/tree/5.3.0
+* move this to its own repo
+* integrate option to serve this into main blanket app
+* add some command line flags to make top label commands easier to work with
+    * http://stackoverflow.com/questions/23023650/is-it-possible-to-pass-a-flag-to-gulp-to-have-it-run-tasks-in-different-ways
+* move some code to external libraries to make it easier to include in other projects
 
