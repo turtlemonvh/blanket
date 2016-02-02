@@ -2,6 +2,12 @@ angular.module('blanketApp', [])
     .service('')
     .constant('_', window._ )
     .constant('baseUrl', 'http://localhost:8773')
+    .controller('NavCtl', ['$scope', '$interval', function($scope, $interval){
+        $scope.lastRefreshed = Date.now();
+        $interval(function(){
+            $scope.lastRefreshed = Date.now();
+        }, 200);
+    }])
     .controller('TaskListCtl', ['$log', '$http', '$scope', 'baseUrl', '_', function($log, $http, $scope, baseUrl, _) {
         var taskList = this;
         $scope.tasks = [];
@@ -19,6 +25,7 @@ angular.module('blanketApp', [])
                     "SUCCESS": "success"
                 };
                 v.labelClass = labelClasses[v.state];
+                v.hasResults = _.intersection(["ERROR", "SUCCESS"], [v.state]).length !== 0;
 
                 // Date fixing
                 var dateFields = ['createdTs', 'startedTs', 'lastUpdatedTs'];

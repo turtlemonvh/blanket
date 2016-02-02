@@ -34,6 +34,14 @@ Checking syntax of js files
 
 ## TODO
 
+* move http calls into a central data service
+    * poll for changes on a configurable interval
+    * make url configurable
+* break into separate pages
+* limit results to first 100 items
+* make display more compact
+* allow editing of TOML files inline
+    * edit button that pops up form
 * integrate stuff from html5bp
     * https://github.com/h5bp/html5-boilerplate/tree/5.3.0
 * move this to its own repo
