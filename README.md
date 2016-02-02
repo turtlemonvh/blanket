@@ -52,6 +52,9 @@ Run worker with certain capabilities
 
     ./blanket worker -t unix,bash,python,python2,python27
 
+
+
+
 ====================
 
 Docs
@@ -176,7 +179,17 @@ Queue
 
 Short List
 
-- Make use of timeout
+> See: https://trello.com/b/bOWTSxbO/blanket-dev
+
+- HTTP interface
+    - remove a task that has run
+    - add a new task of a given type, with specific overrides
+- Use time sorted ids instead of UUIDs
+    - https://github.com/streadway/simpleuuid
+    - everything will be sorted by time by default
+- Add "required_environment" section
+    - these are things that every task must provide, or it will be rejected
+    - this will be used to create the http interface (auto-generation of forms)
 - Allow configurable executors
     - copy command into tmp file; run with bash, zsh, bat
     - make it use a different executor depending on OS (put this in viper)
@@ -185,22 +198,19 @@ Short List
     - http://stackoverflow.com/questions/4571244/creating-a-bat-file-for-python-script
 - allow filling in files as templates
     - have glob patterns to match templates (relative to where they will be copied into)
-- Clean up formatting of ps command
-    - https://golang.org/pkg/text/tabwriter/
-    - https://github.com/olekukonko/tablewriter
-    - https://socketloop.com/references/golang-text-tabwriter-newwriter-function-and-write-method-example
-    - https://github.com/docker/docker/blob/master/api/client/ps.go
-    - https://github.com/docker/docker/blob/master/api/client/formatter/formatter.go
-        - uses tabwriter
-- put results into directories with task name as top directory
-    - allow the directory structure underneath to be configurable
-        - e.g. dates, just ids, etc
 - workers
     - launch new workers over http / worker -d command
     - view worker status via ps
         - keep list of workers in database so have reference to pids
     - send worker logs to a file in addition to stdout
         - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
+    - similar: https://github.com/gds-operations/unicornherder
+        - helps keep track of daemons that start up
+        - even has a nice diagram
+- Option to leave task creation request open until task completes
+    - also adds it with super high priority so it is picked up fast
+    - like this: https://github.com/celery/celery/issues/2275#issuecomment-56828471
+- Make use of timeout to stop long running tasks
 - controlling running tasks
     - stop / restart
     - configurable # restarts
@@ -227,8 +237,8 @@ Short List
     - https://gohugo.io/overview/introduction/
     - render into a single page
         - https://gohugo.io/extras/toc/
-- allow progress by writing to a .progress file (a single integer followed by an arbitraty string) in addition to curl
-
+- allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
+- put api calls into sub directories
 
 Look over
 
@@ -243,6 +253,9 @@ Look over
     - celery replica in golang
 - https://github.com/glycerine/goq
     - sungridengine replica in golang with encryption
+- https://github.com/hammerlab/ketrew
+    - workflow engine able to run arbitrary tasks
+    - plus UI
 
 MVP
 
@@ -448,6 +461,25 @@ workers
 
 ## Extra
 
+- Stats
+    - put stats into their own bucket
+    - each blob is its own packet of stats for a time window
+    - scanning through this bucket we can quickly pull out the stats we need and make a plot
+- Add prometheus and expvar metrics
+    - see logstore as an example
+- Add-in for check_mk local checks
+    - listens for status information and writes to a file
+    - may want to just use python stuff that I already made
+- Clean up formatting of ps command
+    - https://golang.org/pkg/text/tabwriter/
+    - https://github.com/olekukonko/tablewriter
+    - https://socketloop.com/references/golang-text-tabwriter-newwriter-function-and-write-method-example
+    - https://github.com/docker/docker/blob/master/api/client/ps.go
+    - https://github.com/docker/docker/blob/master/api/client/formatter/formatter.go
+        - uses tabwriter
+- put results into directories with task name as top directory
+    - allow the directory structure underneath to be configurable
+        - e.g. dates, just ids, etc
 - cross compiling
     - should be able to combile for centos, ubuntu, windows, mac in 32bit/64bit versions all at once
     - http://dave.cheney.net/2015/08/22/cross-compilation-with-go-1-5
@@ -480,6 +512,9 @@ workers
 - use render to output templates content in responses
     - https://github.com/unrolled/render#gin
 - Scheduling / future execution
+    - https://godoc.org/github.com/robfig/cron
+    - https://github.com/robfig/cron
+    - https://github.com/jasonlvhit/gocron
     - should be able to set min start date for a task
     - periodic scheduling would be good too, though this is pretty easy with cron, so not a big deal
 - Mark tasks so that only 1 version of the task can be running at a time
