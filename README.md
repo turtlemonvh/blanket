@@ -39,6 +39,10 @@ Add a task and upload some data files with it. Files will be placed at the root 
     echo '{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}' > data.json
     curl -X POST localhost:8773/task/ -F data=@data.json -F blanket.json=@blanket.json
 
+Add lots of tasks
+
+    while true; do curl -X POST localhost:8773/task/ -F data=@data.json -F blanket.json=@blanket.json; sleep 1; done
+
 Delete a task
 
     curl -s -X DELETE localhost:8773/task/b200f6de-0453-46c9-9c70-5dad63db3ebb | python -mjson.tool    
@@ -51,9 +55,6 @@ Delete a task
 Run worker with certain capabilities
 
     ./blanket worker -t unix,bash,python,python2,python27
-
-
-
 
 ====================
 
@@ -184,9 +185,7 @@ Short List
 - HTTP interface
     - remove a task that has run
     - add a new task of a given type, with specific overrides
-- Use time sorted ids instead of UUIDs
-    - https://github.com/streadway/simpleuuid
-    - everything will be sorted by time by default
+    - launch and manage workers
 - Add "required_environment" section
     - these are things that every task must provide, or it will be rejected
     - this will be used to create the http interface (auto-generation of forms)
@@ -461,10 +460,13 @@ workers
 
 ## Extra
 
+- better browsing interface for files
+    - instead of just a list, include modified time, size, etc.
 - Stats
     - put stats into their own bucket
     - each blob is its own packet of stats for a time window
     - scanning through this bucket we can quickly pull out the stats we need and make a plot
+    - stat viz: http://www.tnoda.com/blog/2013-12-19, http://cmaurer.github.io/angularjs-nvd3-directives/sparkline.chart.html
 - Add prometheus and expvar metrics
     - see logstore as an example
 - Add-in for check_mk local checks
@@ -486,6 +488,8 @@ workers
 - command line completion
     - cobra has this built in, but will probably have to work with build system / makfile to get this right
 - include weights for fair queuing
+- use stacked bars to show the amt of tasks of each type that have failed, are in progress, or succeeded
+    - http://getbootstrap.com/components/#progress-stacked
 - include template extensions
     - https://github.com/leekchan/gtf
 - multiple template formats

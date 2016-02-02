@@ -37,6 +37,7 @@ func getTasks(c *gin.Context) {
 
 	taskType := c.Query("type")
 	taskState := c.Query("state")
+	reverseSort := c.Query("reverseSort")
 
 	log.WithFields(log.Fields{
 		"requiredTaskTags": requiredTaskTags,
@@ -55,7 +56,16 @@ func getTasks(c *gin.Context) {
 
 		c := b.Cursor()
 		isFirst := true
-		for k, v := c.First(); k != nil; k, v = c.Next() {
+
+		// Sort order
+		iterFunction := c.Next
+		startIterFunction := c.First
+		if reverseSort == "true" {
+			iterFunction = c.Prev
+			startIterFunction = c.Last
+		}
+
+		for k, v := startIterFunction(); k != nil; k, v = iterFunction() {
 
 			// Create an object from bytes
 			t := tasks.Task{}

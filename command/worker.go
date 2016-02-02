@@ -16,7 +16,6 @@ import (
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/tasks"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -348,8 +347,11 @@ func (c *WorkerConf) FindTask() (tasks.Task, error) {
 	// Call the REST api and get a task with the required tags
 	// The worker needs to make sure it has all the tags of whatever task it requests
 	v := url.Values{}
+
 	v.Set("state", "WAIT")
 	v.Set("maxTags", c.Tags)
+	v.Set("reverseSort", "true") // oldest to newest
+
 	paramsString := v.Encode()
 	reqURL := fmt.Sprintf("http://localhost:%d/task/", viper.GetInt("port")) + "?" + paramsString
 	res, err := http.Get(reqURL)
@@ -364,13 +366,6 @@ func (c *WorkerConf) FindTask() (tasks.Task, error) {
 	dec.Decode(&respTasks)
 
 	// FIXME: Handle empty results
-	var latestTask tasks.Task
-	lowestTimestamp := int64(math.MaxInt64)
-	for _, task := range respTasks {
-		if task.CreatedTs < lowestTimestamp {
-			latestTask = task
-		}
-	}
-
-	return latestTask, nil
+	// Always sorted oldest to newest
+	return respTasks[0], nil
 }

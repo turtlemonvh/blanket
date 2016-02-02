@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	log "github.com/Sirupsen/logrus"
-	"github.com/satori/go.uuid"
 	"github.com/spf13/viper"
+	uuid "github.com/streadway/simpleuuid"
 	"github.com/turtlemonvh/blanket/lib"
 	"io"
 	"io/ioutil"
@@ -124,7 +124,17 @@ func (t *TaskType) EnvironmentVars() map[string]string {
 
 // Tasks inherit all the environment params of a tasktype + more
 func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
-	taskId := uuid.NewV4().String()
+	currentTime := time.Now()
+	taskType := t.Config.GetString("name")
+
+	taskIdObj, err := uuid.NewTime(currentTime)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"currentTime": currentTime,
+			"taskType":    taskType,
+		}).Info("Unexpected error getting id for task")
+	}
+	taskId := taskIdObj.String()
 
 	// Merge environment variables
 	// FIXME: Take any files and copy them into directory
@@ -163,7 +173,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 var ValidTaskStates = []string{"WAIT", "START", "RUNNING", "ERROR", "SUCCESS"}
 
 type Task struct {
-	Id            string            `json:"id"`            // uuid; change to id that includes time
+	Id            string            `json:"id"`            // uuid
 	CreatedTs     int64             `json:"createdTs"`     // when it was first added to the database
 	StartedTs     int64             `json:"startedTs"`     // when it started running
 	LastUpdatedTs int64             `json:"lastUpdatedTs"` // last time any information changed
