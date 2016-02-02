@@ -9,6 +9,7 @@ var sass = require('gulp-sass');
 var size = require("gulp-size");
 var uglify = require("gulp-uglify");
 var jshint = require("gulp-jshint");
+var debug = require('gulp-debug');
 var browserSync = require('browser-sync').create();
 
 var reload = browserSync.reload;
@@ -50,6 +51,8 @@ function buildToSingleFile(options) {
     if (options.concatOnly) {
         return gulp.src(src_glob)
             // Log each file that will be concatenated into the common.js file.
+            .pipe(debug({title: 'buildToSingleFile:foundFiles::'}))
+            // Concatenate all files.
             .pipe(concat(tgt_filename))
             // Save that file to the appropriate location.
             .pipe(gulp.dest(tgt_directory));
@@ -72,7 +75,7 @@ function buildToSingleFile(options) {
  * Linter for the most basic of quality assurance.
  */
 gulp.task("lint", function() {
-    return gulp.src(JS_SRC_DIR + "**/*.js")
+    return gulp.src(JS_SRC_DIR + "/**/*.js")
         .pipe(jshint(LINT_OPTS))
         .pipe(jshint.reporter("default"));
 });
@@ -86,7 +89,8 @@ var buildApp = function(overrides){
     return function(){
         var tgt_dir_base = overrides.tgt_dir_base || APP_DIST_DIR;
         var options = {
-            src_glob: JS_SRC_DIR + "/**/*.js",
+            // Always load module first
+            src_glob: [JS_SRC_DIR + "/**/module.js", JS_SRC_DIR + "/**/*.js"],
             tgt_filename: "app.min.js",
             tgt_directory: tgt_dir_base 
         };
