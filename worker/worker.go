@@ -49,17 +49,8 @@ func (c *WorkerConf) Run() {
 		c.Stopping = true
 	}()
 
-	// If it's a daemon, call it again
-	// https://groups.google.com/forum/#!topic/golang-nuts/shST-SDqIp4
-	// https://golang.org/pkg/syscall/#SysProcAttr
-	// https://golang.org/pkg/os/exec/#Cmd; has SysProcAttr field
-
-	// Manage so easy to list
-	// https://github.com/mitchellh/go-ps
-
-	// Can also just add pid to database when starting
-	// Then can search for pid when searching, and log out if can't find process with correct pid
-	// Always record the pid used UNLESS called with daemon flag, since that process exits quickly
+	// TODO:
+	// Make sure logging works fine with sighup for logrotate
 
 	if c.Daemon {
 		path, err := osext.Executable()
@@ -92,11 +83,11 @@ func (c *WorkerConf) Run() {
 			cmd.SysProcAttr = cmdAttrs
 		}
 
+		// FIXME: Redirect the first couple seconds of stdout here to check that process started ok
 		cmd.Start()
 
 		log.WithFields(log.Fields{
-			"tags":          c.ParsedTags,
-			"daemon":        c.Daemon,
+			"tags":          c.Tags,
 			"pid":           cmd.Process.Pid,
 			"checkInterval": c.CheckInterval,
 			"logfile":       c.Logfile,
@@ -104,20 +95,20 @@ func (c *WorkerConf) Run() {
 
 	} else {
 		c.Pid = os.Getpid()
-		c.CheckInterval = 2 // seconds
 		c.ParsedTags = strings.Split(c.Tags, ",")
+
+		// FIXME: Make this an option
+		c.CheckInterval = 2
 
 		err = c.SetLogfileName()
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
-			}).Error("Fatal error getting logfile name")
-			os.Exit(1)
+			}).Fatal("problem getting logfile name")
 		}
 
 		log.WithFields(log.Fields{
 			"tags":          c.ParsedTags,
-			"daemon":        c.Daemon,
 			"pid":           c.Pid,
 			"checkInterval": c.CheckInterval,
 			"logfile":       c.Logfile,
@@ -129,7 +120,6 @@ func (c *WorkerConf) Run() {
 }
 
 func (c *WorkerConf) SetLogfileName() error {
-	// Generate the name of the logfile if if is empty
 	if c.Logfile != "" {
 		return nil
 	}
@@ -149,14 +139,15 @@ func (c *WorkerConf) SetLogfileName() error {
 }
 
 // Registers itself in the database
-// Must be ok or it will exit immediately (log and os.Exit(1) )
+// Must be ok or it will exit immediately (Fatal log)
+// Also register with time running
 func (c *WorkerConf) MustRegister() {
 	c.Stopping = false
 }
 
 // Deregisters itself
-// Sets config to be "SHUTTING DOWN"
-// Logs time and shuts down
+// Send a DELETE request to /worker/<id>/ to make sure db is cleared
+// Logs that request was succesful and is shutting down
 func (c *WorkerConf) Shutdown() {
 	log.Error("Shutting worker down cleanly")
 	os.Exit(1)
@@ -165,20 +156,16 @@ func (c *WorkerConf) Shutdown() {
 // FIXME: Once working on a task, send logs of errors into its logfiles
 func (c *WorkerConf) ProcessTasks() {
 	for !c.Stopping {
-		// Wait at the start of the loop so early exits wait
-		// FIXME: Make configurable
 		time.Sleep(time.Duration(c.CheckInterval*1000) * time.Millisecond)
 
 		t, err := c.FindTask()
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
-			}).Error("could not find task")
-			log.Debugf("trying again in %d seconds", c.CheckInterval)
+			}).Errorf("could not find task; trying again in %d seconds", c.CheckInterval)
 			continue
 		} else if t.Id == "" {
-			log.Debug("found no matching tasks")
-			log.Debugf("trying again in %d seconds", c.CheckInterval)
+			log.Debugf("found no matching tasks; trying again in %d seconds", c.CheckInterval)
 			continue
 		}
 
@@ -188,17 +175,17 @@ func (c *WorkerConf) ProcessTasks() {
 			"tags":   t.Tags,
 		}).Info("Found task to process")
 
-		// Main work
 		err = c.ProcessOne(&t)
 		if err == nil {
 			log.WithFields(log.Fields{
 				"taskId": t.Id,
 				"typeId": t.TypeId,
 				"tags":   t.Tags,
-			}).Info("SUCCESS: Processed task")
-			log.WithFields(log.Fields{}).Debug("proceeding with next task in 5 seconds")
+			}).Infof("processed task successfully; checking for next task in %d seconds", c.CheckInterval)
 		} else {
-			log.WithFields(log.Fields{}).Debug("trying again in 5 seconds")
+			log.WithFields(log.Fields{
+				"err": err.Error(),
+			}).Errorf("error processing task; trying again in %d seconds", c.CheckInterval)
 		}
 	}
 	c.Shutdown()

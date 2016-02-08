@@ -19,6 +19,7 @@ func getWorker(c *gin.Context) {
 }
 
 // Register with a sequential number, filling in gaps (lowest # available)
+// Continue to write to old log via append
 func registerWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 	c.String(http.StatusOK, `{"status": "ok"}`)
