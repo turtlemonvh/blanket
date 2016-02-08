@@ -119,6 +119,12 @@ func Serve() {
 	r.GET("/task_type/", getTaskTypes)
 	r.GET("/task_type/:name", getTaskType)
 
+	r.GET("/worker/", getWorkers)
+	r.GET("/worker/:id", getWorker)
+	r.POST("/worker/", registerWorker)
+	r.PUT("/worker/:id/shutdown", shutDownWorker)
+	r.DELETE("/worker/:id", deregisterWorker)
+
 	// Start server
 	log.WithFields(log.Fields{
 		"port": viper.GetInt("port"),

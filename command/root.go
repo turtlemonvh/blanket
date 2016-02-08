@@ -9,10 +9,11 @@ Directs to relevant command line option
 
 import (
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/server"
-	"log"
+	"os"
 )
 
 var blanketCmdV *cobra.Command
@@ -24,6 +25,10 @@ func init() {
 	RootCmd.PersistentFlags().StringVarP(&CfgFile, "config", "c", "", "config file (default is blanket.yaml|json|toml)")
 	RootCmd.AddCommand(versionCmd)
 	blanketCmdV = RootCmd
+
+	// FIXME: Add support for multiple outputs and handling log levels via command line or env variable
+	// https://golang.org/src/io/multi.go?s=1355:1397#L47
+	log.SetOutput(os.Stdout)
 }
 
 func InitializeConfig() {
@@ -33,6 +38,7 @@ func InitializeConfig() {
 	viper.SetDefault("database", "blanket.db")
 	viper.SetDefault("tasks.types_path", "types")
 	viper.SetDefault("tasks.results_path", "results")
+	viper.SetDefault("workers.logfile_name_template", "worker.{{.Pid}}.log")
 
 	viper.SetConfigName("blanket")
 	viper.AddConfigPath("/etc/blanket/")
