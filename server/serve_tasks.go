@@ -35,15 +35,25 @@ func getTasks(c *gin.Context) {
 		maxTaskTags = strings.Split(maxTags, ",")
 	}
 
+	limit := cast.ToInt(c.Query("limit"))
+	offset := cast.ToInt(c.Query("offset"))
 	taskType := c.Query("type")
 	taskState := c.Query("state")
 	reverseSort := c.Query("reverseSort")
+
+	if limit < 1 {
+		limit = 10
+	}
+	if offset < 0 {
+		offset = 0
+	}
 
 	log.WithFields(log.Fields{
 		"requiredTaskTags": requiredTaskTags,
 		"maxTaskTags":      maxTaskTags,
 		"taskType":         taskType,
 		"taskState":        taskState,
+		"limit":            limit,
 	}).Info("Request params")
 
 	result := "["
@@ -65,7 +75,12 @@ func getTasks(c *gin.Context) {
 			startIterFunction = c.Last
 		}
 
+		nfound := 0
 		for k, v := startIterFunction(); k != nil; k, v = iterFunction() {
+			// e.g. 50-40 == 10
+			if nfound-offset == limit {
+				break
+			}
 
 			// Create an object from bytes
 			t := tasks.Task{}
@@ -119,11 +134,16 @@ func getTasks(c *gin.Context) {
 				}
 			}
 
-			if !isFirst {
-				result += ","
+			// Keep track of found items, and build string that will be returned
+			// FIXME: Return this in chunks
+			nfound += 1
+			if nfound > offset {
+				if !isFirst {
+					result += ","
+				}
+				result += string(v)
+				isFirst = false
 			}
-			result += string(v)
-			isFirst = false
 		}
 
 		return nil

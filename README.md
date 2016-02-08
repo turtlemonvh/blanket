@@ -78,7 +78,6 @@ blanket server
 
 - launches server
 - option to run in unix socket instead of 0.0.0.0 or 127.0.0.1 for security
-- option to run with tls
 
 blanket worker -t <tags> -n <number>
 
@@ -184,8 +183,21 @@ Short List
 
 - HTTP interface
     - remove a task that has run
+    - re-run a task that has run, or is stalled
     - add a new task of a given type, with specific overrides
     - launch and manage workers
+    - fix memory leak (was >500 mb when running for a while)
+- If is task has passed its run time, unlock it and return to queue
+- Daemonize worker and list workers
+- Clean up ls commands
+- log to multiple locations
+    - https://github.com/Sirupsen/logrus
+    - https://godoc.org/github.com/Sirupsen/logrus#Logger
+    - https://golang.org/pkg/io/#MultiWriter
+- Clean shutdown of web server
+    - https://github.com/braintree/manners
+    - https://github.com/mailgun/manners
+    - https://github.com/tylerb/graceful
 - Add "required_environment" section
     - these are things that every task must provide, or it will be rejected
     - this will be used to create the http interface (auto-generation of forms)
@@ -460,6 +472,9 @@ workers
 
 ## Extra
 
+- option to run with tls
+- option to do a clean reload
+    - https://github.com/fvbock/endless
 - better browsing interface for files
     - instead of just a list, include modified time, size, etc.
 - Stats
@@ -482,6 +497,11 @@ workers
 - put results into directories with task name as top directory
     - allow the directory structure underneath to be configurable
         - e.g. dates, just ids, etc
+- user accounts, http auth login, account types
+    - https://github.com/xyproto/permissionbolt
+        - uses boltdb for simple security
+    - https://github.com/tonnerre/go-ldap
+        - LDAP
 - cross compiling
     - should be able to combile for centos, ubuntu, windows, mac in 32bit/64bit versions all at once
     - http://dave.cheney.net/2015/08/22/cross-compilation-with-go-1-5

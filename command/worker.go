@@ -54,18 +54,26 @@ type WorkerConf struct {
 
 func (c *WorkerConf) RunWorker() {
 	c.ParsedTags = strings.Split(c.Tags, ",")
-	log.Info("Running with tags: ", c.ParsedTags)
-	log.Info("Daemon: ", c.Daemon)
+
+	log.WithFields(log.Fields{
+		"tags":   c.ParsedTags,
+		"daemon": c.Daemon,
+	}).Info("Starting executable")
 
 	// If it's a daemon, call it again
+	// https://groups.google.com/forum/#!topic/golang-nuts/shST-SDqIp4
 	if c.Daemon {
 		path, err := osext.Executable()
 		if err != nil {
-			log.Error("Problem getting executable path")
+			log.WithFields(log.Fields{
+				"err": err.Error(),
+			}).Error("Problem getting executable path")
 			return
 		}
 
-		log.Info("Path to current executable is: ", path)
+		log.WithFields(log.Fields{
+			"path": path,
+		}).Info("Path to current executable is")
 
 		// Launch worker
 		// - send in options to tell it to log to file with pid
@@ -82,16 +90,19 @@ func (c *WorkerConf) RunWorker() {
 func (c *WorkerConf) LaunchWorker() {
 	for {
 		// Wait at the start of the loop so early exits wait
+		// FIXME: Make configurable
 		time.Sleep(5000 * time.Millisecond)
 
 		t, err := c.FindTask()
 		if err != nil {
-			fmt.Printf("ERROR :: could not find task :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
+			log.WithFields(log.Fields{
+				"err": err.Error(),
+			}).Error("could not find task")
+			log.WithFields(log.Fields{}).Warn("trying again in 5 seconds")
 			continue
 		} else if t.Id == "" {
-			fmt.Printf("WARNING :: found no matching tasks \n")
-			fmt.Println("INFO :: Trying again in 5 seconds")
+			log.WithFields(log.Fields{}).Warn("found no matching tasks")
+			log.WithFields(log.Fields{}).Warn("trying again in 5 seconds")
 			continue
 		}
 
@@ -99,111 +110,20 @@ func (c *WorkerConf) LaunchWorker() {
 			"taskId": t.Id,
 			"typeId": t.TypeId,
 			"tags":   t.Tags,
-		}).Info("SUCCESS: Found task")
+		}).Info("Found task to process")
 
-		// Fetch information about the task type
-		ttFilepath := path.Join(viper.GetString("tasks.types_path"), fmt.Sprintf("%s.toml", t.TypeId))
-		tt, err := tasks.ReadTaskTypeFromFilepath(ttFilepath)
-		if err != nil {
-			fmt.Printf("ERROR :: failed to get task type information :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
+		// Main work
+		err = c.ProcessOne(&t)
+		if err == nil {
+			log.WithFields(log.Fields{
+				"taskId": t.Id,
+				"typeId": t.TypeId,
+				"tags":   t.Tags,
+			}).Info("SUCCESS: Processed task")
+			log.WithFields(log.Fields{}).Warn("proceeding with next task in 5 seconds")
+		} else {
+			log.WithFields(log.Fields{}).Warn("trying again in 5 seconds")
 		}
-
-		// Try to lock the task for editing
-		err = c.TransitionTaskState(t, "START", map[string]string{"typeDigest": tt.ConfigVersionHash})
-		if err != nil {
-			fmt.Printf("ERROR :: failed to transition task to state START :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-
-		// Evaluate template
-		tmpl, err := template.New("tasks").Parse(tt.Config.GetString("command"))
-		if err != nil {
-			fmt.Printf("ERROR :: problem parsing 'command' parameter as go template :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-		var cmdString bytes.Buffer
-		err = tmpl.Execute(&cmdString, t.ExecEnv)
-		if err != nil {
-			fmt.Printf("ERROR :: error evaluating template for command :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-		// FIXME: Don't just use bash; use python, zsh, etc configured via viper
-		cmd := exec.Command("bash", "-c", cmdString.String())
-
-		// Set up output files and configure the task to run in the correct location
-		err = os.MkdirAll(t.ResultDir, os.ModePerm)
-		if err != nil {
-			fmt.Printf("ERROR :: failed to create scratch directory for task :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-		stdoutPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stdout.log"))
-		stderrPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stderr.log"))
-		stdoutFile, err := os.Create(stdoutPath)
-		if err != nil {
-			fmt.Printf("ERROR :: failed to create stdout file for task :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-		defer stdoutFile.Close()
-		stderrFile, err := os.Create(stderrPath)
-		if err != nil {
-			fmt.Printf("ERROR :: failed to create stderr file for task :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-		defer stderrFile.Close()
-		cmd.Stdout = stdoutFile
-		cmd.Stderr = stderrFile
-		cmd.Dir = t.ResultDir
-
-		filesToInclude := toSliceStringSlice(tt.Config.Get("files_to_include"))
-		err = CopyFiles(filesToInclude, t.ResultDir)
-		if err != nil {
-			fmt.Printf("ERROR :: failed copy files for task :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-
-		// Modify execution environment with env variables
-		// e.g. http://craigwickesser.com/2015/02/golang-cmd-with-custom-environment/
-		env := os.Environ()
-		for k, v := range t.ExecEnv {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
-		}
-		cmd.Env = env
-
-		err = c.TransitionTaskState(t, "RUNNING", make(map[string]string))
-		if err != nil {
-			fmt.Printf("ERROR :: failed to transition task to state RUNNING :: %s \n", err.Error())
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-
-		err = cmd.Start()
-		if err != nil {
-			fmt.Printf("ERROR :: problems starting task execution :: %s \n", err.Error())
-			c.TransitionTaskState(t, "ERROR", make(map[string]string))
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-
-		err = cmd.Wait()
-		if err != nil {
-			fmt.Printf("ERROR :: problems finishing task execution :: %s \n", err.Error())
-			c.TransitionTaskState(t, "ERROR", make(map[string]string))
-			fmt.Println("INFO :: Trying again in 5 seconds")
-			continue
-		}
-
-		err = c.TransitionTaskState(t, "SUCCESS", make(map[string]string))
-		fmt.Println("SUCCESS :: Ran task successfully")
-		fmt.Println("INFO :: Proceeding with next task in 5 seconds")
 	}
 }
 
@@ -214,6 +134,150 @@ func toSliceStringSlice(i interface{}) [][]string {
 		r = append(r, cast.ToStringSlice(v))
 	}
 	return r
+}
+
+func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
+	// Fetch information about the task type
+	ttFilepath := path.Join(viper.GetString("tasks.types_path"), fmt.Sprintf("%s.toml", t.TypeId))
+	tt, err := tasks.ReadTaskTypeFromFilepath(ttFilepath)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("failed to get task type information")
+		return err
+	}
+
+	// Try to lock the task for editing
+	err = c.TransitionTaskState(t, "START", map[string]string{"typeDigest": tt.ConfigVersionHash})
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("failed to transition task to state START")
+		return err
+	}
+
+	// Evaluate template
+	tmpl, err := template.New("tasks").Parse(tt.Config.GetString("command"))
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("problem parsing 'command' parameter as go template")
+		return err
+	}
+	var cmdString bytes.Buffer
+	err = tmpl.Execute(&cmdString, t.ExecEnv)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("error evaluating template for command")
+		return err
+	}
+
+	// FIXME: Don't just use bash; use python, zsh, etc configured via viper
+	cmd := exec.Command("bash", "-c", cmdString.String())
+	err = SetupExecutionDirectory(t, &tt, cmd)
+	if err != nil {
+		return err
+	}
+
+	// Modify execution environment with env variables
+	// e.g. http://craigwickesser.com/2015/02/golang-cmd-with-custom-environment/
+	env := os.Environ()
+	for k, v := range t.ExecEnv {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	cmd.Env = env
+
+	err = c.TransitionTaskState(t, "RUNNING", make(map[string]string))
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("failed to transition task to state RUNNING")
+		return err
+	}
+
+	err = cmd.Start()
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("problems starting task execution")
+		terr := c.TransitionTaskState(t, "ERROR", make(map[string]string))
+		if terr != nil {
+			log.WithFields(log.Fields{
+				"err": terr.Error(),
+			}).Error("after failing to start task execution, failed to transition task to state ERROR")
+			return terr
+		}
+		return err
+	}
+
+	err = cmd.Wait()
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("problems finishing task execution")
+		terr := c.TransitionTaskState(t, "ERROR", make(map[string]string))
+		if terr != nil {
+			log.WithFields(log.Fields{
+				"err": terr.Error(),
+			}).Error("after failing to finish task execution, failed to transition task to state ERROR")
+			return terr
+		}
+		return err
+	}
+
+	err = c.TransitionTaskState(t, "SUCCESS", make(map[string]string))
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("failed to transition task to state SUCCESS")
+	}
+
+	return err
+}
+
+func SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) error {
+	// Set up output files and configure the task to run in the correct location
+	err := os.MkdirAll(t.ResultDir, os.ModePerm)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("failed to create scratch directory for task")
+		return err
+	}
+	stdoutPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stdout.log"))
+	stderrPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stderr.log"))
+	stdoutFile, err := os.Create(stdoutPath)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("failed to create stdout file for task")
+		return err
+	}
+	defer stdoutFile.Close()
+	stderrFile, err := os.Create(stderrPath)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("failed to create stderr file for task")
+		return err
+	}
+	defer stderrFile.Close()
+
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = stderrFile
+	cmd.Dir = t.ResultDir
+
+	filesToInclude := toSliceStringSlice(tt.Config.Get("files_to_include"))
+	err = CopyFiles(filesToInclude, t.ResultDir)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Error("failed copy files for task")
+		return err
+	}
+
+	return err
 }
 
 func CopyFiles(files [][]string, resultDir string) error {
@@ -323,7 +387,7 @@ func CopyFiles(files [][]string, resultDir string) error {
 	return nil
 }
 
-func (c *WorkerConf) TransitionTaskState(t tasks.Task, state string, extraVars map[string]string) error {
+func (c *WorkerConf) TransitionTaskState(t *tasks.Task, state string, extraVars map[string]string) error {
 	urlParams := url.Values{}
 	urlParams.Set("state", state) // START, RUNNING, ERROR/SUCCESS
 	for k, v := range extraVars {
@@ -350,6 +414,7 @@ func (c *WorkerConf) FindTask() (tasks.Task, error) {
 
 	v.Set("state", "WAIT")
 	v.Set("maxTags", c.Tags)
+	v.Set("limit", "1")
 	v.Set("reverseSort", "true") // oldest to newest
 
 	paramsString := v.Encode()
@@ -367,5 +432,8 @@ func (c *WorkerConf) FindTask() (tasks.Task, error) {
 
 	// FIXME: Handle empty results
 	// Always sorted oldest to newest
-	return respTasks[0], nil
+	if len(respTasks) > 0 {
+		return respTasks[0], nil
+	}
+	return tasks.Task{}, nil
 }

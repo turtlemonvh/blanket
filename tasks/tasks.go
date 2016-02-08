@@ -61,7 +61,7 @@ func ReadTaskTypeFromFilepath(filepath string) (TaskType, error) {
 		return TaskType{}, fmt.Errorf("Path points to a directory")
 	}
 	if !validConfigfileName.MatchString(filepath) {
-		return TaskType{}, fmt.Errorf("Not a valid TOML file")
+		return TaskType{}, fmt.Errorf("Not a valid TOML file: %s", filepath)
 	}
 
 	configFile, err := os.Open(filepath)

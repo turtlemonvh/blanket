@@ -79,6 +79,8 @@ func setUpDatabase() error {
 }
 
 func Serve() {
+	// FIXME: Handle Ctrl-C
+
 	// Connect to database
 	// FIXME: May want to make the database a module level constant to make it more accessible
 	if err := setUpDatabase(); err != nil {

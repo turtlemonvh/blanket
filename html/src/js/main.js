@@ -9,12 +9,14 @@ angular.module('blanketApp')
         this.getRefreshValue = function() { return shouldRefresh; }
         this.setAutoRefresh = function(v) {
             shouldRefresh = v;
+            localStorage.setItem("blanket.shouldRefresh", v);
             var status = shouldRefresh ? "on" : "off";
             $log.log('Turning ' + status + ' autorefresh')
         }
 
+        // FIXME: handle pagination and offsets
         var refreshData = function() {
-            $http.get(baseUrl + '/task/').then(function(d) {
+            $http.get(baseUrl + '/task/?limit=10').then(function(d) {
                 self.tasks = d.data;
                 _.each(self.tasks, function(v) {
                     var labelClasses = {
@@ -36,7 +38,7 @@ angular.module('blanketApp')
                 $log.log("Found " + self.tasks.length + " tasks")
             });
 
-            $http.get(baseUrl + '/task_type/').then(function(d) {
+            $http.get(baseUrl + '/task_type/?limit=10').then(function(d) {
                 self.taskTypes = d.data;
                 _.each(self.taskTypes, function(v) {
                     // Date fixing
