@@ -1,0 +1,25 @@
+<div class="col-md-10 col-centered" ng-controller="TaskTypeListCtl">
+    <h2>Task Types</h2>
+    <table class="table table-condensed">
+        <thead> 
+            <tr>
+                <th>#</th>
+                <th>Name</th>
+                <th>Tags</th>
+                <th>Date Loaded</th>
+                <th>Config File</th>
+                <th>Current Version</th>
+            </tr> 
+        </thead>
+        <tbody ng-repeat="taskType in data.taskTypes">
+            <tr>
+                <th scope="row">{{ ($index+1) }}</th>
+                <td><a ng-href="{{baseUrl}}/task_type/{{taskType.name}}">{{ taskType.name }}</a></td>
+                <td>{{ taskType.tags.join(', ') }}</td>
+                <td>{{ taskType._loaded_ts | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
+                <td> {{ taskType._config_file }} </td>
+                <td> {{ taskType._version_hash }} </td>
+            </tr>
+        </tbody>
+    </table>
+</div> <!-- End TaskTypeListCtl -->

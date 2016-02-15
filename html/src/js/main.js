@@ -1,4 +1,39 @@
 angular.module('blanketApp')
+    .service('WorkerStore', ['$http', 'baseUrl', '$log', '$timeout', function($http, baseUrl, $log, $timeout) {
+        var self = this;
+        self.workers = [];
+
+        self.refreshList = function() {
+            $http.get(baseUrl + '/worker/').then(function(d) {
+                self.workers = d.data;
+                _.each(self.workers, function(v) {
+                    // Date fixing
+                    var dateFields = ['startedTs'];
+                    _.each(dateFields, function(df) {
+                        v[df] = v[df] * 1000;
+                    });
+                })
+                $log.log("Found " + self.workers.length + " workers")
+            });
+        }
+
+        self.stopWorker = function(worker) {
+            $log.log("Stopping worker", worker);
+            $http({
+                method: 'PUT',
+                url: baseUrl + '/worker/' + worker.pid + '/shutdown'
+            }).then(function(d) {
+                // Give it time to shut down before refreshing the list
+                $log.log("Shut down worker", worker);
+                $timeout(self.refreshList, worker.checkInterval*1000 + 500);
+            }, function(d) {
+                $log.error("Problem shutting down worker", worker);
+            });
+        }
+
+        self.refreshList();
+
+    }])
     .service('TasksStore', ['$http', 'baseUrl', '$log', '$interval', 'LocalStore', function($http, baseUrl, $log, $interval, localStorage) {
         var self = this;
 
@@ -72,7 +107,15 @@ angular.module('blanketApp')
             $scope.lastRefreshed = Date.now();
         }, 200);
     }])
+    .controller('WorkerListCtrl', ['$log', '$scope', 'WorkerStore', 'baseUrl', function($log, $scope, WorkerStore, baseUrl) {
+        $scope.baseUrl = baseUrl;
+        $scope.data = WorkerStore;
+    }])
     .controller('TaskListCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', function($log, $http, $interval, $scope, _, TasksStore, baseUrl) {
+        $scope.baseUrl = baseUrl;
+        $scope.data = TasksStore;
+    }])
+    .controller('TaskTypeListCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', function($log, $http, $interval, $scope, _, TasksStore, baseUrl) {
         $scope.baseUrl = baseUrl;
         $scope.data = TasksStore;
     }]);

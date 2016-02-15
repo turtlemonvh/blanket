@@ -5,3 +5,13 @@
     float: none;
     margin: 0 auto;
 }
+
+.navbar a {
+    cursor: pointer;
+}
+
+.row-centered.table tbody tr {
+    th, td {
+        vertical-align: middle;
+    }
+}

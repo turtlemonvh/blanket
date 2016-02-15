@@ -10,6 +10,7 @@ var size = require("gulp-size");
 var uglify = require("gulp-uglify");
 var jshint = require("gulp-jshint");
 var debug = require('gulp-debug');
+var templateCache = require('gulp-angular-templatecache');
 var browserSync = require('browser-sync').create();
 
 var reload = browserSync.reload;
@@ -27,10 +28,11 @@ const APP_DIST_DIR = "./public/js/app/";
 const APP_DEV_DIR = "./dev/js/app/";
 
 const EXTERNAL_LIBS = {
-    jquery: "./node_modules/jquery/dist/jquery.min.js",
-    angular: "./node_modules/angular/angular.min.js",
-    bootstrap: "./node_modules/bootstrap/dist/js/bootstrap.min.js",
-    lodash: "./bower_components/lodash/dist/lodash.min.js"
+    jquery: "./node_modules/jquery/dist/jquery.js",
+    angular: "./node_modules/angular/angular.js",
+    bootstrap: "./node_modules/bootstrap/dist/js/bootstrap.js",
+    lodash: "./bower_components/lodash/dist/lodash.js",
+    uiRouter: "./bower_components/angular-ui-router/release/angular-ui-router.js"
 };
 
 const SIZE_OPTS = {
@@ -72,6 +74,18 @@ function buildToSingleFile(options) {
 }
 
 /**
+ * Compress all angular templates into a single 'templates.js' file in the src directory
+ */
+var buildTemplateCache = function(){
+    return gulp.src('src/templates/**/*.html')
+        .pipe(templateCache('templates.js', {
+            module: 'blanketApp'
+        }))
+        .pipe(gulp.dest('src/js'));
+}
+gulp.task("build-template-cache", buildTemplateCache);
+
+/**
  * Linter for the most basic of quality assurance.
  */
 gulp.task("lint", function() {
@@ -100,8 +114,8 @@ var buildApp = function(overrides){
         buildToSingleFile(options);
     }
 }
-gulp.task("build-app", buildApp())
-gulp.task("build-app-dev", buildApp({ concatOnly: true, tgt_dir_base: APP_DEV_DIR }))
+gulp.task("build-app", ["build-template-cache"], buildApp());
+gulp.task("build-app-dev", ["build-template-cache"], buildApp({ concatOnly: true, tgt_dir_base: APP_DEV_DIR }));
 
 /**
  * Externalize all site-wide libraries into one file.  Since these libraries are all sizable, it would be better for the

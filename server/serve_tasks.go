@@ -200,7 +200,10 @@ func saveTaskToBucket(t tasks.Task, b *bolt.Bucket) (err error) {
 	if err != nil {
 		return err
 	}
-	b.Put([]byte(t.Id), []byte(js))
+	err = b.Put([]byte(t.Id), []byte(js))
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

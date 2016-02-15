@@ -22,6 +22,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
 	"github.com/spf13/viper"
+	"gopkg.in/tylerb/graceful.v1"
+	"net/http"
 	"time"
 )
 
@@ -72,6 +74,15 @@ func setUpDatabase() error {
 			}
 		}
 
+		// Create workers bucket
+		b = tx.Bucket([]byte("workers"))
+		if b == nil {
+			b, err = tx.CreateBucket([]byte("workers"))
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+
 		return nil
 	})
 
@@ -91,12 +102,27 @@ func Serve() {
 
 	// https://godoc.org/github.com/rs/cors
 	c := cors.New(cors.Options{
-		AllowedOrigins: []string{"*"},
+		AllowedOrigins:     []string{"*"},
+		AllowedMethods:     []string{"GET", "POST", "PUT", "DELETE"},
+		OptionsPassthrough: false,
 	})
+
+	// If we don't return early from handler function we get a 404 for the options request
+	makeCorsHandler := func(c *cors.Cors) func(http.ResponseWriter, *http.Request) {
+		return func(w http.ResponseWriter, r *http.Request) {
+			c.HandlerFunc(w, r)
+			// Allow it to return to avoid a 404
+			if r.Method == "OPTIONS" && w.Header().Get("Access-Control-Allow-Origin") == r.Header.Get("Origin") {
+				w.WriteHeader(http.StatusOK)
+			}
+		}
+	}
 
 	// Basic info routes
 	r := gin.Default()
-	r.Use(gin.WrapF(c.HandlerFunc))
+
+	//r.Use(gin.WrapF(c.HandlerFunc))
+	r.Use(gin.WrapF(makeCorsHandler(c)))
 
 	// Make the result dir browseable
 	r.StaticFS("/results", gin.Dir(viper.GetString("tasks.results_path"), true))
@@ -121,14 +147,30 @@ func Serve() {
 
 	r.GET("/worker/", getWorkers)
 	r.GET("/worker/:id", getWorker)
-	r.POST("/worker/", registerWorker)
-	r.PUT("/worker/:id/shutdown", shutDownWorker)
-	r.DELETE("/worker/:id", deregisterWorker)
+	r.PUT("/worker/:id", updateWorker)            // initial post and status update
+	r.PUT("/worker/:id/shutdown", shutDownWorker) // not called by worker itself
+	r.DELETE("/worker/:id", deleteWorker)         // remove from database
 
 	// Start server
 	log.WithFields(log.Fields{
 		"port": viper.GetInt("port"),
 	}).Warn("Main server started")
 
-	r.Run(fmt.Sprintf(":%d", viper.GetInt("port")))
+	// Graceful shutdown, leaving up to 2 seconds for requests to complete
+	srv := &graceful.Server{
+		Timeout: 2 * time.Second,
+		Server: &http.Server{
+			Addr:    fmt.Sprintf(":%d", viper.GetInt("port")),
+			Handler: r,
+		},
+		BeforeShutdown: func() {
+			// Called first
+			log.Warn("Called BeforeShutdown")
+		},
+		ShutdownInitiated: func() {
+			// Called second
+			log.Warn("Called ShutdownInitiated")
+		},
+	}
+	srv.ListenAndServe()
 }

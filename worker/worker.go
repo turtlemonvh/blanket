@@ -25,16 +25,29 @@ import (
 )
 
 type WorkerConf struct {
-	Tags          string
-	ParsedTags    []string
-	Logfile       string
-	Daemon        bool
-	Pid           int
-	Stopping      bool
-	CheckInterval int
+	Tags          string   `json:"rawTags"`
+	ParsedTags    []string `json:"tags"`
+	Logfile       string   `json:"logfile"`
+	Daemon        bool     `json:"daemon"`
+	Pid           int      `json:"pid"`
+	Stopping      bool     `json:"stopping"`
+	CheckInterval int      `json:"checkInterval"`
+	StartedTs     int64    `json:"startedTs"`
 }
 
+// Sends sigterm
+func (c *WorkerConf) Stop() error {
+	p, err := os.FindProcess(c.Pid)
+	if err != nil {
+		return err
+	}
+	return p.Signal(syscall.SIGTERM)
+}
+
+// FIXME: Ensure this works ok on windows: https://golang.org/pkg/os/#Signal
 // FIXME: Handle Ctrl-C; should try to deregister
+// FIXME: Handle SIGHUP by updating information on dashboard (report, refresh config)
+// https://en.wikipedia.org/wiki/Unix_signal#POSIX_signals
 func (c *WorkerConf) Run() {
 	var err error
 
@@ -46,12 +59,26 @@ func (c *WorkerConf) Run() {
 		<-shutdownChan
 		// Send a request to /worker/<id>/shutdown?nosignal to make sure db is updated with state
 		// If the shutdown request initiated from the outside this won't update anything
+		log.Warn("Received shutdown signal; stopping after current task completes")
+
 		c.Stopping = true
+		err = c.UpdateInDatabase()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"err": err.Error(),
+			}).Fatal("problem updating worker to the 'stopping' state")
+			log.Info("Continuing shutdown anyway")
+		} else {
+			log.Info("Successfully registered worker as stopping")
+		}
 	}()
+
+	c.StartedTs = time.Now().Unix()
+
+	// FIXME: Modify global log object
 
 	// TODO:
 	// Make sure logging works fine with sighup for logrotate
-
 	if c.Daemon {
 		path, err := osext.Executable()
 		if err != nil {
@@ -143,6 +170,37 @@ func (c *WorkerConf) SetLogfileName() error {
 // Also register with time running
 func (c *WorkerConf) MustRegister() {
 	c.Stopping = false
+
+	err := c.UpdateInDatabase()
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Fatal("problem updating worker status in database")
+	}
+}
+
+func (c *WorkerConf) UpdateInDatabase() error {
+	var err error
+	var bts []byte
+
+	bts, err = json.Marshal(c)
+	if err != nil {
+		return err
+	}
+
+	reqURL := fmt.Sprintf("http://localhost:%d/worker/%d", viper.GetInt("port"), c.Pid)
+	req, err := http.NewRequest("PUT", reqURL, bytes.NewReader(bts))
+	if err != nil {
+		return err
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	return err
 }
 
 // Deregisters itself
@@ -150,6 +208,26 @@ func (c *WorkerConf) MustRegister() {
 // Logs that request was succesful and is shutting down
 func (c *WorkerConf) Shutdown() {
 	log.Error("Shutting worker down cleanly")
+
+	reqURL := fmt.Sprintf("http://localhost:%d/worker/%d", viper.GetInt("port"), c.Pid)
+	req, err := http.NewRequest("DELETE", reqURL, nil)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Fatal("problem creating http request to clear worker from database")
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err": err.Error(),
+		}).Fatal("problem clearing worker from database")
+		log.Info("Continuing shutdown anyway")
+	} else {
+		log.Info("Successfully cleared worker from database")
+	}
+	defer res.Body.Close()
+
 	os.Exit(1)
 }
 
@@ -188,6 +266,8 @@ func (c *WorkerConf) ProcessTasks() {
 			}).Errorf("error processing task; trying again in %d seconds", c.CheckInterval)
 		}
 	}
+
+	log.Info("Finished final task, shutting down")
 	c.Shutdown()
 }
 

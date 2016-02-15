@@ -20,6 +20,7 @@
     "tests"
   ],
   "devDependencies": {
-    "lodash": "^4.1.0"
+    "lodash": "^4.1.0",
+    "angular-ui-router": "^0.2.18"
   }
 }

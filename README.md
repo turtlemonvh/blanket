@@ -187,18 +187,16 @@ Short List
     - add a new task of a given type, with specific overrides
     - launch and manage workers
     - fix memory leak (was >500 mb when running for a while)
-- If is task has passed its run time, unlock it and return to queue
-- Daemonize worker and list workers
-- Clean up ls commands
 - log to multiple locations
     - https://github.com/Sirupsen/logrus
     - https://godoc.org/github.com/Sirupsen/logrus#Logger
     - https://golang.org/pkg/io/#MultiWriter
-- Clean shutdown of web server
-    - https://github.com/braintree/manners
-    - https://github.com/mailgun/manners
-    - https://github.com/tylerb/graceful
-- Add "required_environment" section
+    - just create your own logging package that takes a config and writes to multiple locations at different verbosities
+        - configure as package global objects for easy import
+        - https://github.com/Sirupsen/logrus#rotation
+        - https://github.com/natefinch/lumberjack
+            - package for rotation
+- configurable logging verbosity
     - these are things that every task must provide, or it will be rejected
     - this will be used to create the http interface (auto-generation of forms)
 - Allow configurable executors
@@ -207,27 +205,45 @@ Short List
     - test on windows
     - e.g. http://ss64.com/nt/syntax-run.html
     - http://stackoverflow.com/questions/4571244/creating-a-bat-file-for-python-script
-- allow filling in files as templates
-    - have glob patterns to match templates (relative to where they will be copied into)
+- Clean up ls/ps commands
+    - column alignment
 - workers
-    - launch new workers over http / worker -d command
-    - view worker status via ps
+    - fix logging
+    - view worker status via ps / ls
         - keep list of workers in database so have reference to pids
     - send worker logs to a file in addition to stdout
         - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
-    - similar: https://github.com/gds-operations/unicornherder
-        - helps keep track of daemons that start up
-        - even has a nice diagram
+- allow filling in files as templates
+    - have glob patterns to match templates (relative to where they will be copied into)
 - Option to leave task creation request open until task completes
     - also adds it with super high priority so it is picked up fast
     - like this: https://github.com/celery/celery/issues/2275#issuecomment-56828471
 - Make use of timeout to stop long running tasks
+    - also restart and cleanup
+    - If is task has passed its run time, unlock it and return to queue
 - controlling running tasks
     - stop / restart
     - configurable # restarts
         - # times allowed, whether they go in new directories
-- clean up logging to be more consistent
-    - make it configurable in terms of verbosity
+- Add "required_environment" section
+- allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
+- return # tasks found in response to query
+    - if >500, just say >500
+- pagination on HTML interface
+    - http://getbootstrap.com/components/#pagination
+- package HTML into a single binary
+    - https://github.com/jteeuwen/go-bindata
+    - https://github.com/elazarl/go-bindata-assetfs
+    - need to add instructions
+        - build js (gulp build)
+        - run bindata-assets command
+        - then build
+
+- other UI
+    - stop auto-refreshing when not on pages that don't require that
+    - add primitive main dashboard with recent activity
+
+
 - stream logfiles (long polling / websockets)
     - check how supervisord web does it
         - https://github.com/Supervisor/supervisor/blob/master/supervisor/ui/tail.html
@@ -248,8 +264,8 @@ Short List
     - https://gohugo.io/overview/introduction/
     - render into a single page
         - https://gohugo.io/extras/toc/
-- allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
 - put api calls into sub directories
+
 
 Look over
 
@@ -473,8 +489,12 @@ workers
 ## Extra
 
 - option to run with tls
+- monitoring
+    - total CPU and memory usage of everything
+    - total disk space of all results
 - option to do a clean reload
     - https://github.com/fvbock/endless
+    - https://github.com/rcrowley/goagain
 - better browsing interface for files
     - instead of just a list, include modified time, size, etc.
 - Stats
@@ -524,6 +544,12 @@ workers
     - list interval in config
     - when starting up, check if newest backup is too old, if so snapshot immediately
     - schedule next snapshot immediately after running first one
+- plugin system
+    - https://github.com/natefinch/pie
+    - this system allows plugins in any languages with only serialization overhead
+    - maybe using zippy (or other fast compression lib) to compress would be good?
+        - can be optional
+    - also messagepack to make going between languages easier
 - pluggable queue / datastore
     - use amazon RDS (as queue and datastore) to start to make distributed large deployments easy
         - RDS would maintain information about instances connected, workers available

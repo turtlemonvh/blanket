@@ -1,0 +1,29 @@
+<div class="col-md-10 col-centered" ng-controller="WorkerListCtrl">
+    <h2>Workers</h2>
+    <table class="table table-condensed row-centered">
+        <thead> 
+            <tr>
+                <th>#</th>
+                <th>Pid</th>
+                <th>Tags</th>
+                <th>Date Started</th>
+                <th>Logfile</th>
+                <th>Poll Interval</th>
+                <th>Stop</th>
+            </tr> 
+        </thead>
+        <tbody ng-repeat="worker in data.workers">
+            <tr>
+                <th scope="row">{{ ($index+1) }}</th>
+                <td><a ng-href="{{baseUrl}}/worker/{{worker.pid}}">{{ worker.pid }}</a></td>
+                <td>{{ worker.rawTags }}</td>
+                <td>{{ worker.startedTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
+                <td>{{ worker.logfile }}</td>
+                <td>{{ worker.checkInterval }} seconds</td>
+                <td>
+                    <button ng-click="data.stopWorker(worker)" type="button" class="btn btn-danger btn-sm">Stop</button>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</div> <!-- End TaskTypeListCtl -->
