@@ -209,3 +209,21 @@ func deleteWorker(c *gin.Context) {
 
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId))
 }
+
+func launchWorker(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+
+	w := worker.WorkerConf{}
+	w.Tags = "cat,frog"
+	w.Daemon = true
+	w.CheckInterval = 2
+
+	err := w.Run()
+	if err != nil {
+		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		c.String(http.StatusInternalServerError, errMsg)
+		return
+	}
+
+	c.String(http.StatusOK, "{}")
+}

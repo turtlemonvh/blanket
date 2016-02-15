@@ -31,26 +31,19 @@ angular.module('blanketApp')
             });
         }
 
-        self.refreshList();
+        self.launchWorker = function(workerConf) {
+            $log.log("Creating new worker", workerConf);
+        }
 
     }])
-    .service('TasksStore', ['$http', 'baseUrl', '$log', '$interval', 'LocalStore', function($http, baseUrl, $log, $interval, localStorage) {
+    .service('TasksStore', ['$http', 'baseUrl', '$log', '$timeout', 'LocalStore', function($http, baseUrl, $log, $timeout, localStorage) {
         var self = this;
 
         this.tasks = [];
         this.taskTypes = [];
-        var shouldRefresh = localStorage.getItem("blanket.shouldRefresh") == 'true';
-
-        this.getRefreshValue = function() { return shouldRefresh; }
-        this.setAutoRefresh = function(v) {
-            shouldRefresh = v;
-            localStorage.setItem("blanket.shouldRefresh", v);
-            var status = shouldRefresh ? "on" : "off";
-            $log.log('Turning ' + status + ' autorefresh')
-        }
 
         // FIXME: handle pagination and offsets
-        var refreshData = function() {
+        self.refreshTasks = function() {
             $http.get(baseUrl + '/task/?limit=10').then(function(d) {
                 self.tasks = d.data;
                 _.each(self.tasks, function(v) {
@@ -72,7 +65,9 @@ angular.module('blanketApp')
                 })
                 $log.log("Found " + self.tasks.length + " tasks")
             });
+        }
 
+        self.refreshTaskTypes = function() {
             $http.get(baseUrl + '/task_type/?limit=10').then(function(d) {
                 self.taskTypes = d.data;
                 _.each(self.taskTypes, function(v) {
@@ -86,11 +81,49 @@ angular.module('blanketApp')
             });
         }
 
+        self.stopTask = function(task) {
+            $log.log("Stopping task", task);
+            $http({
+                method: 'DELETE',
+                url: baseUrl + '/task/' + task.id
+            }).then(function(d) {
+                // Give it time to shut down before refreshing the list
+                $log.log("Deleted", task);
+                $timeout(self.refreshTasks, 1000);
+            }, function(d) {
+                $log.error("Problem deleting task", task);
+            });
+        }
+
+        self.createTask = function(taskConf) {
+            $log.log("Creating new task", taskConf);
+        }
+    }])
+    .service('AutorefreshService', ['$http', 'baseUrl', '$log', '$interval', 'LocalStore', 'TasksStore', 'WorkerStore', 
+        function($http, baseUrl, $log, $interval, localStorage, TasksStore, WorkerStore) {
+
+        var self = this;
+        var shouldRefresh = localStorage.getItem("blanket.shouldRefresh") == 'true';
+
+        this.getRefreshValue = function() { return shouldRefresh; }
+        this.setAutoRefresh = function(v) {
+            shouldRefresh = v;
+            localStorage.setItem("blanket.shouldRefresh", v);
+            var status = shouldRefresh ? "on" : "off";
+            $log.log('Turning ' + status + ' autorefresh')
+        }
+
+        self.refreshData = function() {
+            TasksStore.refreshTasks();
+            TasksStore.refreshTaskTypes();
+            WorkerStore.refreshList();
+        }
+
         // Call it and keep calling it
-        refreshData();
+        self.refreshData();
         $interval(function(){
             if (shouldRefresh) {
-                refreshData();
+                self.refreshData();
             } else {
                 $log.log('Skipping autorefresh')
             }
@@ -98,9 +131,9 @@ angular.module('blanketApp')
     }])
     .constant('_', window._ )
     .constant('baseUrl', 'http://localhost:8773')
-    .controller('NavCtl', ['$scope', '$interval', 'TasksStore', function($scope, $interval, TasksStore) {
-        $scope.autoRefresh = TasksStore.getRefreshValue();
-        $scope.toggleAutoRefresh = function() { TasksStore.setAutoRefresh($scope.autoRefresh); }
+    .controller('NavCtl', ['$scope', '$interval', 'AutorefreshService', function($scope, $interval, AutorefreshService) {
+        $scope.autoRefresh = AutorefreshService.getRefreshValue();
+        $scope.toggleAutoRefresh = function() { AutorefreshService.setAutoRefresh($scope.autoRefresh); }
 
         $scope.lastRefreshed = Date.now();
         $interval(function(){
@@ -114,6 +147,9 @@ angular.module('blanketApp')
     .controller('TaskListCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', function($log, $http, $interval, $scope, _, TasksStore, baseUrl) {
         $scope.baseUrl = baseUrl;
         $scope.data = TasksStore;
+        $scope.getStopCommand = function(task) {
+            return task.hasResults ? "Delete" : "Stop";
+        }
     }])
     .controller('TaskTypeListCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', function($log, $http, $interval, $scope, _, TasksStore, baseUrl) {
         $scope.baseUrl = baseUrl;

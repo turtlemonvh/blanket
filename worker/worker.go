@@ -47,45 +47,25 @@ func (c *WorkerConf) Stop() error {
 // FIXME: Ensure this works ok on windows: https://golang.org/pkg/os/#Signal
 // FIXME: Handle Ctrl-C; should try to deregister
 // FIXME: Handle SIGHUP by updating information on dashboard (report, refresh config)
+// FIXME: Modify global log object
+// FIXME: Make sure logging works fine with sighup for logrotate
 // https://en.wikipedia.org/wiki/Unix_signal#POSIX_signals
-func (c *WorkerConf) Run() {
+func (c *WorkerConf) Run() error {
 	var err error
 
-	// Handle clean shutdown
-	shutdownChan := make(chan os.Signal, 1)
-	signal.Notify(shutdownChan, os.Interrupt)
-	signal.Notify(shutdownChan, syscall.SIGTERM)
-	go func() {
-		<-shutdownChan
-		// Send a request to /worker/<id>/shutdown?nosignal to make sure db is updated with state
-		// If the shutdown request initiated from the outside this won't update anything
-		log.Warn("Received shutdown signal; stopping after current task completes")
-
-		c.Stopping = true
-		err = c.UpdateInDatabase()
-		if err != nil {
-			log.WithFields(log.Fields{
-				"err": err.Error(),
-			}).Fatal("problem updating worker to the 'stopping' state")
-			log.Info("Continuing shutdown anyway")
-		} else {
-			log.Info("Successfully registered worker as stopping")
-		}
-	}()
-
+	// Initialize
+	if c.CheckInterval == 0 {
+		c.CheckInterval = 2
+	}
 	c.StartedTs = time.Now().Unix()
 
-	// FIXME: Modify global log object
-
-	// TODO:
-	// Make sure logging works fine with sighup for logrotate
 	if c.Daemon {
 		path, err := osext.Executable()
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
 			}).Error("Problem getting executable path")
-			return
+			return err
 		}
 
 		log.WithFields(log.Fields{
@@ -121,11 +101,30 @@ func (c *WorkerConf) Run() {
 		}).Info("Starting daemonized executable")
 
 	} else {
+		// Handle clean shutdown
+		shutdownChan := make(chan os.Signal, 1)
+		signal.Notify(shutdownChan, os.Interrupt)
+		signal.Notify(shutdownChan, syscall.SIGTERM)
+		go func() {
+			<-shutdownChan
+			// Send a request to /worker/<id>/shutdown?nosignal to make sure db is updated with state
+			// If the shutdown request initiated from the outside this won't update anything
+			log.Warn("Received shutdown signal; stopping after current task completes")
+
+			c.Stopping = true
+			err = c.UpdateInDatabase()
+			if err != nil {
+				log.WithFields(log.Fields{
+					"err": err.Error(),
+				}).Fatal("problem updating worker to the 'stopping' state")
+				log.Info("Continuing shutdown anyway")
+			} else {
+				log.Info("Successfully registered worker as stopping")
+			}
+		}()
+
 		c.Pid = os.Getpid()
 		c.ParsedTags = strings.Split(c.Tags, ",")
-
-		// FIXME: Make this an option
-		c.CheckInterval = 2
 
 		err = c.SetLogfileName()
 		if err != nil {
@@ -144,6 +143,7 @@ func (c *WorkerConf) Run() {
 		c.MustRegister()
 		c.ProcessTasks()
 	}
+	return nil
 }
 
 func (c *WorkerConf) SetLogfileName() error {

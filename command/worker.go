@@ -1,6 +1,7 @@
 package command
 
 import (
+	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/turtlemonvh/blanket/worker"
 )
@@ -16,7 +17,12 @@ var workerCmd = &cobra.Command{
 	Short: "Run a worker with capabilities defined by tags",
 	Run: func(cmd *cobra.Command, args []string) {
 		InitializeConfig()
-		workerConf.Run()
+		err := workerConf.Run()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"err": err.Error(),
+			}).Fatal("error starting worker")
+		}
 	},
 }
 

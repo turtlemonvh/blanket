@@ -1,5 +1,11 @@
 <div class="col-md-10 col-centered" ng-controller="WorkerListCtrl">
-    <h2>Workers</h2>
+    <div class="row list-header">
+        <h2>Workers</h2>
+        <div class="list-actions">
+            <button ng-click="data.launchWorker({})" type="button" class="btn btn-success btn-sm">New</button>
+            <button ng-click="data.refreshList()" type="button" class="btn btn-info btn-sm">Refresh List</button>
+        </div>
+    </div>
     <table class="table table-condensed row-centered">
         <thead> 
             <tr>

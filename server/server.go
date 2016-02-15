@@ -146,6 +146,7 @@ func Serve() {
 	r.GET("/task_type/:name", getTaskType)
 
 	r.GET("/worker/", getWorkers)
+	r.POST("/worker/", launchWorker)
 	r.GET("/worker/:id", getWorker)
 	r.PUT("/worker/:id", updateWorker)            // initial post and status update
 	r.PUT("/worker/:id/shutdown", shutDownWorker) // not called by worker itself

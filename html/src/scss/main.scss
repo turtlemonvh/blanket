@@ -15,3 +15,20 @@
         vertical-align: middle;
     }
 }
+
+div.list-header {
+    line-height: 60px;
+    margin-left: 0px;
+    margin-right: 0px;
+    h1, h2 {
+        display: inline-block;
+        vertical-align: bottom;
+        margin-bottom: 0px;
+    }
+    .list-actions {
+        float: right;
+        button {
+            vertical-align: bottom;
+        }
+    }
+}

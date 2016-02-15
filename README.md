@@ -182,7 +182,9 @@ Short List
 > See: https://trello.com/b/bOWTSxbO/blanket-dev
 
 - HTTP interface
-    - remove a task that has run
+    - add confirmations for delete / stop commands
+    - bulk delete
+    - a way to show messages for things we have done (toast messages)
     - re-run a task that has run, or is stalled
     - add a new task of a given type, with specific overrides
     - launch and manage workers
@@ -209,6 +211,7 @@ Short List
     - column alignment
 - workers
     - fix logging
+    - allow pausing
     - view worker status via ps / ls
         - keep list of workers in database so have reference to pids
     - send worker logs to a file in addition to stdout
@@ -226,7 +229,6 @@ Short List
     - configurable # restarts
         - # times allowed, whether they go in new directories
 - Add "required_environment" section
-- allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
 - return # tasks found in response to query
     - if >500, just say >500
 - pagination on HTML interface
@@ -240,15 +242,15 @@ Short List
         - then build
 
 - other UI
-    - stop auto-refreshing when not on pages that don't require that
     - add primitive main dashboard with recent activity
-
-
+- allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
 - stream logfiles (long polling / websockets)
+    - at least serve them up
     - check how supervisord web does it
         - https://github.com/Supervisor/supervisor/blob/master/supervisor/ui/tail.html
         - https://github.com/Supervisor/supervisor/blob/master/supervisor/http.py#L140
     - in golang
+        - maybe with SSEs
         - https://github.com/hpcloud/tail
         - http://stackoverflow.com/questions/19292113/not-buffered-http-responsewritter-in-golang
     - also allow the user to view streaming stdout/stderr

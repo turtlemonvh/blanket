@@ -1,5 +1,10 @@
 <div class="col-md-10 col-centered" ng-controller="TaskTypeListCtl">
-    <h2>Task Types</h2>
+    <div class="row list-header">
+        <h2>Task Types</h2>
+        <div class="list-actions">
+            <button ng-click="data.refreshTaskTypes()" type="button" class="btn btn-info btn-sm">Refresh List</button>
+        </div>
+    </div>
     <table class="table table-condensed">
         <thead> 
             <tr>
