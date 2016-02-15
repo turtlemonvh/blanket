@@ -44,7 +44,7 @@ angular.module('blanketApp')
 
         // FIXME: handle pagination and offsets
         self.refreshTasks = function() {
-            $http.get(baseUrl + '/task/?limit=10').then(function(d) {
+            $http.get(baseUrl + '/task/?limit=50').then(function(d) {
                 self.tasks = d.data;
                 _.each(self.tasks, function(v) {
                     var labelClasses = {
@@ -68,7 +68,7 @@ angular.module('blanketApp')
         }
 
         self.refreshTaskTypes = function() {
-            $http.get(baseUrl + '/task_type/?limit=10').then(function(d) {
+            $http.get(baseUrl + '/task_type/?limit=50').then(function(d) {
                 self.taskTypes = d.data;
                 _.each(self.taskTypes, function(v) {
                     // Date fixing

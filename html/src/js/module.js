@@ -8,7 +8,9 @@ angular.module('blanketApp', ["ui.router"])
         .state('home', {
             url: "/",
             templateProvider: function($templateCache){
-                return $templateCache.get('home.html');
+                // FIXME: Add dashboard
+                //return $templateCache.get('home.html');
+                return $templateCache.get('tasks.html');
             }
         })
         .state('tasks', {
