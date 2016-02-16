@@ -44,7 +44,7 @@ angular.module('blanketApp')
 
         // FIXME: handle pagination and offsets
         self.refreshTasks = function() {
-            $http.get(baseUrl + '/task/?limit=50').then(function(d) {
+            $http.get(baseUrl + '/task/?limit=50&reverseSort=true').then(function(d) {
                 self.tasks = d.data;
                 _.each(self.tasks, function(v) {
                     var labelClasses = {
@@ -96,7 +96,21 @@ angular.module('blanketApp')
         }
 
         self.createTask = function(taskConf) {
-            $log.log("Creating new task", taskConf);
+            $log.log("Launching new task", taskConf);
+            $http({
+                method: 'POST',
+                url: baseUrl + '/task/',
+                data: {
+                    "type": taskConf.type,
+                    "environment": taskConf.environment
+                }
+            }).then(function(d) {
+                // Give it time to start before refreshing the list
+                $log.log("Launched", taskConf);
+                $timeout(self.refreshTasks, 1000);
+            }, function(d) {
+                $log.error("Problem launching task", taskConf);
+            });
         }
     }])
     .service('AutorefreshService', ['$http', 'baseUrl', '$log', '$interval', 'LocalStore', 'TasksStore', 'WorkerStore', 
@@ -144,9 +158,56 @@ angular.module('blanketApp')
         $scope.baseUrl = baseUrl;
         $scope.data = WorkerStore;
     }])
-    .controller('TaskListCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', function($log, $http, $interval, $scope, _, TasksStore, baseUrl) {
+    .controller('TaskListCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', '_', function($log, $http, $interval, $scope, _, TasksStore, baseUrl, _) {
         $scope.baseUrl = baseUrl;
         $scope.data = TasksStore;
+
+        $scope.newTaskConf = (function() {
+            var self = {};
+            self.addingTask = false;
+
+            self.clearTask = function() {
+                self.newTask = {
+                    environment: []
+                };
+                self.addParam();
+                self.newTaskType = undefined;
+            }
+
+            self.launchTask = function() {
+                // Transform object
+                var cleanTask = {};
+                cleanTask.type = self.newTaskType.name;
+                cleanTask.environment = {};
+                _.forEach(self.newTask.environment, function(v) {
+                    cleanTask.environment[v.key] = v.value;
+                })
+
+                // Launch task
+                TasksStore.createTask(cleanTask);
+
+                // Reset form
+                self.addingTask = false;
+                self.clearTask();
+            }
+
+            self.removeParam = function(index) {
+                self.newTask.environment.splice(index, 1);
+            }
+
+            self.addParam = function() {
+                self.newTask.environment.push({
+                    'key': '',
+                    'value': ''
+                });
+            }
+
+            // Initialize
+            self.clearTask();
+
+            return self;
+        })();
+
         $scope.getStopCommand = function(task) {
             return task.hasResults ? "Delete" : "Stop";
         }

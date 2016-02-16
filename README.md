@@ -186,7 +186,6 @@ Short List
     - bulk delete
     - a way to show messages for things we have done (toast messages)
     - re-run a task that has run, or is stalled
-    - add a new task of a given type, with specific overrides
     - launch and manage workers
     - fix memory leak (was >500 mb when running for a while)
 - log to multiple locations
@@ -243,6 +242,8 @@ Short List
 
 - other UI
     - add primitive main dashboard with recent activity
+    - add ability to reconfigure and restart
+    - add ability to add new task types
 - allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
 - stream logfiles (long polling / websockets)
     - at least serve them up

@@ -10,10 +10,24 @@
     cursor: pointer;
 }
 
+a.danger {
+    color: red;
+}
+
+button.stacked-right {
+    float: right;
+    margin-left: 10px;
+}
+
 .row-centered.table tbody tr {
     th, td {
         vertical-align: middle;
     }
+}
+
+div.create-item-area {
+    margin-left: 0px;
+    margin-right: 0px;
 }
 
 div.list-header {
@@ -21,6 +35,7 @@ div.list-header {
     margin-left: 0px;
     margin-right: 0px;
     margin-bottom: 20px;
+    margin-top: -20px;
 
     h1, h2 {
         display: inline-block;

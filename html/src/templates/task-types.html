@@ -16,8 +16,8 @@
                 <th>Current Version</th>
             </tr> 
         </thead>
-        <tbody ng-repeat="taskType in data.taskTypes">
-            <tr>
+        <tbody>
+            <tr ng-repeat="taskType in data.taskTypes">
                 <th scope="row">{{ ($index+1) }}</th>
                 <td><a ng-href="{{baseUrl}}/task_type/{{taskType.name}}">{{ taskType.name }}</a></td>
                 <td>{{ taskType.tags.join(', ') }}</td>
