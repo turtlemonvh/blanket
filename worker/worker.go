@@ -319,10 +319,12 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 
 	// FIXME: Don't just use bash; use python, zsh, etc configured via viper
 	cmd := exec.Command("bash", "-c", cmdString.String())
-	err = SetupExecutionDirectory(t, &tt, cmd)
+	var fileCloser func()
+	err, fileCloser = SetupExecutionDirectory(t, &tt, cmd)
 	if err != nil {
 		return err
 	}
+	defer fileCloser()
 
 	// Modify execution environment with env variables
 	// e.g. http://craigwickesser.com/2015/02/golang-cmd-with-custom-environment/
@@ -380,16 +382,14 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	return err
 }
 
-// FIXME: Return a function that closes file handles
-// Can't use defer here because file will be closed before task executes
-func SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) error {
+func SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) (error, func()) {
 	// Set up output files and configure the task to run in the correct location
 	err := os.MkdirAll(t.ResultDir, os.ModePerm)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err": err.Error(),
 		}).Error("failed to create scratch directory for task")
-		return err
+		return err, func() {}
 	}
 	stdoutPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stdout.log"))
 	stderrPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stderr.log"))
@@ -398,21 +398,26 @@ func SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) e
 		log.WithFields(log.Fields{
 			"err": err.Error(),
 		}).Error("failed to create stdout file for task")
-		return err
+		return err, func() {}
 	}
-	defer stdoutFile.Close()
 	stderrFile, err := os.Create(stderrPath)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err": err.Error(),
 		}).Error("failed to create stderr file for task")
-		return err
+		return err, func() {
+			stdoutFile.Close()
+		}
 	}
-	defer stderrFile.Close()
 
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
 	cmd.Dir = t.ResultDir
+
+	fileCloser := func() {
+		stdoutFile.Close()
+		stderrFile.Close()
+	}
 
 	filesToInclude := toSliceStringSlice(tt.Config.Get("files_to_include"))
 	err = CopyFiles(filesToInclude, t.ResultDir)
@@ -420,10 +425,10 @@ func SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) e
 		log.WithFields(log.Fields{
 			"err": err.Error(),
 		}).Error("failed copy files for task")
-		return err
+		return err, fileCloser
 	}
 
-	return err
+	return err, fileCloser
 }
 
 func CopyFiles(files [][]string, resultDir string) error {
