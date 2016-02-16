@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -45,6 +46,7 @@ type PSConf struct {
 	Type         string
 	RequiredTags string
 	MaxTags      string
+	Limit        int
 	ParsedTags   []string
 }
 
@@ -55,6 +57,7 @@ func init() {
 	psCmd.Flags().StringVarP(&psConf.Type, "type", "t", "", "Only list tasks of this type")
 	psCmd.Flags().StringVar(&psConf.RequiredTags, "requiredTags", "", "Only list tasks whose tags are a superset of these tags (comma separated)")
 	psCmd.Flags().StringVar(&psConf.MaxTags, "maxTags", "", "Only list tasks whose tags are a subset of these tags (comma separated)")
+	psCmd.Flags().IntVar(&psConf.Limit, "limit", 500, "Maximum number of items to return")
 	psCmd.Flags().BoolVarP(&psConf.Quiet, "quiet", "q", false, "Print ids only")
 	RootCmd.AddCommand(psCmd)
 }
@@ -73,6 +76,8 @@ func (c *PSConf) ListTasks() {
 	if c.MaxTags != "" {
 		v.Set("maxTags", c.MaxTags)
 	}
+	v.Set("limit", strconv.Itoa(c.Limit))
+
 	paramsString := v.Encode()
 	reqURL := fmt.Sprintf("http://localhost:%d/task/", viper.GetInt("port"))
 	if paramsString != "" {
