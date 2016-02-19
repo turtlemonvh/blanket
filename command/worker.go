@@ -29,6 +29,7 @@ var workerCmd = &cobra.Command{
 func init() {
 	workerCmd.Flags().StringVarP(&workerConf.Tags, "tags", "t", "", "Tags defining capabilities of this worker")
 	workerCmd.Flags().StringVar(&workerConf.Logfile, "logfile", "", "Logfile to use")
+	workerCmd.Flags().Float64Var(&workerConf.CheckInterval, "checkinterval", 0, "Check interval in seconds")
 	workerCmd.Flags().BoolVarP(&workerConf.Daemon, "daemon", "d", false, "Run as a daemon")
 	RootCmd.AddCommand(workerCmd)
 }

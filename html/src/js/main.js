@@ -33,6 +33,17 @@ angular.module('blanketApp')
 
         self.launchWorker = function(workerConf) {
             $log.log("Creating new worker", workerConf);
+            $http({
+                method: 'POST',
+                url: baseUrl + '/worker/',
+                data: workerConf
+            }).then(function(d) {
+                // Give it time to start up before refreshing the list
+                $log.log("Launched worker", workerConf);
+                $timeout(self.refreshList, workerConf.checkInterval*1000 + 1000);
+            }, function(d) {
+                $log.error("Problem launcing worker", workerConf);
+            });
         }
 
     }])
@@ -157,6 +168,37 @@ angular.module('blanketApp')
     .controller('WorkerListCtrl', ['$log', '$scope', 'WorkerStore', 'baseUrl', function($log, $scope, WorkerStore, baseUrl) {
         $scope.baseUrl = baseUrl;
         $scope.data = WorkerStore;
+
+        $scope.newWorkerConf = (function() {
+            var self = {};
+            self.addingWorker = false;
+
+            self.clearForm = function() {
+                self.newWorker = {
+                    checkInterval: 2
+                };
+            }
+
+            self.launchWorker = function() {
+                $log.log("Launching worker", self.newWorker)
+
+                // Transform object
+                self.newWorker.checkInterval = +self.newWorker.checkInterval;
+
+                // Launch task
+                WorkerStore.launchWorker(self.newWorker);
+
+                // Reset form
+                self.addingWorker = false;
+                self.clearForm();
+            }
+
+            // Initialize
+            self.clearForm();
+
+            return self;
+        })();
+
     }])
     .controller('TaskListCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', '_', function($log, $http, $interval, $scope, _, TasksStore, baseUrl, _) {
         $scope.baseUrl = baseUrl;

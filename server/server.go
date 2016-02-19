@@ -151,6 +151,7 @@ func Serve() {
 	r.PUT("/worker/:id", updateWorker)            // initial post and status update
 	r.PUT("/worker/:id/shutdown", shutDownWorker) // not called by worker itself
 	r.DELETE("/worker/:id", deleteWorker)         // remove from database
+	r.GET("/worker/:id/logs", getWorkerLogfile)
 
 	// Start server
 	log.WithFields(log.Fields{

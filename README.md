@@ -188,6 +188,8 @@ Short List
     - re-run a task that has run, or is stalled
     - launch and manage workers
     - fix memory leak (was >500 mb when running for a while)
+    - editing task types
+        - http://localhost:3000/#/task-types
 - log to multiple locations
     - https://github.com/Sirupsen/logrus
     - https://godoc.org/github.com/Sirupsen/logrus#Logger
@@ -239,25 +241,30 @@ Short List
         - build js (gulp build)
         - run bindata-assets command
         - then build
+- time sortable ID doesn't seen to be time sortable...?
+    - we're using this: https://github.com/streadway/simpleuuid/blob/master/uuid.go
+    - doesn't seem to be sortable
 
 - other UI
     - add primitive main dashboard with recent activity
     - add ability to reconfigure and restart
     - add ability to add new task types
 - allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
-- stream logfiles (long polling / websockets)
-    - at least serve them up
+- stream logfiles (for viewing in browser); both worker and process logs
+    - both last few hundred lines in a stream and full download
+    - https://godoc.org/github.com/hpcloud/tail
+    - http://stackoverflow.com/questions/19292113/not-buffered-http-responsewritter-in-golang
+    - https://github.com/julienschmidt/sse
+    - https://godoc.org/github.com/julienschmidt/sse#Streamer.SendString
     - check how supervisord web does it
         - https://github.com/Supervisor/supervisor/blob/master/supervisor/ui/tail.html
         - https://github.com/Supervisor/supervisor/blob/master/supervisor/http.py#L140
-    - in golang
-        - maybe with SSEs
-        - https://github.com/hpcloud/tail
-        - http://stackoverflow.com/questions/19292113/not-buffered-http-responsewritter-in-golang
-    - also allow the user to view streaming stdout/stderr
-        - http://kvz.io/blog/2013/07/12/prefix-streaming-stdout-and-stderr-in-golang/
+    - python
+        - https://gist.github.com/fiorix/1920022
+        - http://stackoverflow.com/questions/25166770/angularjs-with-server-sent-events
 - make some good examples
 - write some tests
+    - https://golang.org/pkg/net/http/httptest/
     - esp. for glob copy method
         - move this to its own thing and open source it
         - include expanduser function (like in python)

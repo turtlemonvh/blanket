@@ -210,15 +210,25 @@ func deleteWorker(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId))
 }
 
+// FIXME: Wait until worker registers itself in the database to return, up to X seconds
 func launchWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	w := worker.WorkerConf{}
-	w.Tags = "cat,frog"
-	w.Daemon = true
-	w.CheckInterval = 2
 
-	err := w.Run()
+	var err error
+	err = c.BindJSON(&w)
+	if err != nil {
+		return
+	}
+
+	// Always a daemon; default check interval is 2 seconds
+	w.Daemon = true
+	if w.CheckInterval == 0 {
+		w.CheckInterval = 2
+	}
+
+	err = w.Run()
 	if err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
@@ -226,4 +236,52 @@ func launchWorker(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, "{}")
+}
+
+// FIXME: Use tail to grab last bit of file: https://godoc.org/github.com/hpcloud/tail
+// FIXME: Allow sse: https://godoc.org/github.com/julienschmidt/sse#Streamer.SendString
+// ALT: https://github.com/mozilla-services/heka/blob/dev/logstreamer/filehandling.go#L294
+// https://github.com/brho/plan9/blob/master/sys/src/cmd/tail.c
+// - reads backwards until it finds a given line
+func getWorkerLogfile(c *gin.Context) {
+	c.Header("Content-Type", "text/plain")
+
+	workerId := c.Param("id")
+
+	w := worker.WorkerConf{}
+	err := DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("workers"))
+		if b == nil {
+			errorString := "Database format error: Bucket 'workers' does not exist."
+			return fmt.Errorf(errorString)
+		}
+
+		err := json.Unmarshal(b.Get([]byte(workerId)), &w)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		c.String(http.StatusInternalServerError, fmt.Sprintf(`Error: "%s"`, err.Error()))
+		return
+	}
+	if w.Pid == 0 {
+		c.String(http.StatusNotFound, fmt.Sprintf(`Error: Worker with id %s not found`, workerId))
+		return
+	}
+
+	// Open file and stream out contents
+	/*
+		tf := *tail.Tail{}
+		tf, err = tail.TailFile(c.Logfile, tail.Config{
+			Follow: false,
+			//Logger: tail.DiscardingLogger,
+		})
+	*/
+
+	// Open file and send all contents
+	// https://godoc.org/github.com/gin-gonic/gin#Context.File
+	c.File(w.Logfile)
 }

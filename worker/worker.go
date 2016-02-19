@@ -31,7 +31,7 @@ type WorkerConf struct {
 	Daemon        bool     `json:"daemon"`
 	Pid           int      `json:"pid"`
 	Stopping      bool     `json:"stopping"`
-	CheckInterval int      `json:"checkInterval"`
+	CheckInterval float64  `json:"checkInterval"`
 	StartedTs     int64    `json:"startedTs"`
 }
 
@@ -54,8 +54,8 @@ func (c *WorkerConf) Run() error {
 	var err error
 
 	// Initialize
-	if c.CheckInterval == 0 {
-		c.CheckInterval = 2
+	if c.CheckInterval < 0.5 {
+		c.CheckInterval = 0.5
 	}
 	c.StartedTs = time.Now().Unix()
 
@@ -80,6 +80,10 @@ func (c *WorkerConf) Run() error {
 		if c.Logfile != "" {
 			cmd.Args = append(cmd.Args, "--logfile")
 			cmd.Args = append(cmd.Args, c.Logfile)
+		}
+		if c.CheckInterval != 0 {
+			cmd.Args = append(cmd.Args, "--checkinterval")
+			cmd.Args = append(cmd.Args, fmt.Sprintf("%f", c.CheckInterval))
 		}
 
 		if cmd.SysProcAttr != nil {
@@ -132,6 +136,20 @@ func (c *WorkerConf) Run() error {
 				"err": err.Error(),
 			}).Fatal("problem getting logfile name")
 		}
+
+		// Setup logfile; closes when process exits
+		var f *os.File
+		f, err = os.Create(c.Logfile)
+		if err != nil {
+			fmt.Println("logfile", c.Logfile)
+			fmt.Println("workerConf", c)
+			panic(err)
+		}
+		defer f.Close()
+
+		// Log json output to file
+		log.SetFormatter(&log.JSONFormatter{})
+		log.SetOutput(f)
 
 		log.WithFields(log.Fields{
 			"tags":          c.ParsedTags,
@@ -240,10 +258,10 @@ func (c *WorkerConf) ProcessTasks() {
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
-			}).Errorf("could not find task; trying again in %d seconds", c.CheckInterval)
+			}).Errorf("could not find task; trying again in %f seconds", c.CheckInterval)
 			continue
 		} else if t.Id == "" {
-			log.Debugf("found no matching tasks; trying again in %d seconds", c.CheckInterval)
+			log.Debugf("found no matching tasks; trying again in %f seconds", c.CheckInterval)
 			continue
 		}
 
@@ -259,11 +277,11 @@ func (c *WorkerConf) ProcessTasks() {
 				"taskId": t.Id,
 				"typeId": t.TypeId,
 				"tags":   t.Tags,
-			}).Infof("processed task successfully; checking for next task in %d seconds", c.CheckInterval)
+			}).Infof("processed task successfully; checking for next task in %f seconds", c.CheckInterval)
 		} else {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
-			}).Errorf("error processing task; trying again in %d seconds", c.CheckInterval)
+			}).Errorf("error processing task; trying again in %f seconds", c.CheckInterval)
 		}
 	}
 
