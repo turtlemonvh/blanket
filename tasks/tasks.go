@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	log "github.com/Sirupsen/logrus"
+	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	uuid "github.com/streadway/simpleuuid"
 	"github.com/turtlemonvh/blanket/lib"
@@ -42,7 +43,10 @@ func ReadTypes() ([]TaskType, error) {
 		filepath := path.Join(typesDir, dirEntry.Name())
 		tt, err := ReadTaskTypeFromFilepath(filepath)
 		if err != nil {
-			log.Error(err.Error())
+			log.WithFields(log.Fields{
+				"error":    err.Error(),
+				"filepath": filepath,
+			}).Error("Problem loading toml file")
 			continue
 		}
 		taskTypes = append(taskTypes, tt)
@@ -94,7 +98,11 @@ func readTaskType(configFile io.Reader) (TaskType, error) {
 	tt.Config.SetDefault("timeout", 60)
 	tt.Config.SetDefault("merge_stdout_stderr", false)
 
-	tt.Config.ReadConfig(configFile)
+	err := tt.Config.ReadConfig(configFile)
+	if err != nil {
+		tt.Config.Set("validationError", err.Error())
+	}
+
 	tt.LoadedTs = time.Now().Unix()
 
 	// Check that required fields are set
@@ -111,15 +119,24 @@ func (t *TaskType) String() string {
 
 func (t *TaskType) ToJSON() (string, error) {
 	ttSettings := t.Config.AllSettings()
-	ttSettings["_loaded_ts"] = t.LoadedTs
-	ttSettings["_config_file"] = t.ConfigFile
-	ttSettings["_version_hash"] = t.ConfigVersionHash
+	ttSettings["loadedTs"] = t.LoadedTs
+	ttSettings["configFile"] = t.ConfigFile
+	ttSettings["versionHash"] = t.ConfigVersionHash
 	bts, err := json.Marshal(ttSettings)
 	return string(bts), err
 }
 
-func (t *TaskType) EnvironmentVars() map[string]string {
-	return t.Config.GetStringMapString("environment")
+func (t *TaskType) DefaultEnv() map[string]string {
+	// Interface that is a []map[string]interface{}
+	defaultEnv := cast.ToSlice(t.Config.Get("environment.default"))
+	env := make(map[string]string)
+	for _, envVar := range defaultEnv {
+		ev := cast.ToStringMap(envVar)
+		evName := cast.ToString(ev["name"])
+		evValue := cast.ToString(ev["value"])
+		env[evName] = evValue
+	}
+	return env
 }
 
 // Tasks inherit all the environment params of a tasktype + more
@@ -139,7 +156,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 	// Merge environment variables
 	// FIXME: Take any files and copy them into directory
 	// FIXME: This should happen at execution time
-	mixedEnv := t.EnvironmentVars()
+	mixedEnv := t.DefaultEnv()
 	for k, v := range childEnv {
 		mixedEnv[k] = v
 	}

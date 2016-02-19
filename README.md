@@ -181,27 +181,18 @@ Short List
 
 > See: https://trello.com/b/bOWTSxbO/blanket-dev
 
+- show task type description when launching a new task
+- pulse "running" tag for running tasks to make them more obvious
+
+
 - HTTP interface
     - add confirmations for delete / stop commands
     - bulk delete
     - a way to show messages for things we have done (toast messages)
     - re-run a task that has run, or is stalled
     - launch and manage workers
+    - figure out bug where form closes sometimes when clicking "Remove"
     - fix memory leak (was >500 mb when running for a while)
-    - editing task types
-        - http://localhost:3000/#/task-types
-- log to multiple locations
-    - https://github.com/Sirupsen/logrus
-    - https://godoc.org/github.com/Sirupsen/logrus#Logger
-    - https://golang.org/pkg/io/#MultiWriter
-    - just create your own logging package that takes a config and writes to multiple locations at different verbosities
-        - configure as package global objects for easy import
-        - https://github.com/Sirupsen/logrus#rotation
-        - https://github.com/natefinch/lumberjack
-            - package for rotation
-- configurable logging verbosity
-    - these are things that every task must provide, or it will be rejected
-    - this will be used to create the http interface (auto-generation of forms)
 - Allow configurable executors
     - copy command into tmp file; run with bash, zsh, bat
     - make it use a different executor depending on OS (put this in viper)
@@ -210,30 +201,20 @@ Short List
     - http://stackoverflow.com/questions/4571244/creating-a-bat-file-for-python-script
 - Clean up ls/ps commands
     - column alignment
-- workers
-    - fix logging
-    - allow pausing
-    - view worker status via ps / ls
-        - keep list of workers in database so have reference to pids
-    - send worker logs to a file in addition to stdout
-        - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
 - allow filling in files as templates
     - have glob patterns to match templates (relative to where they will be copied into)
-- Option to leave task creation request open until task completes
-    - also adds it with super high priority so it is picked up fast
-    - like this: https://github.com/celery/celery/issues/2275#issuecomment-56828471
 - Make use of timeout to stop long running tasks
     - also restart and cleanup
     - If is task has passed its run time, unlock it and return to queue
+- allow user to use a previous task as a template for a new task
 - controlling running tasks
     - stop / restart
     - configurable # restarts
         - # times allowed, whether they go in new directories
-- Add "required_environment" section
 - return # tasks found in response to query
     - if >500, just say >500
-- pagination on HTML interface
-    - http://getbootstrap.com/components/#pagination
+    - pagination on HTML interface
+        - http://getbootstrap.com/components/#pagination
 - package HTML into a single binary
     - https://github.com/jteeuwen/go-bindata
     - https://github.com/elazarl/go-bindata-assetfs
@@ -244,11 +225,60 @@ Short List
 - time sortable ID doesn't seen to be time sortable...?
     - we're using this: https://github.com/streadway/simpleuuid/blob/master/uuid.go
     - doesn't seem to be sortable
+- make names of fields on objects consistent
+    - esp. task types vs tasks
+- allow user to view and edit server configuration on UI
+    - may need to allow them to trigger a restart
+- allow user to back up database from UI
 
+
+Log cleanup
+
+- configurable logging verbosity
+    - these are things that every task must provide, or it will be rejected
+- log to multiple locations
+    - https://github.com/Sirupsen/logrus
+    - https://godoc.org/github.com/Sirupsen/logrus#Logger
+    - https://golang.org/pkg/io/#MultiWriter
+    - just create your own logging package that takes a config and writes to multiple locations at different verbosities
+        - configure as package global objects for easy import
+        - https://github.com/Sirupsen/logrus#rotation
+        - https://github.com/natefinch/lumberjack
+            - package for rotation
+- better worker logs with SSE and json logs
+    - can include little event cards for everything that happened, even highlight errors, provide search and filtering, aggregate events
+- allow user to specify where worker logs go (directory)
+
+
+Task Discovery
+
+- allow the user to names more places to look for tasks
+- look for anything that matches a certain pattern and keep a reference to it in the database as a available task type
+
+Design
+
+- use card bordered areas to give everything a cleaner more organized look
+- like Ionic, use divs with a slight shadow that separates them from other content
+- make it flannel colors (dark, grays) instead of so bright
+    - like a blanket
+    - solarized dark would be good
+
+- workers
+    - assign a unique id to make tracking logfiles for past workers easier
+    - name logfile based on time of day
+    - allow pausing
+    - view worker status via ps / ls
+        - keep list of workers in database so have reference to pids
+    - send worker logs to stdout addition to sending to a file
+        - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
 - other UI
     - add primitive main dashboard with recent activity
     - add ability to reconfigure and restart
     - add ability to add new task types
+    - allow editing task types on HTTP interface
+- Option to leave task creation request open until task completes
+    - also adds it with super high priority so it is picked up fast
+    - like this: https://github.com/celery/celery/issues/2275#issuecomment-56828471
 - allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
 - stream logfiles (for viewing in browser); both worker and process logs
     - both last few hundred lines in a stream and full download
@@ -310,6 +340,9 @@ Task Execution workflow
     - add_time is recorded in database
 - adds task to queue(s)
 
+- add extra config options for env vrs
+    - pass validation regex
+    - pass a small list of types
 - task is picked out of queue
 - worker wrapper process is forked and started in a new directory
     - /opt/blanket/scratch/task/<task type>/<task id>

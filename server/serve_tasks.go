@@ -54,7 +54,7 @@ func getTasks(c *gin.Context) {
 		"taskType":         taskType,
 		"taskState":        taskState,
 		"limit":            limit,
-	}).Info("Request params")
+	}).Debug("Task request params")
 
 	result := "["
 	if err := DB.View(func(tx *bolt.Tx) error {
@@ -383,10 +383,14 @@ func postTask(c *gin.Context) {
 	if req["environment"] != nil {
 		defaultEnv = cast.ToStringMapString(req["environment"])
 		if len(defaultEnv) == 0 {
-			log.WithFields(log.Fields{"environment": req["environment"]}).Info("environment is not a map[string]string")
+			log.WithFields(log.Fields{
+				"environment": req["environment"],
+			}).Error("environment is not a map[string]string")
 			c.String(http.StatusBadRequest, `{"error": "The 'environment' parameter must be a map of string keys to string values."}`)
 			return
 		}
+
+		// FIXME: Check that required variables are set
 	}
 
 	// Create task object

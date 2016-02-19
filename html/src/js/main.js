@@ -66,7 +66,7 @@ angular.module('blanketApp')
                         "SUCCESS": "success"
                     };
                     v.labelClass = labelClasses[v.state];
-                    v.hasResults = _.intersection(["ERROR", "SUCCESS"], [v.state]).length !== 0;
+                    v.hasResults = _.intersection(["ERROR", "SUCCESS", "START", "RUNNING"], [v.state]).length !== 0;
 
                     // Date fixing
                     var dateFields = ['createdTs', 'startedTs', 'lastUpdatedTs'];
@@ -83,7 +83,7 @@ angular.module('blanketApp')
                 self.taskTypes = d.data;
                 _.each(self.taskTypes, function(v) {
                     // Date fixing
-                    var dateFields = ['_loaded_ts'];
+                    var dateFields = ['loadedTs'];
                     _.each(dateFields, function(df) {
                         v[df] = v[df] * 1000;
                     });
@@ -207,13 +207,39 @@ angular.module('blanketApp')
         $scope.newTaskConf = (function() {
             var self = {};
             self.addingTask = false;
+            self.newTaskType = undefined;
 
-            self.clearTask = function() {
+            self.changedTaskType = function() {
                 self.newTask = {
                     environment: []
                 };
-                self.addParam();
-                self.newTaskType = undefined;
+
+                if (!self.newTaskType) {
+                    return;
+                }
+
+                _.each(self.newTaskType.environment.required, function(v, k) {
+                    self.newTask.environment.push({
+                        name: v.name,
+                        value: "",
+                        description: v.description,
+                        required: true
+                    });
+                })
+
+                _.each(self.newTaskType.environment.optional, function(v, k) {
+                    self.newTask.environment.push({
+                        name: v.name,
+                        value: "",
+                        description: v.description,
+                        required: false
+                    });
+                })
+
+                self.newTask.environment.push({
+                    'key': '',
+                    'value': ''
+                })
             }
 
             self.launchTask = function() {
@@ -222,7 +248,7 @@ angular.module('blanketApp')
                 cleanTask.type = self.newTaskType.name;
                 cleanTask.environment = {};
                 _.forEach(self.newTask.environment, function(v) {
-                    cleanTask.environment[v.key] = v.value;
+                    cleanTask.environment[v.name] = v.value;
                 })
 
                 // Launch task
@@ -230,22 +256,17 @@ angular.module('blanketApp')
 
                 // Reset form
                 self.addingTask = false;
-                self.clearTask();
+                self.newTaskType = undefined;
+                self.changedTaskType();
             }
 
             self.removeParam = function(index) {
                 self.newTask.environment.splice(index, 1);
             }
 
-            self.addParam = function() {
-                self.newTask.environment.push({
-                    'key': '',
-                    'value': ''
-                });
-            }
 
             // Initialize
-            self.clearTask();
+            self.changedTaskType();
 
             return self;
         })();

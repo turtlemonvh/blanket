@@ -6,3 +6,4 @@ blanket.json
 blanket.toml
 blanket.yml
 blanket.yaml
+worker.*.log
