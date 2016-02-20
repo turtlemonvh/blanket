@@ -49,3 +49,7 @@ div.list-header {
         }
     }
 }
+
+table tr.like-sm-input :not(input) {
+    font-size: 0.9em;
+}

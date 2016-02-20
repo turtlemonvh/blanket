@@ -40,7 +40,9 @@
                         </thead>
                         <tbody>
                             <!-- List default values -->
-                            <tr ng-repeat="item in newTaskConf.newTaskType.environment.required">
+                            <tr 
+                                ng-repeat="item in newTaskConf.newTaskType.environment.default" 
+                                class="like-sm-input active">
                                 <td>{{ item.name }}</td>
                                 <td>{{ item.value }}</td>
                                 <td>{{ item.description }}</td>
@@ -50,6 +52,7 @@
 
                             <!-- List required / optional / user added values -->
                             <tr 
+                                class="like-sm-input"
                                 ng-repeat="item in newTaskConf.newTask.environment"
                                 ng-class="(!item.required || newTaskForm[item.name + '_value'].$valid) ? '' : 'warning' ">
                                 <td>
