@@ -236,10 +236,7 @@ angular.module('blanketApp')
                     });
                 })
 
-                self.newTask.environment.push({
-                    'key': '',
-                    'value': ''
-                })
+                self.addParam();
             }
 
             self.launchTask = function() {
@@ -258,6 +255,13 @@ angular.module('blanketApp')
                 self.addingTask = false;
                 self.newTaskType = undefined;
                 self.changedTaskType();
+            }
+
+            self.addParam = function() {
+                self.newTask.environment.push({
+                    'key': '',
+                    'value': ''
+                })
             }
 
             self.removeParam = function(index) {

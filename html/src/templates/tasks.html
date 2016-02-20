@@ -41,7 +41,7 @@
                         <tbody>
                             <!-- List default values -->
                             <tr 
-                                ng-repeat="item in newTaskConf.newTaskType.environment.default" 
+                                ng-repeat="item in newTaskConf.newTaskType.environment.default track by item.name" 
                                 class="like-sm-input active">
                                 <td>{{ item.name }}</td>
                                 <td>{{ item.value }}</td>
@@ -74,7 +74,7 @@
                                     <span class="label label-default" ng-if="!item.required" >Optional</span>
                                 </td>
                                 <td>
-                                    <a href="#" class="danger" ng-if="!item.required" ng-click="newTaskConf.removeParam($index)">Remove</a>
+                                    <a class="danger" ng-if="!item.required" ng-click="newTaskConf.removeParam($index)">Remove</a>
                                 </td>
                             </tr>
 
@@ -82,7 +82,7 @@
                     </table>
                 </div>
                 <div class="col-sm-offset-10 col-sm-2 pull-right">
-                    <button type="submit" class="btn btn-sm pull-right" ng-click="newTaskConf.addParam()">Add setting</button>
+                    <button type="button" class="btn btn-sm pull-right" ng-click="newTaskConf.addParam()">Add setting</button>
                 </div>
             </div>
 
@@ -132,7 +132,7 @@
                 <td ng-if="task.hasResults === true" ><a ng-href="{{baseUrl}}/results/{{task.id}}">Results</a></td>
                 <td ng-if="task.hasResults === false" >None</td>
                 <td>
-                    <button ng-click="data.stopTask(task)" type="button" class="btn btn-danger btn-sm">{{ getStopCommand(task) }}</button>
+                    <a class="danger" ng-click="data.stopTask(task)">{{ getStopCommand(task) }}</a>
                 </td>
             </tr>
         </tbody>

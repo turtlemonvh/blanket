@@ -14,6 +14,13 @@ a.danger {
     color: red;
 }
 
+table a {
+    // Make it easier to click
+    padding: 5px;
+    margin: -5px;
+    cursor: pointer;
+}
+
 button.stacked-right {
     float: right;
     margin-left: 10px;
