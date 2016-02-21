@@ -6,8 +6,8 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
-	uuid "github.com/streadway/simpleuuid"
 	"github.com/turtlemonvh/blanket/lib"
+	"gopkg.in/mgo.v2/bson"
 	"io"
 	"io/ioutil"
 	"os"
@@ -96,7 +96,6 @@ func readTaskType(configFile io.Reader) (TaskType, error) {
 	tt.Config = viper.New()
 	tt.Config.SetConfigType("toml")
 	tt.Config.SetDefault("timeout", 60)
-	tt.Config.SetDefault("merge_stdout_stderr", false)
 
 	err := tt.Config.ReadConfig(configFile)
 	if err != nil {
@@ -141,17 +140,8 @@ func (t *TaskType) DefaultEnv() map[string]string {
 
 // Tasks inherit all the environment params of a tasktype + more
 func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
-	currentTime := time.Now()
 	taskType := t.Config.GetString("name")
-
-	taskIdObj, err := uuid.NewTime(currentTime)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"currentTime": currentTime,
-			"taskType":    taskType,
-		}).Info("Unexpected error getting id for task")
-	}
-	taskId := taskIdObj
+	taskId := bson.NewObjectId()
 
 	// Merge environment variables
 	// FIXME: Take any files and copy them into directory
@@ -162,15 +152,16 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 	}
 
 	log.WithFields(log.Fields{
-		"taskId":    taskId,
+		"taskId":    taskId.Hex(),
 		"mixedEnv":  mixedEnv,
 		"childEnv":  childEnv,
 		"parentEnv": t.Config.GetStringMapString("environment"),
 	}).Info("Environment variable mixing results for task")
 
 	log.WithFields(log.Fields{
-		"taskId": taskId,
-		"tags":   t.Config.GetStringSlice("tags"),
+		"taskId":   taskId.Hex(),
+		"taskType": taskType,
+		"tags":     t.Config.GetStringSlice("tags"),
 	}).Info("Tag mixing results for task")
 
 	return Task{
@@ -179,7 +170,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 		LastUpdatedTs: time.Now().Unix(),
 		TypeId:        t.Config.GetString("name"),
 		TypeDigest:    "",
-		ResultDir:     path.Join(viper.GetString("tasks.results_path"), taskId.String()),
+		ResultDir:     path.Join(viper.GetString("tasks.results_path"), taskId.Hex()),
 		State:         "WAIT",
 		Progress:      0,
 		ExecEnv:       mixedEnv,
@@ -190,7 +181,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 var ValidTaskStates = []string{"WAIT", "START", "RUNNING", "ERROR", "SUCCESS"}
 
 type Task struct {
-	Id            uuid.UUID         `json:"id"`            // uuid
+	Id            bson.ObjectId     `json:"id"`            // time sortable id
 	CreatedTs     int64             `json:"createdTs"`     // when it was first added to the database
 	StartedTs     int64             `json:"startedTs"`     // when it started running
 	LastUpdatedTs int64             `json:"lastUpdatedTs"` // last time any information changed

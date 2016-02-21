@@ -260,7 +260,8 @@ func (c *WorkerConf) ProcessTasks() {
 				"err": err.Error(),
 			}).Errorf("could not find task; trying again in %f seconds", c.CheckInterval)
 			continue
-		} else if t.Id == nil {
+		} else if !t.Id.Valid() {
+			// FIXME: Make sure this works; should work because will initialize with empty string
 			log.Debugf("found no matching tasks; trying again in %f seconds", c.CheckInterval)
 			continue
 		}
@@ -561,7 +562,7 @@ func (c *WorkerConf) TransitionTaskState(t *tasks.Task, state string, extraVars 
 		urlParams.Set(k, v)
 	}
 	paramsString := urlParams.Encode()
-	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/state", viper.GetInt("port"), t.Id) + "?" + paramsString
+	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/state", viper.GetInt("port"), t.Id.Hex()) + "?" + paramsString
 	req, err := http.NewRequest("PUT", reqURL, nil)
 	if err != nil {
 		return err

@@ -8,8 +8,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
-	uuid "github.com/streadway/simpleuuid"
 	"github.com/turtlemonvh/blanket/tasks"
+	"gopkg.in/mgo.v2/bson"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -18,6 +18,12 @@ import (
 	"strings"
 	"time"
 )
+
+// Valid objectids don't have errors
+func IdBytes(id bson.ObjectId) []byte {
+	bts, _ := id.MarshalJSON()
+	return bts
+}
 
 func getTasks(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
@@ -165,15 +171,14 @@ func getTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
-	var taskUUID uuid.UUID
 
-	taskId := c.Param("id")
-	taskUUID, err = uuid.NewString(taskId)
-	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+	taskIdStr := c.Param("id")
+	if !bson.IsObjectIdHex(taskIdStr) {
+		errMsg := fmt.Sprintf(`{"error": "'%s' is not not a valid objectid"}`, taskIdStr)
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
+	taskId := bson.ObjectIdHex(taskIdStr)
 
 	result := ""
 	err = DB.View(func(tx *bolt.Tx) error {
@@ -184,7 +189,7 @@ func getTask(c *gin.Context) {
 		}
 
 		// FIXME: May need to unmarshall then remarshall because of id
-		result += string(b.Get(taskUUID.Bytes()))
+		result += string(b.Get(IdBytes(taskId)))
 
 		return nil
 	})
@@ -205,8 +210,8 @@ func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
 	return
 }
 
-func fetchTaskFromBucket(taskId *uuid.UUID, b *bolt.Bucket) (t tasks.Task, err error) {
-	result := b.Get(taskId.Bytes())
+func fetchTaskFromBucket(taskId *bson.ObjectId, b *bolt.Bucket) (t tasks.Task, err error) {
+	result := b.Get(IdBytes(*taskId))
 	err = json.Unmarshal(result, &t)
 	return
 }
@@ -216,14 +221,15 @@ func saveTaskToBucket(t tasks.Task, b *bolt.Bucket) (err error) {
 	if err != nil {
 		return err
 	}
-	err = b.Put(t.Id.Bytes(), []byte(js))
+
+	err = b.Put(IdBytes(t.Id), []byte(js))
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func modifyTaskInTransaction(taskId *uuid.UUID, f func(t *tasks.Task) error) error {
+func modifyTaskInTransaction(taskId *bson.ObjectId, f func(t *tasks.Task) error) error {
 	err := DB.Update(func(tx *bolt.Tx) error {
 		bucket, err := fetchTaskBucket(tx)
 		if err != nil {
@@ -268,15 +274,14 @@ func updateTaskState(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
-	var taskUUID uuid.UUID
 
-	taskId := c.Param("id")
-	taskUUID, err = uuid.NewString(taskId)
-	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+	taskIdStr := c.Param("id")
+	if !bson.IsObjectIdHex(taskIdStr) {
+		errMsg := fmt.Sprintf(`{"error": "'%s' is not not a valid objectid"}`, taskIdStr)
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
+	taskId := bson.ObjectIdHex(taskIdStr)
 
 	newState := c.Query("state")
 	typeDigest := c.Query("typeDigest")
@@ -294,7 +299,7 @@ func updateTaskState(c *gin.Context) {
 		return
 	}
 
-	err = modifyTaskInTransaction(&taskUUID, func(t *tasks.Task) error {
+	err = modifyTaskInTransaction(&taskId, func(t *tasks.Task) error {
 		// Perform some checks that this is a valid transition
 		switch newState {
 		case "START":
@@ -336,15 +341,14 @@ func updateTaskProgress(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
-	var taskUUID uuid.UUID
 
-	taskId := c.Param("id")
-	taskUUID, err = uuid.NewString(taskId)
-	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+	taskIdStr := c.Param("id")
+	if !bson.IsObjectIdHex(taskIdStr) {
+		errMsg := fmt.Sprintf(`{"error": "'%s' is not not a valid objectid"}`, taskIdStr)
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
+	taskId := bson.ObjectIdHex(taskIdStr)
 
 	progress := c.Query("progress")
 	iProgress, err := cast.ToIntE(progress)
@@ -354,7 +358,7 @@ func updateTaskProgress(c *gin.Context) {
 		return
 	}
 
-	err = modifyTaskInTransaction(&taskUUID, func(t *tasks.Task) error {
+	err = modifyTaskInTransaction(&taskId, func(t *tasks.Task) error {
 		t.Progress = iProgress
 		return nil
 	})
@@ -475,8 +479,12 @@ func postTask(c *gin.Context) {
 		if err != nil {
 			return err
 		}
-		b.Put(t.Id.Bytes(), jsn)
+
+		// FIXME: Not byte sortable...?
+		// https://github.com/streadway/simpleuuid/blob/master/uuid.go#L217
+		b.Put(IdBytes(t.Id), jsn)
 		return nil
+
 	}); err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
@@ -492,15 +500,14 @@ func removeTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
-	var taskUUID uuid.UUID
 
-	taskId := c.Param("id")
-	taskUUID, err = uuid.NewString(taskId)
-	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+	taskIdStr := c.Param("id")
+	if !bson.IsObjectIdHex(taskIdStr) {
+		errMsg := fmt.Sprintf(`{"error": "'%s' is not not a valid objectid"}`, taskIdStr)
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
+	taskId := bson.ObjectIdHex(taskIdStr)
 
 	err = DB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
@@ -508,7 +515,7 @@ func removeTask(c *gin.Context) {
 			errorString := "Database format error: Bucket 'tasks' does not exist."
 			return fmt.Errorf(errorString)
 		}
-		err := b.Delete(taskUUID.Bytes())
+		err := b.Delete(IdBytes(taskId))
 		return err
 	})
 	if err != nil {
@@ -519,12 +526,12 @@ func removeTask(c *gin.Context) {
 
 	// Remove result directory
 	// FIXME: Grab from json instead
-	err = os.RemoveAll(path.Join(viper.GetString("tasks.results_path"), taskId))
+	err = os.RemoveAll(path.Join(viper.GetString("tasks.results_path"), taskId.Hex()))
 	if err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
 
-	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId))
+	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
 }
