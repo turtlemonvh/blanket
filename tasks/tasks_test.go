@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"gopkg.in/mgo.v2/bson"
 	"testing"
 )
 
@@ -92,7 +93,7 @@ http://unix.stackexchange.com/questions/149730/how-do-command-line-tools-have-th
 */
 
 func TestStringTaskType(t *testing.T) {
-	id := "65c42a37-130a-4537-8804-1832419b90b3"
+	id := bson.ObjectIdHex("56ca11aa675a646b3f08c29e")
 	t1 := TaskType{
 		Id:            id,
 		CreatedTs:     1111111111,
@@ -102,7 +103,7 @@ func TestStringTaskType(t *testing.T) {
 		//ConfigPath:    fmt.Sprintf("tasks/%s/", id),
 	}
 
-	if t1.String() != "Animal (65c42a37-130a-4537-8804-1832419b90b3) [1111111111]" {
+	if t1.String() != "Animal (56ca11aa675a646b3f08c29e) [1111111111]" {
 		t.Fatalf("bad: %s %s", t1.String(), "Animal [1111111111]")
 	}
 }

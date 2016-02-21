@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
+	uuid "github.com/streadway/simpleuuid"
 	"github.com/turtlemonvh/blanket/tasks"
 	"io"
 	"io/ioutil"
@@ -40,6 +41,8 @@ func getTasks(c *gin.Context) {
 	taskType := c.Query("type")
 	taskState := c.Query("state")
 	reverseSort := c.Query("reverseSort")
+
+	// FIXME: Range queries
 
 	if limit < 1 {
 		limit = 10
@@ -159,17 +162,30 @@ func getTasks(c *gin.Context) {
 
 // Doesn't read task in; assumes value is valid JSON for speed
 func getTask(c *gin.Context) {
-	taskId := c.Param("id")
 	c.Header("Content-Type", "application/json")
 
+	var err error
+	var taskUUID uuid.UUID
+
+	taskId := c.Param("id")
+	taskUUID, err = uuid.NewString(taskId)
+	if err != nil {
+		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		c.String(http.StatusInternalServerError, errMsg)
+		return
+	}
+
 	result := ""
-	err := DB.View(func(tx *bolt.Tx) error {
+	err = DB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
 		if b == nil {
 			errorString := "Database format error: Bucket 'tasks' does not exist."
 			return fmt.Errorf(errorString)
 		}
-		result += string(b.Get([]byte(taskId)))
+
+		// FIXME: May need to unmarshall then remarshall because of id
+		result += string(b.Get(taskUUID.Bytes()))
+
 		return nil
 	})
 	if err != nil {
@@ -189,8 +205,8 @@ func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
 	return
 }
 
-func fetchTaskFromBucket(taskId string, b *bolt.Bucket) (t tasks.Task, err error) {
-	result := b.Get([]byte(taskId))
+func fetchTaskFromBucket(taskId *uuid.UUID, b *bolt.Bucket) (t tasks.Task, err error) {
+	result := b.Get(taskId.Bytes())
 	err = json.Unmarshal(result, &t)
 	return
 }
@@ -200,14 +216,14 @@ func saveTaskToBucket(t tasks.Task, b *bolt.Bucket) (err error) {
 	if err != nil {
 		return err
 	}
-	err = b.Put([]byte(t.Id), []byte(js))
+	err = b.Put(t.Id.Bytes(), []byte(js))
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func modifyTaskInTransaction(taskId string, f func(t *tasks.Task) error) error {
+func modifyTaskInTransaction(taskId *uuid.UUID, f func(t *tasks.Task) error) error {
 	err := DB.Update(func(tx *bolt.Tx) error {
 		bucket, err := fetchTaskBucket(tx)
 		if err != nil {
@@ -249,10 +265,21 @@ For other updates it is less crucial.
 
 */
 func updateTaskState(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+
+	var err error
+	var taskUUID uuid.UUID
+
 	taskId := c.Param("id")
+	taskUUID, err = uuid.NewString(taskId)
+	if err != nil {
+		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		c.String(http.StatusInternalServerError, errMsg)
+		return
+	}
+
 	newState := c.Query("state")
 	typeDigest := c.Query("typeDigest")
-	c.Header("Content-Type", "application/json")
 
 	validState := false
 	for _, state := range tasks.ValidTaskStates {
@@ -267,7 +294,7 @@ func updateTaskState(c *gin.Context) {
 		return
 	}
 
-	err := modifyTaskInTransaction(taskId, func(t *tasks.Task) error {
+	err = modifyTaskInTransaction(&taskUUID, func(t *tasks.Task) error {
 		// Perform some checks that this is a valid transition
 		switch newState {
 		case "START":
@@ -306,10 +333,20 @@ func updateTaskState(c *gin.Context) {
 }
 
 func updateTaskProgress(c *gin.Context) {
-	taskId := c.Param("id")
-	progress := c.Query("progress")
 	c.Header("Content-Type", "application/json")
 
+	var err error
+	var taskUUID uuid.UUID
+
+	taskId := c.Param("id")
+	taskUUID, err = uuid.NewString(taskId)
+	if err != nil {
+		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		c.String(http.StatusInternalServerError, errMsg)
+		return
+	}
+
+	progress := c.Query("progress")
 	iProgress, err := cast.ToIntE(progress)
 	if err != nil || iProgress > 100 || iProgress < 0 {
 		errMsg := fmt.Sprintf(`{"error": "The required parameter 'progress' is not a valid integer between 0 and 100."}`)
@@ -317,7 +354,7 @@ func updateTaskProgress(c *gin.Context) {
 		return
 	}
 
-	err = modifyTaskInTransaction(taskId, func(t *tasks.Task) error {
+	err = modifyTaskInTransaction(&taskUUID, func(t *tasks.Task) error {
 		t.Progress = iProgress
 		return nil
 	})
@@ -434,11 +471,11 @@ func postTask(c *gin.Context) {
 			errorString := "Database format error: Bucket 'tasks' does not exist."
 			return fmt.Errorf(errorString)
 		}
-		js, err := t.ToJSON()
+		jsn, err := json.Marshal(t)
 		if err != nil {
 			return err
 		}
-		b.Put([]byte(t.Id), []byte(js))
+		b.Put(t.Id.Bytes(), jsn)
 		return nil
 	}); err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
@@ -452,16 +489,26 @@ func postTask(c *gin.Context) {
 // Always returns 200, even if item doesn't exist
 // FIXME: Remove directory, don't remove if currently running unless ?force=True
 func removeTask(c *gin.Context) {
-	taskId := c.Param("id")
 	c.Header("Content-Type", "application/json")
 
-	err := DB.Update(func(tx *bolt.Tx) error {
+	var err error
+	var taskUUID uuid.UUID
+
+	taskId := c.Param("id")
+	taskUUID, err = uuid.NewString(taskId)
+	if err != nil {
+		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		c.String(http.StatusInternalServerError, errMsg)
+		return
+	}
+
+	err = DB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
 		if b == nil {
 			errorString := "Database format error: Bucket 'tasks' does not exist."
 			return fmt.Errorf(errorString)
 		}
-		err := b.Delete([]byte(taskId))
+		err := b.Delete(taskUUID.Bytes())
 		return err
 	})
 	if err != nil {

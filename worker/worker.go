@@ -260,7 +260,7 @@ func (c *WorkerConf) ProcessTasks() {
 				"err": err.Error(),
 			}).Errorf("could not find task; trying again in %f seconds", c.CheckInterval)
 			continue
-		} else if t.Id == "" {
+		} else if t.Id == nil {
 			log.Debugf("found no matching tasks; trying again in %f seconds", c.CheckInterval)
 			continue
 		}

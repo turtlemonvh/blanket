@@ -151,7 +151,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 			"taskType":    taskType,
 		}).Info("Unexpected error getting id for task")
 	}
-	taskId := taskIdObj.String()
+	taskId := taskIdObj
 
 	// Merge environment variables
 	// FIXME: Take any files and copy them into directory
@@ -179,7 +179,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 		LastUpdatedTs: time.Now().Unix(),
 		TypeId:        t.Config.GetString("name"),
 		TypeDigest:    "",
-		ResultDir:     path.Join(viper.GetString("tasks.results_path"), taskId),
+		ResultDir:     path.Join(viper.GetString("tasks.results_path"), taskId.String()),
 		State:         "WAIT",
 		Progress:      0,
 		ExecEnv:       mixedEnv,
@@ -190,7 +190,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 var ValidTaskStates = []string{"WAIT", "START", "RUNNING", "ERROR", "SUCCESS"}
 
 type Task struct {
-	Id            string            `json:"id"`            // uuid
+	Id            uuid.UUID         `json:"id"`            // uuid
 	CreatedTs     int64             `json:"createdTs"`     // when it was first added to the database
 	StartedTs     int64             `json:"startedTs"`     // when it started running
 	LastUpdatedTs int64             `json:"lastUpdatedTs"` // last time any information changed
