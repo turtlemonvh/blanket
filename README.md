@@ -2,20 +2,10 @@
 
 A RESTy wrapper for services.
 
-## Running
+## Quick Start
 
     go build .
     ./blanket -h
-
-Running tests
-
-    # For just a module
-    # http://crosbymichael.com/go-helpful-commands.html
-    go test ./tasks
-
-    # For everything
-    go test github.com/turtlemonvh/blanket/...
-
 
 View tasks
 
@@ -41,7 +31,7 @@ Add a task and upload some data files with it. Files will be placed at the root 
 
 Add lots of tasks
 
-    while true; do curl -X POST localhost:8773/task/ -F data=@data.json -F blanket.json=@blanket.json; sleep 1; done
+    while true; curl -X POST localhost:8773/task/ -F data=@data.json -F blanket.json=@blanket.json; echo "$(date)"; sleep 5; done
 
 Delete a task
 
@@ -56,46 +46,50 @@ Run worker with certain capabilities
 
     ./blanket worker -t unix,bash,python,python2,python27
 
-====================
+Running tests
 
-Docs
+    # For just a module
+    # http://crosbymichael.com/go-helpful-commands.html
+    go test ./tasks
 
-* https://golang.org/pkg/testing/
-* https://golang.org/cmd/go/#hdr-Test_packages
-* https://splice.com/blog/lesser-known-features-go-test/
-    * can run in parallel
-* https://golang.org/pkg/net/http/httptest/
-* https://talks.golang.org/2014/testing.slide#1
-* https://groups.google.com/forum/#!topic/golang-nuts/DARY7HY-pbY
-    * testing http routes
-* packages
-    * https://github.com/onsi/ginkgo
-    * https://github.com/stretchr/testify
+    # For everything
+    go test github.com/turtlemonvh/blanket/...
+
 
 ## API
 
+```
 blanket server
+```
 
 - launches server
 - option to run in unix socket instead of 0.0.0.0 or 127.0.0.1 for security
 
+```
 blanket worker -t <tags> -n <number>
+```
 
 - launches n workers with capabilities defined by (optional) comma separated tags
 - also command to kill workers
 
+```
 blanket task run <task> -d{<data>}
+```
 
 - run a task of the specified type, passing in a config file to parameterize
 - returns a task id that can be used to track status, just like `docker run -d`
 - '-d' works just like curl option; can be a file or inline json
 - does basic data processing at this step so it can tell whether required fields are missing
 
+```
 blanket task stop <task> <task_id>
+```
 
 - like `docker stop`
 
+```
 blanket ps
+```
 
 - list tasks that are running, are queued to run, or have recently run + some basic stats (like top or docker ps)
 - `-q` to list just ids
@@ -108,81 +102,25 @@ blanket ps
     - blanket ls workers
         - list by capability
 
+```
 blanket rm
+```
 
-- change to
+- FIXME: change to
     - blanket rm task <id>
     - blanket rm worker <id>
 
 
->>> Others
-
-- list tasks
-- list running jobs
-- show curses interface for monitoring progress (top)
-- list task types
-- add/remove task
-
-
-## Data Model
-
-- Maybe drive with a TOML file configuration that is populated by variables?
-- Distinguish between types and instances
-    - users should be able to add new types AND new instances of a type at runtime
-- Write tests to save to database and reload from database
-- Write interfaces for each type and base implementations
-
-
-Queue
-
-- each task is tagged
-- database backed red-black tree
-    - https://en.wikipedia.org/wiki/Priority_queue#Usual_implementation
-    - http://stackoverflow.com/questions/6147242/heap-vs-binary-search-tree-bst
-        - not a heap, since will need to scan the first few items to find one that can be processed
-    - https://godoc.org/github.com/erriapo/redblacktree
-    - https://github.com/petar/GoLLRB
-        - https://github.com/HuKeping/rbtree
-- a consumer asks for the highest rated item with a tag it can consume
-- need a simple heap implementation on top of boltdb
-    - just add an object and maintain a reference to its priority in the heap
-    - use a single bucket for all tasks in the queue
-    - keep the heap in memory
-        - a quick rescan of all the keys rebuilds the heap
-        - all you keep on disk is the (id, priority, tags)
-- may want to add fair scheduling later
-    - so older / longer / lower priority tasks are not starved, but shorted tasks are escalated
-    - can write a custom priority algorithm and find place in heap via binary comparisons
-- option to kill jobs automatically if they go over their time estimates
-- schedule based on
-    - priority
-    - time in queue
-    - job duration
-- default
-    - lower # points is better
-    - duration
-        - 1 pt per minute (min 1)
-    - weight
-        - divide duration in minutes by X (min 1)
-    - time added
-        - add # minutes since the epoch when added (round down)
-        - so eventually very old tasks will be worth more
-        - show this # minutes in queue in the UI
-- https://github.com/boltdb/bolt#iterating-over-keys
-    - make the key the priority so scanning over items is super fast and it is stored in sorted order
-    - http://stackoverflow.com/questions/16888357/convert-an-integer-to-a-byte-array
-    - just want to take an integer value and use that as the key
-    - adding and removing may be slow, but lots of sequential reads can happen at the same time
-
-
 ## To Do
 
-Short List
+### Short List
 
 > See: https://trello.com/b/bOWTSxbO/blanket-dev
 
+
+- fix auto-refresh closing "add new" forms
 - show task type description when launching a new task
-- pulse "running" tag for running tasks to make them more obvious
+
 
 
 - HTTP interface
@@ -212,6 +150,7 @@ Short List
     - configurable # restarts
         - # times allowed, whether they go in new directories
 - return # tasks found in response to query
+    - make this an options request; we don't want this to slow down ordinary requests
     - if >500, just say >500
     - pagination on HTML interface
         - http://getbootstrap.com/components/#pagination
@@ -222,18 +161,74 @@ Short List
         - build js (gulp build)
         - run bindata-assets command
         - then build
-- time sortable ID doesn't seen to be time sortable...?
-    - we're using this: https://github.com/streadway/simpleuuid/blob/master/uuid.go
-    - doesn't seem to be sortable
 - make names of fields on objects consistent
     - esp. task types vs tasks
 - allow user to view and edit server configuration on UI
     - may need to allow them to trigger a restart
 - allow user to back up database from UI
+- workers
+    - assign a unique id to make tracking logfiles for past workers easier
+    - name logfile based on time of day
+    - allow pausing
+    - view worker status via ps / ls
+        - keep list of workers in database so have reference to pids
+    - send worker logs to stdout addition to sending to a file
+        - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
+- make some good examples
+- put api calls into sub directories
+- allow it to run without a configuration file
+    - make sure it has sane defaults
+    - can add an installer later (esp. for windows) or package (for linux) that sets up config for you later
 
 
-Log cleanup
 
+### Larger Efforts
+
+#### Testing
+
+- https://www.golang-book.com/books/intro/12
+- https://golang.org/pkg/net/http/httptest/
+- https://github.com/stretchr/testify
+- esp. for glob copy method
+    - move this to its own thing and open source it
+    - include expanduser function (like in python)
+        - right now we just replace `~`
+        - we should instead replace `^~/` or `/~/` so we don't replace file names with ~ in them
+- fuzz testing
+    - https://github.com/dvyukov/go-fuzz
+- https://golang.org/pkg/testing/
+- https://golang.org/cmd/go/#hdr-Test_packages
+- https://splice.com/blog/lesser-known-features-go-test/
+    - can run in parallel
+- https://golang.org/pkg/net/http/httptest/
+- https://talks.golang.org/2014/testing.slide#1
+- https://groups.google.com/forum/#!topic/golang-nuts/DARY7HY-pbY
+    - testing http routes
+- packages
+    - https://github.com/onsi/ginkgo
+    - https://github.com/stretchr/testify
+
+#### Documentation
+
+- set up hugo to generate api docs
+    - https://gohugo.io/overview/introduction/
+    - render into a single page
+        - https://gohugo.io/extras/toc/
+
+#### Log cleanup
+
+- stream logfiles (for viewing in browser); both worker and process logs
+    - both last few hundred lines in a stream and full download
+    - https://godoc.org/github.com/hpcloud/tail
+    - http://stackoverflow.com/questions/19292113/not-buffered-http-responsewritter-in-golang
+    - https://github.com/julienschmidt/sse
+    - https://godoc.org/github.com/julienschmidt/sse#Streamer.SendString
+    - check how supervisord web does it
+        - https://github.com/Supervisor/supervisor/blob/master/supervisor/ui/tail.html
+        - https://github.com/Supervisor/supervisor/blob/master/supervisor/http.py#L140
+    - python
+        - https://gist.github.com/fiorix/1920022
+        - http://stackoverflow.com/questions/25166770/angularjs-with-server-sent-events
 - configurable logging verbosity
     - these are things that every task must provide, or it will be rejected
 - log to multiple locations
@@ -250,12 +245,12 @@ Log cleanup
 - allow user to specify where worker logs go (directory)
 
 
-Task Discovery
+#### Task Discovery
 
 - allow the user to names more places to look for tasks
 - look for anything that matches a certain pattern and keep a reference to it in the database as a available task type
 
-Design
+#### Design
 
 - use card bordered areas to give everything a cleaner more organized look
 - like Ionic, use divs with a slight shadow that separates them from other content
@@ -263,66 +258,7 @@ Design
     - like a blanket
     - solarized dark would be good
 
-- workers
-    - assign a unique id to make tracking logfiles for past workers easier
-    - name logfile based on time of day
-    - allow pausing
-    - view worker status via ps / ls
-        - keep list of workers in database so have reference to pids
-    - send worker logs to stdout addition to sending to a file
-        - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
-- other UI
-    - add primitive main dashboard with recent activity
-    - add ability to reconfigure and restart
-    - add ability to add new task types
-    - allow editing task types on HTTP interface
-- Option to leave task creation request open until task completes
-    - also adds it with super high priority so it is picked up fast
-    - like this: https://github.com/celery/celery/issues/2275#issuecomment-56828471
-- allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
-- stream logfiles (for viewing in browser); both worker and process logs
-    - both last few hundred lines in a stream and full download
-    - https://godoc.org/github.com/hpcloud/tail
-    - http://stackoverflow.com/questions/19292113/not-buffered-http-responsewritter-in-golang
-    - https://github.com/julienschmidt/sse
-    - https://godoc.org/github.com/julienschmidt/sse#Streamer.SendString
-    - check how supervisord web does it
-        - https://github.com/Supervisor/supervisor/blob/master/supervisor/ui/tail.html
-        - https://github.com/Supervisor/supervisor/blob/master/supervisor/http.py#L140
-    - python
-        - https://gist.github.com/fiorix/1920022
-        - http://stackoverflow.com/questions/25166770/angularjs-with-server-sent-events
-- make some good examples
-- write some tests
-    - https://golang.org/pkg/net/http/httptest/
-    - esp. for glob copy method
-        - move this to its own thing and open source it
-        - include expanduser function (like in python)
-            - right now we just replace `~`
-            - we should instead replace `^~/` or `/~/` so we don't replace file names with ~ in them
-- set up hugo to generate api docs
-    - https://gohugo.io/overview/introduction/
-    - render into a single page
-        - https://gohugo.io/extras/toc/
-- put api calls into sub directories
 
-
-Look over
-
-- https://github.com/ajvb/kala
-    - similar
-    - time based task scheduler
-- https://github.com/mesos/chronos
-    - executes sh scripts
-- http://docs.celeryproject.org/en/latest/reference/
-    - celery api
-- https://github.com/RichardKnop/machinery
-    - celery replica in golang
-- https://github.com/glycerine/goq
-    - sungridengine replica in golang with encryption
-- https://github.com/hammerlab/ketrew
-    - workflow engine able to run arbitrary tasks
-    - plus UI
 
 MVP
 
@@ -333,19 +269,17 @@ MVP
 - allow lots of parameters
 - allow launching via http, basic ui, or command line
 
+
 Task Execution workflow
 
 - user sends POST request to /tasks/<task type>/
 - creates an item in the database with a UUID, and returns UUID to user
     - add_time is recorded in database
 - adds task to queue(s)
-
-- add extra config options for env vrs
+- add extra config options for env vars
     - pass validation regex
     - pass a small list of types
 - task is picked out of queue
-- worker wrapper process is forked and started in a new directory
-    - /opt/blanket/scratch/task/<task type>/<task id>
 - hash of config directory for task type is taken
     - new record for that task type is added to db
     - can exclude files with a .blanketignore file
@@ -383,156 +317,25 @@ Important details
     * It's just a bunch of json and a few tar.gzs for the directory contents
 
 
-
-Task States
-
-
-Things defined in task config file
-
-- logfiles or stdout/stderr for process
-- default environment variables
-- bash command as a string
-- any checks to perform in the environment
-    - e.g. make sure an executable exists, is at a given value; credential files exist
-    - these are just bash scripts too
-- files to ignore when
-    - taking directory hash (versioning) : .blanketignore
-    - evaluating files as templates
-    - copying input files to scratch directory
-- any input files posted
-    - we encourage the user to use substitution to fill in templates, but can accept any type of file as part of the input
-
-
-- base task is a bash task
-    - each task has its own TOML file
-    - TOML files can point to multiple directories
-        - each directory section can specify options for what files to copy over
-    - also include python task type as a plugin
-        - plugins are just directories dropped in /opt/blanket/plugins/
-        - the python executor just defines a base class that has hooks for updating and other fanciness
-    - also include a vbs type as a plugin
-        - vbs: https://technet.microsoft.com/en-us/scriptcenter/dd940112.aspx
-        - more vbs: http://www.makeuseof.com/tag/batch-windows-scripting-host-tutorial/
-    - most base types should be able to perform basic actions just with a config file
-    - takes a template, fills in environment variables (similar to envsubstr)
-    - can override any env variables per task
-    - entire task state (env) is saved in a json file + hash of directory and date of first run as a version
-        - versions are saved automatically whenever a task is run if the hash has changed
-        - task id information is available in env variables
-    - stdout and stderr are saved in 2 files by default, can be combined
-- option to isolate each task
-    - changes into a scratch directory that is namespaced per task, like on bamboo
-    - still allows access to OS functions
-- interface is json/REST based to start
-- the UI is optional; just need to download the required files into /opt/blanket/ui/
-    - these are served by default if available, otherwise 404s
-- option to run with `?sync` command
-    - holds open the connection until task returns so you don't have to poll for task state
-- for plugins
-    - e.g. database driver
-    - allow them to be specified in base TOML config
-    - start up and communicate over stdin/stdout
-    - in go (or maybe even python, since just doing stdin/stdout, not direct RPC)
-
-
-Workers
-
-- script to launch workers of a given type
-    - option to run as daemon
-    - windows daemon is not supported
-        - https://github.com/takama/daemon/blob/master/daemon_windows.go
-    - may just want to reach back around and call yourself
-        - http://stackoverflow.com/questions/4850489/get-the-current-process-executable-name-in-go
-        - http://stackoverflow.com/questions/12090170/go-find-the-path-to-the-executable
-        - https://github.com/kardianos/osext
-- make sure can remove them with main script
-    - should be able to list workers and delete them by tag, pid, or all of them
-- log their information (tags, status updates) to a file
-    - blanket_worker.<pid>.log
-- launch as daemon
-    - https://groups.google.com/forum/#!topic/golang-nuts/shST-SDqIp4
-    - see Evernote notebook: https://www.evernote.com/shard/s98/nl/2147483647/d1949bb5-cdf1-4422-8773-862276c6bd36/
-
-Helper scripts
-
-- Script to load fake data into database
-- Directory for scripts
-    - https://github.com/hashicorp/consul/blob/master/commands.go
-        - directs to scripts
-    - https://github.com/hashicorp/consul/blob/master/command/event.go
-        - actual script
-- Add tests
-    - see test for just about every type here: https://github.com/hashicorp/consul/tree/master/consul
-
-
-https://github.com/hashicorp/consul/blob/master/commands.go
-- a generic factor to create a channel to listen to shutdown signals for all commands of relevant type
-- the most complicated "agent" command is in its own folder
-
-https://github.com/hashicorp/consul/blob/master/main.go
-- starts up, `commands` file creates "Commands" object
-- starts with all logs being discarded
-
-## UI
-
-- show a browsable file system viewer per result task
-    - can go into folders, list files, download individual files, etc.
-    - option to render files inline if possible
-    - just need a simple js file system tree
-- list tasks by state
-- list tasks by priority
-- list workers
-- manage workers
-    - stop start, add new ones
-- security
-    - SSL and basic auth
-    - basic auth creds are in config file
-    - uses Go's build in SSL capabilities to configure itself; can use your key files or make its own
-- check out iron.io for data model and UI
-    - http://www.iron.io/
-    - https://www.google.com/search?q=iron.io+dashboard&source=lnms&tbm=isch
-
-## REST API
-
-- POST new task of a given type
-    - get back id
-- GET tasks
-    - with tags
-        - find the highest priority task based off fair scheduling
-    - want to show list of upcoming based on workers available
-        - also show if any have no qualified workers
-
-workers
-- e.g. 
-    - http://flower.readthedocs.org/en/latest/api.html
-    - https://github.com/ajvb/kala#overview-of-routes
-- GET
-- DELETE (stop)
-- POST (add a new one with certain tags)
-
-
-- task type options
-- option to upload files as part of task execution
-    - params
-        - env variables; also available in templates
-        - files
-        - settings (override values on a per task basis)
-
-
-- Task states; move to a different bucket
-    - QUEUED
-    - STARTING
-    - RUNNING
-    - SUCCESS/ERROR
-- option to requeue
-- mark each task with a TTL and a start time
-    - if not finished, retry according to retry policy
-
-
 ## Extra
 
+- security
+    - SSL
+    - HTTP basic auth
+- other UI
+    - add primitive main dashboard with recent activity
+    - add ability to reconfigure and restart
+    - add ability to add new task types
+    - allow editing task types on HTTP interface
+- Option to leave task creation request open until task completes
+    - also adds it with super high priority so it is picked up fast
+    - like this: https://github.com/celery/celery/issues/2275#issuecomment-56828471
+- allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
+- pulse "running" tag for running tasks to make them more obvious
+- godeps to lock in dependencies and avoid weird changes
 - option to run with tls
 - monitoring
+    - https://github.com/shirou/gopsutil
     - total CPU and memory usage of everything
     - total disk space of all results
 - option to do a clean reload
@@ -645,4 +448,33 @@ workers
         - can even add a command to switch master over to a different node
         - can lock server, database contents out over HTTP, switch the master to the new node, and start back up
         - if a node is not the master, all it does it forward requests onto the master node
+- very cool
+    - notifications on OSX
+        - https://github.com/deckarep/gosx-notifier
+
+## Benchmarking
+
+- check out iron.io for data model and UI
+    - http://www.iron.io/
+    - https://www.google.com/search?q=iron.io+dashboard&source=lnms&tbm=isch
+- more control over workers
+    - maybe they listen on a port too?
+    - http://flower.readthedocs.org/en/latest/api.html
+    - https://github.com/ajvb/kala#overview-of-routes
+- https://github.com/albrow/jobs
+    - A persistent and flexible background jobs library for go.
+- https://github.com/ajvb/kala
+    - similar
+    - time based task scheduler
+- https://github.com/mesos/chronos
+    - executes sh scripts
+- http://docs.celeryproject.org/en/latest/reference/
+    - celery api
+- https://github.com/RichardKnop/machinery
+    - celery replica in golang
+- https://github.com/glycerine/goq
+    - sungridengine replica in golang with encryption
+- https://github.com/hammerlab/ketrew
+    - workflow engine able to run arbitrary tasks
+    - plus UI
 
