@@ -8,16 +8,14 @@ import (
 	"github.com/kardianos/osext"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib"
 	"github.com/turtlemonvh/blanket/tasks"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
-	"os/user"
 	"path"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"text/template"
@@ -33,6 +31,7 @@ type WorkerConf struct {
 	Stopping      bool     `json:"stopping"`
 	CheckInterval float64  `json:"checkInterval"`
 	StartedTs     int64    `json:"startedTs"`
+	fileCopier    lib.FileCopier
 }
 
 // Sends sigterm
@@ -129,6 +128,10 @@ func (c *WorkerConf) Run() error {
 
 		c.Pid = os.Getpid()
 		c.ParsedTags = strings.Split(c.Tags, ",")
+
+		c.fileCopier = lib.FileCopier{
+			BasePath: viper.GetString("tasks.types_path"),
+		}
 
 		err = c.SetLogfileName()
 		if err != nil {
@@ -339,7 +342,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	// FIXME: Don't just use bash; use python, zsh, etc configured via viper
 	cmd := exec.Command("bash", "-c", cmdString.String())
 	var fileCloser func()
-	err, fileCloser = SetupExecutionDirectory(t, &tt, cmd)
+	err, fileCloser = c.SetupExecutionDirectory(t, &tt, cmd)
 	if err != nil {
 		return err
 	}
@@ -401,7 +404,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	return err
 }
 
-func SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) (error, func()) {
+func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) (error, func()) {
 	// Set up output files and configure the task to run in the correct location
 	err := os.MkdirAll(t.ResultDir, os.ModePerm)
 	if err != nil {
@@ -439,7 +442,7 @@ func SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) (
 	}
 
 	filesToInclude := toSliceStringSlice(tt.Config.Get("files_to_include"))
-	err = CopyFiles(filesToInclude, t.ResultDir)
+	err = c.fileCopier.CopyFiles(filesToInclude, t.ResultDir)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err": err.Error(),
@@ -448,111 +451,6 @@ func SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) (
 	}
 
 	return err, fileCloser
-}
-
-func CopyFiles(files [][]string, resultDir string) error {
-	for icFile, cFile := range files {
-		if len(cFile) < 1 {
-			return fmt.Errorf("The array of file information for item %d in the list 'files_to_include' must have at least 1 component", icFile)
-		}
-		src := cFile[0]
-
-		// Dest path is always relative
-		dest := resultDir
-		if len(cFile) > 1 {
-			dest = path.Join(resultDir, cFile[1])
-
-			// Create it if it doesn't exist
-			err := os.MkdirAll(resultDir, os.ModePerm)
-			if err != nil {
-				return err
-			}
-		}
-
-		// Clean up / source path
-		// FIXME: May want to do this a different way by calling to the shell and running `cd <path>; pwd -P`
-		// FIXME: Path expansion this way is wrong; '~' is different in '~/' and '/~a/'
-		usr, err := user.Current()
-		if err != nil {
-			return err
-		}
-		src = strings.Replace(src, "~", usr.HomeDir, 1)
-		if !filepath.IsAbs(src) {
-			src = path.Join(viper.GetString("tasks.types_path"), src)
-		}
-		log.WithFields(log.Fields{"src": src, "dest": dest}).Info("Copying files from src to dest")
-
-		var filesToCopy []string
-		matches, err := filepath.Glob(src)
-		if err != nil {
-			return err
-		}
-		for _, fileMatch := range matches {
-			// Check to make sure it is a file
-			fileInfo, err := os.Stat(fileMatch)
-			if err != nil {
-				return err
-			}
-
-			if !fileInfo.IsDir() {
-				filesToCopy = append(filesToCopy, fileMatch)
-			} else {
-				// Walk directory tree
-				err = filepath.Walk(fileMatch, func(path string, f os.FileInfo, err error) error {
-					if !f.IsDir() {
-						filesToCopy = append(filesToCopy, path)
-					}
-					return nil
-				})
-				if err != nil {
-					return err
-				}
-			}
-
-		}
-
-		absSrc, _ := filepath.Abs(src)
-		log.WithFields(log.Fields{
-			"matches":     matches,
-			"filesToCopy": filesToCopy,
-			"src":         src,
-			"absSrc":      absSrc,
-		}).Debug("Stats before copying")
-
-		// Actual copy function
-		for _, fileToCopy := range filesToCopy {
-			s, err := os.Open(fileToCopy)
-			if err != nil {
-				return err
-			}
-			defer s.Close()
-
-			destFilepath := path.Join(dest, path.Base(fileToCopy))
-
-			// Create path it if it doesn't exist
-			err = os.MkdirAll(filepath.Dir(destFilepath), os.ModePerm)
-			if err != nil {
-				return err
-			}
-
-			log.WithFields(log.Fields{
-				"src":  fileToCopy,
-				"dest": destFilepath,
-			}).Debug("Copying a single file from src to dest")
-
-			d, err := os.Create(destFilepath)
-			defer d.Close()
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(d, s); err != nil {
-				return err
-			}
-			d.Close()
-		}
-	}
-
-	return nil
 }
 
 func (c *WorkerConf) TransitionTaskState(t *tasks.Task, state string, extraVars map[string]string) error {

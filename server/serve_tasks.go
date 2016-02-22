@@ -19,10 +19,28 @@ import (
 	"time"
 )
 
-// Valid objectids don't have errors
+// Gets the full byte representation of the objectid
+// Errors are ignored because just casting a string object to a byte slice will never result in an error
 func IdBytes(id bson.ObjectId) []byte {
 	bts, _ := id.MarshalJSON()
 	return bts
+}
+
+// Either gets the task id or returns an error
+// Will also set the response for the request if there was a problem
+func getTaskId(c *gin.Context) (bson.ObjectId, error) {
+	var err error
+	var tid bson.ObjectId
+
+	taskIdStr := c.Param("id")
+	if !bson.IsObjectIdHex(taskIdStr) {
+		err = fmt.Errorf("'%s' is not not a valid objectid", taskIdStr)
+		c.String(http.StatusInternalServerError, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+	} else {
+		tid = bson.ObjectIdHex(taskIdStr)
+	}
+
+	return tid, err
 }
 
 func getTasks(c *gin.Context) {
@@ -171,14 +189,12 @@ func getTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
+	var taskId bson.ObjectId
 
-	taskIdStr := c.Param("id")
-	if !bson.IsObjectIdHex(taskIdStr) {
-		errMsg := fmt.Sprintf(`{"error": "'%s' is not not a valid objectid"}`, taskIdStr)
-		c.String(http.StatusInternalServerError, errMsg)
+	taskId, err = getTaskId(c)
+	if err != nil {
 		return
 	}
-	taskId := bson.ObjectIdHex(taskIdStr)
 
 	result := ""
 	err = DB.View(func(tx *bolt.Tx) error {
@@ -187,10 +203,7 @@ func getTask(c *gin.Context) {
 			errorString := "Database format error: Bucket 'tasks' does not exist."
 			return fmt.Errorf(errorString)
 		}
-
-		// FIXME: May need to unmarshall then remarshall because of id
 		result += string(b.Get(IdBytes(taskId)))
-
 		return nil
 	})
 	if err != nil {
@@ -274,14 +287,12 @@ func updateTaskState(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
+	var taskId bson.ObjectId
 
-	taskIdStr := c.Param("id")
-	if !bson.IsObjectIdHex(taskIdStr) {
-		errMsg := fmt.Sprintf(`{"error": "'%s' is not not a valid objectid"}`, taskIdStr)
-		c.String(http.StatusInternalServerError, errMsg)
+	taskId, err = getTaskId(c)
+	if err != nil {
 		return
 	}
-	taskId := bson.ObjectIdHex(taskIdStr)
 
 	newState := c.Query("state")
 	typeDigest := c.Query("typeDigest")
@@ -341,14 +352,12 @@ func updateTaskProgress(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
+	var taskId bson.ObjectId
 
-	taskIdStr := c.Param("id")
-	if !bson.IsObjectIdHex(taskIdStr) {
-		errMsg := fmt.Sprintf(`{"error": "'%s' is not not a valid objectid"}`, taskIdStr)
-		c.String(http.StatusInternalServerError, errMsg)
+	taskId, err = getTaskId(c)
+	if err != nil {
 		return
 	}
-	taskId := bson.ObjectIdHex(taskIdStr)
 
 	progress := c.Query("progress")
 	iProgress, err := cast.ToIntE(progress)
@@ -479,9 +488,6 @@ func postTask(c *gin.Context) {
 		if err != nil {
 			return err
 		}
-
-		// FIXME: Not byte sortable...?
-		// https://github.com/streadway/simpleuuid/blob/master/uuid.go#L217
 		b.Put(IdBytes(t.Id), jsn)
 		return nil
 
@@ -495,19 +501,17 @@ func postTask(c *gin.Context) {
 }
 
 // Always returns 200, even if item doesn't exist
-// FIXME: Remove directory, don't remove if currently running unless ?force=True
+// FIXME: Don't remove task if currently running unless ?force=True
 func removeTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
+	var taskId bson.ObjectId
 
-	taskIdStr := c.Param("id")
-	if !bson.IsObjectIdHex(taskIdStr) {
-		errMsg := fmt.Sprintf(`{"error": "'%s' is not not a valid objectid"}`, taskIdStr)
-		c.String(http.StatusInternalServerError, errMsg)
+	taskId, err = getTaskId(c)
+	if err != nil {
 		return
 	}
-	taskId := bson.ObjectIdHex(taskIdStr)
 
 	err = DB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
