@@ -58,7 +58,7 @@
                 <th>Stop</th>
             </tr> 
         </thead>
-        <tbody ng-repeat="worker in data.workers">
+        <tbody ng-repeat="worker in data.workers track by worker.pid">
             <tr>
                 <th scope="row">{{ ($index+1) }}</th>
                 <td><a ng-href="{{baseUrl}}/worker/{{worker.pid}}">{{ worker.pid }}</a></td>
