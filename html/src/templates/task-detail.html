@@ -12,7 +12,7 @@
             <div class="form-group">
                 <div class="checkbox">
                     <label>
-                        <input type="checkbox" ng-model="pinToBottom"> Pin to bottom?
+                        <input type="checkbox" ng-model="pinToBottom" ng-change="setScroll()"> Pin to bottom?
                     </label>
                 </div>
             </div>
@@ -20,7 +20,7 @@
     </div>
 
     <div class="row">
-        <pre><span ng-repeat="item in events">{{ item }}<br/></span></pre>
+        <pre><span ng-repeat="item in events">{{ item.data }}<br/></span></pre>
     </div>
 
     <!-- Controls -->
@@ -29,7 +29,7 @@
             <div class="form-group">
                 <div class="checkbox">
                     <label>
-                        <input type="checkbox" ng-model="pinToBottom"> Pin to bottom?
+                        <input type="checkbox" ng-model="pinToBottom" ng-change="setScroll()"> Pin to bottom?
                     </label>
                 </div>
             </div>

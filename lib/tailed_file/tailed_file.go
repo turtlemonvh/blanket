@@ -11,7 +11,7 @@ import (
 
 const (
 	// How many bytes to back up when loading file
-	DefaultFileOffset = 1000
+	DefaultFileOffset = 5000
 	DefaultLinesKept  = 100
 )
 

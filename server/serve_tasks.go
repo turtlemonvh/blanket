@@ -6,6 +6,7 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/boltdb/bolt"
 	"github.com/gin-gonic/gin"
+	"github.com/manucorporat/sse"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -573,10 +575,16 @@ func streamTaskLog(c *gin.Context) {
 	}
 	defer sub.Stop()
 
+	lineno := 1
 	c.Stream(func(w io.Writer) bool {
 		// Step function should return a boolean saying whether to stay open
 		// https://github.com/gin-gonic/gin/blob/master/context.go#L465
-		c.SSEvent("message", <-sub.NewLines)
+		c.Render(-1, sse.Event{
+			Id:    strconv.Itoa(lineno),
+			Event: "message",
+			Data:  <-sub.NewLines,
+		})
+		lineno++
 		return true
 	})
 }

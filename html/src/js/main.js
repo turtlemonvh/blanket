@@ -278,30 +278,36 @@ angular.module('blanketApp')
             return task.hasResults ? "Delete" : "Stop";
         }
     }])
-    .controller('TaskDetailCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', '_', '$stateParams', '$window', 
-        function($log, $http, $interval, $scope, _, TasksStore, baseUrl, _, $stateParams, $window) {
+    .controller('TaskDetailCtl', ['$log', '$http', '$timeout', '$scope', '_', 'TasksStore', 'baseUrl', '_', '$stateParams', '$window',
+        function($log, $http, $timeout, $scope, _, TasksStore, baseUrl, _, $stateParams, $window) {
         $scope.pinToBottom = false;
 
         $scope.events = [];
         $scope.taskId = $stateParams.taskId;
         $scope.jsonURL = baseUrl + '/task/' + $scope.taskId
 
+        // Maybe: http://angular-ui.github.io/ui-router/site/#/api/ui.router.state.$uiViewScroll
+        $scope.setScroll = function() {
+            if ($scope.pinToBottom) {
+                $log.log("Scrolling to botom", $scope.pinToBottom, document.body.scrollHeight)
+                $timeout(function() {
+                    $window.scrollTo(0, document.body.scrollHeight);
+                }, 0);
+            }
+        };
+
         var source = new EventSource(baseUrl + '/task/' + $scope.taskId + '/log');
         source.onmessage = function (event) {
-            $scope.events.push(event.data);
+            $scope.events.push(event);
             if ($scope.events.length > 100) {
                 $scope.events.splice(0, 10);
             }
             $scope.$apply();
-
-            // Maybe: http://angular-ui.github.io/ui-router/site/#/api/ui.router.state.$uiViewScroll
-            if ($scope.pinToBottom) {
-                $window.scrollTo(0, document.body.scrollHeight);
-            }
+            $scope.setScroll();
         }
 
         $scope.$on("$destroy", function(){
-            $log.log("Heard destroy event, closing for id", $scope.taskId);
+            $log.log("Destroying scope; closing eventlistener for task log", $scope.taskId);
             source.close();
         })
     }])
