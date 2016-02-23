@@ -268,7 +268,6 @@ angular.module('blanketApp')
                 self.newTask.environment.splice(index, 1);
             }
 
-
             // Initialize
             self.changedTaskType();
 
@@ -295,7 +294,7 @@ angular.module('blanketApp')
             }
             $scope.$apply();
 
-            // FIXME: Better?
+            // FIXME: Cancel SSEs and stop resetting when view changes
             if ($scope.pinToBottom) {
                 $window.scrollTo(0, document.body.scrollHeight);
             }
