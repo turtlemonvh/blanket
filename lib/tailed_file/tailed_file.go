@@ -1,10 +1,12 @@
 package tailed_file
 
 import (
+	log "github.com/Sirupsen/logrus"
 	"github.com/hpcloud/tail"
 	"math/rand"
 	"os"
 	"sync"
+	_ "time"
 )
 
 const (
@@ -14,11 +16,11 @@ const (
 )
 
 var (
-	tailedFiles *TailedFiles
+	defaultTfc *TailedFileCollection
 )
 
-type TailedFiles struct {
-	files map[string]*TailedFile
+type TailedFileCollection struct {
+	fileList map[string]*TailedFile
 	sync.Mutex
 }
 
@@ -26,94 +28,128 @@ type TailedFileSubscriber struct {
 	NewLines   chan string
 	IsCaughtUp bool
 	Id         int64
+	TailedFile *TailedFile
 }
 
+// Use the mutex to guard access to FileOffset, Subscribers
 type TailedFile struct {
-	Filepath    string
-	PastLines   []string
-	FileOffset  int64
-	Tailer      *tail.Tail
-	Subscribers map[int64]*TailedFileSubscriber
-	sync.Mutex  // guards FileOffset
+	Filepath       string
+	PastLines      []string
+	FileOffset     int64
+	Tailer         *tail.Tail
+	Subscribers    map[int64]*TailedFileSubscriber
+	FilesContainer *TailedFileCollection
+	sync.Mutex
 }
 
 func init() {
 	// Initialize container for list of actively tailed files
-	tailedFiles = &TailedFiles{
-		files: make(map[string]*TailedFile),
+	defaultTfc = &TailedFileCollection{
+		fileList: make(map[string]*TailedFile),
 	}
+
+	// Start cleanup loop
+	// Seems to cause problems
+	/*
+		go func() {
+			for true {
+				defaultTfc.Lock()
+				log.WithFields(log.Fields{
+					"files": defaultTfc.fileList,
+				}).Info("Checking for files with no subscribers")
+
+				for _, tf := range defaultTfc.fileList {
+					log.WithFields(log.Fields{
+						"nsubs": len(tf.Subscribers),
+						"file":  tf.Filepath,
+					}).Info("Checking # subscribers")
+
+					if len(tf.Subscribers) == 0 {
+						log.WithFields(log.Fields{
+							"tailedFile": tf,
+							"file":       tf.Filepath,
+						}).Info("Closing tailed file because no subscribers remain")
+						defaultTfc.StopTailedFile(tf.Filepath)
+					}
+				}
+				defaultTfc.Unlock()
+				time.Sleep(10000 * time.Millisecond)
+			}
+		}()
+	*/
 }
 
 /*
  * Functions operating on a TailedFiles object
  */
 
-func (tfs *TailedFiles) GetTailedFile(p string) (*TailedFile, error) {
-	tfs.Lock()
-	defer tfs.Unlock()
+func (tfc *TailedFileCollection) GetTailedFile(p string) (*TailedFile, error) {
+	tfc.Lock()
+	defer tfc.Unlock()
 
 	// Check if it already exists
-	if tailedFiles.files[p] != nil {
-		return tailedFiles.files[p], nil
+	if tfc.fileList[p] != nil {
+		log.WithFields(log.Fields{
+			"file": p,
+		}).Info("Found existing TailedFile")
+		return tfc.fileList[p], nil
 	}
 	tf, err := StartTailedFile(p)
 	if err != nil {
 		return nil, err
 	}
 
-	tailedFiles.files[p] = tf
+	tfc.fileList[p] = tf
 
 	return tf, nil
 }
 func GetTailedFile(p string) (*TailedFile, error) {
-	return tailedFiles.GetTailedFile(p)
+	return defaultTfc.GetTailedFile(p)
 }
 
-// Does not return an error if it doesn't exist
-func (tfs *TailedFiles) StopTailedFile(p string) error {
-	tfs.Lock()
-	defer tfs.Unlock()
-	if tailedFiles.files[p] == nil {
+// Stop a specific tailed file
+// - locks the object
+// - calls Close() on each tailed file
+// - removes any references to this file
+func (tfc *TailedFileCollection) StopTailedFile(p string) error {
+	tfc.Lock()
+	defer tfc.Unlock()
+	if tfc.fileList[p] == nil {
 		return nil
 	}
-	return tailedFiles.files[p].Close()
+	err := tfc.fileList[p].Close()
+	delete(tfc.fileList, p)
+
+	return err
 }
 func StopTailedFile(p string) error {
-	return tailedFiles.StopTailedFile(p)
+	return defaultTfc.StopTailedFile(p)
 }
 
-func (tfs *TailedFiles) StopAll() {
-	tfs.Lock()
-	defer tfs.Unlock()
-	for _, tf := range tfs.files {
+// Stop every tailed file
+// Called at shut down
+func (tfc *TailedFileCollection) StopAll() {
+	tfc.Lock()
+	defer tfc.Unlock()
+	for _, tf := range tfc.fileList {
 		tf.Close()
+		delete(tfc.fileList, tf.Filepath)
 	}
 }
 func StopAll() {
-	tailedFiles.StopAll()
+	defaultTfc.StopAll()
 }
 
-func (tfs *TailedFiles) Follow(p string) (*TailedFileSubscriber, error) {
-	tf, err := tfs.GetTailedFile(p)
+// Follow a file at a given path
+func (tfc *TailedFileCollection) Follow(p string) (*TailedFileSubscriber, error) {
+	tf, err := tfc.GetTailedFile(p)
 	if err != nil {
 		return nil, err
 	}
 	return tf.Subscribe(), nil
 }
 func Follow(p string) (*TailedFileSubscriber, error) {
-	return tailedFiles.Follow(p)
-}
-
-func (tfs *TailedFiles) Unfollow(p string, id int64) error {
-	tf, err := tfs.GetTailedFile(p)
-	if err != nil {
-		return err
-	}
-	tf.Unsubscribe(id)
-	return nil
-}
-func Unfollow(p string, id int64) error {
-	return tailedFiles.Unfollow(p, id)
+	return defaultTfc.Follow(p)
 }
 
 /*
@@ -123,10 +159,14 @@ func Unfollow(p string, id int64) error {
 // Alternative approaches:
 // - https://groups.google.com/d/msg/golang-nuts/-pPG4Oacsf0/0DxUv__DgKoJ
 // - https://golang.org/pkg/container/ring/
-func StartTailedFile(p string) (*TailedFile, error) {
+func (tfc *TailedFileCollection) StartTailedFile(p string) (*TailedFile, error) {
 	// Launch go routine to read from file
 	// Adds each line to NewContent
 	// Increments CurrentIndex, adds this line at CurrentIndex
+
+	log.WithFields(log.Fields{
+		"file": p,
+	}).Info("Creating new tailed file")
 
 	// Check for valid file path
 	finfo, err := os.Stat(p)
@@ -153,11 +193,12 @@ func StartTailedFile(p string) (*TailedFile, error) {
 	}
 
 	tf := &TailedFile{
-		Filepath:    p,
-		PastLines:   make([]string, DefaultLinesKept),
-		FileOffset:  0,
-		Tailer:      tailer,
-		Subscribers: make(map[int64]*TailedFileSubscriber),
+		Filepath:       p,
+		PastLines:      make([]string, DefaultLinesKept),
+		FileOffset:     0,
+		Tailer:         tailer,
+		Subscribers:    make(map[int64]*TailedFileSubscriber),
+		FilesContainer: tfc,
 	}
 
 	// Shuts down when channel closes
@@ -183,15 +224,16 @@ func StartTailedFile(p string) (*TailedFile, error) {
 
 	return tf, nil
 }
+func StartTailedFile(p string) (*TailedFile, error) {
+	return defaultTfc.StartTailedFile(p)
+}
 
-// FIXME: Do this on the TailedFiles level
 // - Remove from list of available tailed files
 // - Close all channels
 // - Stop the tailer
 func (tf *TailedFile) Close() error {
 	tf.Lock()
 	defer tf.Unlock()
-	delete(tailedFiles.files, tf.Filepath)
 	for _, sub := range tf.Subscribers {
 		close(sub.NewLines)
 	}
@@ -204,6 +246,7 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 	sub := &TailedFileSubscriber{
 		NewLines:   make(chan string, tf.FileOffset),
 		IsCaughtUp: false,
+		TailedFile: tf,
 	}
 
 	// Launch a goroutine that sends the first N lines on this channel
@@ -225,6 +268,11 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 		}
 		tf.Subscribers[sub.Id] = sub
 
+		log.WithFields(log.Fields{
+			"subs":  tf.Subscribers,
+			"subId": sub.Id,
+		}).Info("Subscribing")
+
 		for i := tf.FileOffset + 1; i < tf.FileOffset+int64(len(tf.PastLines)); i++ {
 			item := tf.PastLines[i%int64(len(tf.PastLines))]
 			if item != "" {
@@ -237,8 +285,15 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 	return sub
 }
 
-func (tf *TailedFile) Unsubscribe(id int64) {
-	tf.Lock()
-	defer tf.Unlock()
-	delete(tf.Subscribers, id)
+// Deregister subscriber
+func (tfs *TailedFileSubscriber) Stop() {
+	tfs.TailedFile.Lock()
+	defer tfs.TailedFile.Unlock()
+
+	log.WithFields(log.Fields{
+		"subs":  tfs.TailedFile.Subscribers,
+		"subId": tfs.Id,
+	}).Info("Unsubscribing")
+
+	delete(tfs.TailedFile.Subscribers, tfs.Id)
 }

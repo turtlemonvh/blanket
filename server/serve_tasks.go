@@ -571,6 +571,7 @@ func streamTaskLog(c *gin.Context) {
 		c.String(http.StatusInternalServerError, "Error opening logfile stream")
 		return
 	}
+	defer sub.Stop()
 
 	c.Stream(func(w io.Writer) bool {
 		// Step function should return a boolean saying whether to stay open
@@ -578,5 +579,4 @@ func streamTaskLog(c *gin.Context) {
 		c.SSEvent("message", <-sub.NewLines)
 		return true
 	})
-	tailed_file.Unfollow(stdoutPath, sub.Id)
 }
