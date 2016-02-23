@@ -294,11 +294,16 @@ angular.module('blanketApp')
             }
             $scope.$apply();
 
-            // FIXME: Cancel SSEs and stop resetting when view changes
+            // Maybe: http://angular-ui.github.io/ui-router/site/#/api/ui.router.state.$uiViewScroll
             if ($scope.pinToBottom) {
                 $window.scrollTo(0, document.body.scrollHeight);
             }
         }
+
+        $scope.$on("$destroy", function(){
+            $log.log("Heard destroy event, closing for id", $scope.taskId);
+            source.close();
+        })
     }])
     .controller('TaskTypeListCtl', ['$log', '$scope', '_', 'TasksStore', 'baseUrl', function($log, $scope, _, TasksStore, baseUrl) {
         $scope.baseUrl = baseUrl;
