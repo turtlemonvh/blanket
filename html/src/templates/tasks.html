@@ -121,7 +121,7 @@
         <tbody>
             <tr ng-repeat="task in data.tasks track by task.id">
                 <th scope="row">{{ ($index+1) }}</th>
-                <td><a ng-href="{{baseUrl}}/task/{{task.id}}">{{ task.id | limitTo: 8 }}</a></td>
+                <td><a ng-href="/#/task/{{task.id}}">{{ task.id | limitTo: 8 }}</a></td>
                 <td><a ng-href="{{baseUrl}}/task_type/{{task.type}}">{{ task.type }}</a></td>
                 <td>{{ task.tags.join(', ') }}</td>
                 <td>{{ task.createdTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>

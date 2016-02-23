@@ -200,7 +200,7 @@ angular.module('blanketApp')
         })();
 
     }])
-    .controller('TaskListCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', '_', function($log, $http, $interval, $scope, _, TasksStore, baseUrl, _) {
+    .controller('TaskListCtl', ['$log', '$scope', '_', 'TasksStore', 'baseUrl', '_', function($log, $scope, _, TasksStore, baseUrl, _) {
         $scope.baseUrl = baseUrl;
         $scope.data = TasksStore;
 
@@ -279,7 +279,29 @@ angular.module('blanketApp')
             return task.hasResults ? "Delete" : "Stop";
         }
     }])
-    .controller('TaskTypeListCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', function($log, $http, $interval, $scope, _, TasksStore, baseUrl) {
+    .controller('TaskDetailCtl', ['$log', '$http', '$interval', '$scope', '_', 'TasksStore', 'baseUrl', '_', '$stateParams', '$window', 
+        function($log, $http, $interval, $scope, _, TasksStore, baseUrl, _, $stateParams, $window) {
+        $scope.pinToBottom = false;
+
+        $scope.events = [];
+        $scope.taskId = $stateParams.taskId;
+        $scope.jsonURL = baseUrl + '/task/' + $scope.taskId
+
+        var source = new EventSource(baseUrl + '/task/' + $scope.taskId + '/log');
+        source.onmessage = function (event) {
+            $scope.events.push(event.data);
+            if ($scope.events.length > 100) {
+                $scope.events.splice(0, 10);
+            }
+            $scope.$apply();
+
+            // FIXME: Better?
+            if ($scope.pinToBottom) {
+                $window.scrollTo(0, document.body.scrollHeight);
+            }
+        }
+    }])
+    .controller('TaskTypeListCtl', ['$log', '$scope', '_', 'TasksStore', 'baseUrl', function($log, $scope, _, TasksStore, baseUrl) {
         $scope.baseUrl = baseUrl;
         $scope.data = TasksStore;
     }]);

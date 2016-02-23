@@ -1,7 +1,6 @@
 package tailed_file
 
 import (
-	log "github.com/Sirupsen/logrus"
 	"github.com/hpcloud/tail"
 	"math/rand"
 	"os"
@@ -54,15 +53,15 @@ func (tfs *TailedFiles) GetTailedFile(p string) (*TailedFile, error) {
 	defer tfs.Unlock()
 
 	// Check if it already exists
-	if (tailedFiles.files)[p] != nil {
-		return (tailedFiles.files)[p], nil
+	if tailedFiles.files[p] != nil {
+		return tailedFiles.files[p], nil
 	}
 	tf, err := StartTailedFile(p)
 	if err != nil {
 		return nil, err
 	}
 
-	(tailedFiles.files)[p] = tf
+	tailedFiles.files[p] = tf
 
 	return tf, nil
 }
@@ -74,27 +73,18 @@ func GetTailedFile(p string) (*TailedFile, error) {
 func (tfs *TailedFiles) StopTailedFile(p string) error {
 	tfs.Lock()
 	defer tfs.Unlock()
-	if (tailedFiles.files)[p] == nil {
+	if tailedFiles.files[p] == nil {
 		return nil
 	}
-	return (tailedFiles.files)[p].Close()
+	return tailedFiles.files[p].Close()
 }
 func StopTailedFile(p string) error {
 	return tailedFiles.StopTailedFile(p)
 }
 
 func (tfs *TailedFiles) StopAll() {
-	log.WithFields(log.Fields{
-		"files": tfs.files,
-	}).Debug("Debug lock in StopAll")
-
 	tfs.Lock()
 	defer tfs.Unlock()
-
-	log.WithFields(log.Fields{
-		"files": tfs.files,
-	}).Debug("After lock in StopAll")
-
 	for _, tf := range tfs.files {
 		tf.Close()
 	}
@@ -131,7 +121,7 @@ func Unfollow(p string, id int64) error {
  */
 
 // Alternative approaches:
-// - https://github.com/dustin/web-thermometer/blob/master/gohousetherm/readings.go#L28
+// - https://groups.google.com/d/msg/golang-nuts/-pPG4Oacsf0/0DxUv__DgKoJ
 // - https://golang.org/pkg/container/ring/
 func StartTailedFile(p string) (*TailedFile, error) {
 	// Launch go routine to read from file
@@ -182,28 +172,14 @@ func StartTailedFile(p string) (*TailedFile, error) {
 
 			// Send to each subscriber channel
 			// In practice shouldn't block because buffered
-			log.WithFields(log.Fields{"file": tf.Filepath}).Debug("Right BEFORE subscriber loop")
 			for _, sub := range tf.Subscribers {
 				sub.NewLines <- nline.Text
 			}
-			log.WithFields(log.Fields{"file": tf.Filepath}).Debug("Right AFTER subscriber loop")
-
-			// Works fine here, mutex is being locked and unlocked
-			log.WithFields(log.Fields{
-				"file":  tf.Filepath,
-				"nline": nline,
-				"subs":  tf.Subscribers,
-				"nsubs": len(tf.Subscribers),
-			}).Debug("Send line from file to all subscribers")
 
 			// Free lock again
 			tf.Unlock()
 		}
 	}()
-
-	log.WithFields(log.Fields{
-		"file": tf.Filepath,
-	}).Debug("Started log tailer")
 
 	return tf, nil
 }
@@ -213,22 +189,12 @@ func StartTailedFile(p string) (*TailedFile, error) {
 // - Close all channels
 // - Stop the tailer
 func (tf *TailedFile) Close() error {
-	log.WithFields(log.Fields{
-		"file": tf.Filepath,
-	}).Debug("Before lock in close")
-
-	// Freezing up here
 	tf.Lock()
 	defer tf.Unlock()
 	delete(tailedFiles.files, tf.Filepath)
 	for _, sub := range tf.Subscribers {
 		close(sub.NewLines)
 	}
-
-	log.WithFields(log.Fields{
-		"file": tf.Filepath,
-	}).Debug("Before stop")
-
 	return tf.Tailer.Stop()
 }
 
@@ -248,10 +214,6 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 		tf.Lock()
 		defer tf.Unlock()
 
-		log.WithFields(log.Fields{
-			"file": tf.Filepath,
-		}).Debug("Subscribe initialization started")
-
 		// Assign a unique integer id
 		sub.Id = rand.Int63()
 		for true {
@@ -270,11 +232,6 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 			}
 		}
 		sub.IsCaughtUp = true
-
-		// This is ok
-		log.WithFields(log.Fields{
-			"file": tf.Filepath,
-		}).Debug("Subscribe initialization completed")
 	}()
 
 	return sub

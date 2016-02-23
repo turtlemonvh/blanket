@@ -1,0 +1,40 @@
+<div class="col-md-10 col-centered" ng-controller="TaskDetailCtl">
+    <div class="row list-header">
+        <h2>Task Detail : {{ taskId }}</h2>
+    </div>
+
+    <!-- Controls -->
+    <div class="row">
+        <div>
+            <a ng-href="{{ jsonURL }}">JSON representation</a>
+        </div>
+        <form>
+            <div class="form-group">
+                <div class="checkbox">
+                    <label>
+                        <input type="checkbox" ng-model="pinToBottom"> Pin to bottom?
+                    </label>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <div class="row">
+        <pre><span ng-repeat="item in events">{{ item }}<br/></span></pre>
+    </div>
+
+    <!-- Controls -->
+    <div class="row">
+        <form>
+            <div class="form-group">
+                <div class="checkbox">
+                    <label>
+                        <input type="checkbox" ng-model="pinToBottom"> Pin to bottom?
+                    </label>
+                </div>
+            </div>
+        </form>
+
+    </div>
+
+</div> <!-- End TaskDetailCtl -->

@@ -31,6 +31,12 @@ angular.module('blanketApp', ["ui.router"])
                 return $templateCache.get('workers.html');
             }
         })
+        .state('task-detail', {
+            url: "/task/:taskId",
+            templateProvider: function($templateCache){
+                return $templateCache.get('task-detail.html');
+            }
+        })
         .state('about', {
             url: "/about",
             templateProvider: function($templateCache){
