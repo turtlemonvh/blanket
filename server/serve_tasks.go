@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/tasks"
 	"gopkg.in/mgo.v2/bson"
 	"io"
@@ -497,7 +498,7 @@ func postTask(c *gin.Context) {
 		return
 	}
 
-	c.String(http.StatusCreated, fmt.Sprintf(`{"id": "%s"}`, t.Id))
+	c.String(http.StatusCreated, fmt.Sprintf(`{"id": "%s"}`, t.Id.Hex()))
 }
 
 // Always returns 200, even if item doesn't exist
@@ -538,4 +539,44 @@ func removeTask(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
+}
+
+func streamTaskLog(c *gin.Context) {
+	var err error
+	var taskId bson.ObjectId
+
+	taskId, err = getTaskId(c)
+	if err != nil {
+		return
+	}
+
+	task := tasks.Task{}
+	err = DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("tasks"))
+		if b == nil {
+			errorString := "Database format error: Bucket 'tasks' does not exist."
+			return fmt.Errorf(errorString)
+		}
+		task, err = fetchTaskFromBucket(&taskId, b)
+		return nil
+	})
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Error opening logfile stream")
+		return
+	}
+
+	stdoutPath := path.Join(task.ResultDir, fmt.Sprintf("blanket.stdout.log"))
+	sub, err := tailed_file.Follow(stdoutPath)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Error opening logfile stream")
+		return
+	}
+
+	c.Stream(func(w io.Writer) bool {
+		// Step function should return a boolean saying whether to stay open
+		// https://github.com/gin-gonic/gin/blob/master/context.go#L465
+		c.SSEvent("message", <-sub.NewLines)
+		return true
+	})
+	tailed_file.Unfollow(stdoutPath, sub.Id)
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"gopkg.in/tylerb/graceful.v1"
 	"net/http"
 	"time"
@@ -141,6 +142,7 @@ func Serve() {
 	r.PUT("/task/:id/state", updateTaskState)       // update state
 	r.PUT("/task/:id/progress", updateTaskProgress) // update progress
 	r.DELETE("/task/:id", removeTask)               // delete all information, including killing if running
+	r.GET("/task/:id/log", streamTaskLog)           // stdout log
 
 	r.GET("/task_type/", getTaskTypes)
 	r.GET("/task_type/:name", getTaskType)
@@ -168,6 +170,7 @@ func Serve() {
 		BeforeShutdown: func() {
 			// Called first
 			log.Warn("Called BeforeShutdown")
+			tailed_file.StopAll()
 		},
 		ShutdownInitiated: func() {
 			// Called second
