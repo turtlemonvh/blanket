@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"sync"
-	_ "time"
+	"time"
 )
 
 const (
@@ -132,9 +132,13 @@ func (tfc *TailedFileCollection) StopAll() {
 	tfc.Lock()
 	defer tfc.Unlock()
 	for _, tf := range tfc.fileList {
+		log.WithFields(log.Fields{
+			"filepath": tf.Filepath,
+		}).Info("Closing tailed file in StopAll")
 		tf.Close()
 		delete(tfc.fileList, tf.Filepath)
 	}
+	log.Info("Finished closing all tailedfiles in StopAll")
 }
 func StopAll() {
 	defaultTfc.StopAll()
@@ -271,7 +275,7 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 		log.WithFields(log.Fields{
 			"subs":  tf.Subscribers,
 			"subId": sub.Id,
-		}).Info("Subscribing")
+		}).Info("Subscribed")
 
 		for i := tf.FileOffset + 1; i < tf.FileOffset+int64(len(tf.PastLines)); i++ {
 			item := tf.PastLines[i%int64(len(tf.PastLines))]
@@ -280,6 +284,11 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 			}
 		}
 		sub.IsCaughtUp = true
+
+		log.WithFields(log.Fields{
+			"subId": sub.Id,
+		}).Info("Subscriber caught up")
+
 	}()
 
 	return sub
@@ -289,11 +298,27 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 func (tfs *TailedFileSubscriber) Stop() {
 	tfs.TailedFile.Lock()
 	defer tfs.TailedFile.Unlock()
-
+	delete(tfs.TailedFile.Subscribers, tfs.Id)
 	log.WithFields(log.Fields{
 		"subs":  tfs.TailedFile.Subscribers,
 		"subId": tfs.Id,
-	}).Info("Unsubscribing")
+	}).Info("Unsubscribed")
 
-	delete(tfs.TailedFile.Subscribers, tfs.Id)
+	if len(tfs.TailedFile.Subscribers) == 0 {
+		// Check whether there are still no subscribers after 5 seconds
+		go func() {
+			time.Sleep(5 * time.Second)
+
+			// Checking without lock to prevent deadlock in delete operation
+			if len(tfs.TailedFile.Subscribers) == 0 {
+				// Still no new subscribers
+				log.WithFields(log.Fields{
+					"file":              tfs.TailedFile.Filepath,
+					"subs":              tfs.TailedFile.Subscribers,
+					"filesInCollection": tfs.TailedFile.FilesContainer.fileList,
+				}).Info("stopping tailed file because no subscribers remain")
+				tfs.TailedFile.FilesContainer.StopTailedFile(tfs.TailedFile.Filepath)
+			}
+		}()
+	}
 }

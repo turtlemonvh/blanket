@@ -53,26 +53,30 @@ angular.module('blanketApp')
         this.tasks = [];
         this.taskTypes = [];
 
+        self.cleanTask = function(t) {
+            var labelClasses = {
+                "WAIT": "default",
+                "START": "primary",
+                "RUNNING": "warning",
+                "ERROR": "danger",
+                "SUCCESS": "success"
+            };
+            t.labelClass = labelClasses[t.state];
+            t.hasResults = _.intersection(["ERROR", "SUCCESS", "START", "RUNNING"], [t.state]).length !== 0;
+
+            // Date fixing
+            var dateFields = ['createdTs', 'startedTs', 'lastUpdatedTs'];
+            _.each(dateFields, function(df) {
+                t[df] = t[df] * 1000;
+            });
+        }
+
         // FIXME: handle pagination and offsets
         self.refreshTasks = function() {
             $http.get(baseUrl + '/task/?limit=50&reverseSort=true').then(function(d) {
                 self.tasks = d.data;
                 _.each(self.tasks, function(v) {
-                    var labelClasses = {
-                        "WAIT": "default",
-                        "START": "primary",
-                        "RUNNING": "warning",
-                        "ERROR": "danger",
-                        "SUCCESS": "success"
-                    };
-                    v.labelClass = labelClasses[v.state];
-                    v.hasResults = _.intersection(["ERROR", "SUCCESS", "START", "RUNNING"], [v.state]).length !== 0;
-
-                    // Date fixing
-                    var dateFields = ['createdTs', 'startedTs', 'lastUpdatedTs'];
-                    _.each(dateFields, function(df) {
-                        v[df] = v[df] * 1000;
-                    });
+                    self.cleanTask(v);
                 })
                 $log.log("Found " + self.tasks.length + " tasks")
             });
@@ -282,9 +286,19 @@ angular.module('blanketApp')
         function($log, $http, $timeout, $scope, _, TasksStore, baseUrl, _, $stateParams, $window) {
         $scope.pinToBottom = false;
 
+        $scope.baseUrl = baseUrl;
         $scope.events = [];
         $scope.taskId = $stateParams.taskId;
         $scope.jsonURL = baseUrl + '/task/' + $scope.taskId
+        $scope.task = {};
+
+        self.refreshTask = function() {
+            return $http.get($scope.jsonURL).then(function(d) {
+                $scope.task = d.data;
+                TasksStore.cleanTask($scope.task);
+            });
+        }
+        self.refreshTask();
 
         // Maybe: http://angular-ui.github.io/ui-router/site/#/api/ui.router.state.$uiViewScroll
         $scope.setScroll = function() {
@@ -297,6 +311,7 @@ angular.module('blanketApp')
         };
 
         var source = new EventSource(baseUrl + '/task/' + $scope.taskId + '/log');
+        $log.log("Starting to stream log events.")
         source.onmessage = function (event) {
             $scope.events.push(event);
             if ($scope.events.length > 100) {
@@ -304,6 +319,16 @@ angular.module('blanketApp')
             }
             $scope.$apply();
             $scope.setScroll();
+        }
+        source.onopen = function() {
+            // Refresh task object
+            self.refreshTask().then(function(){
+                if ($scope.task.state != "RUNNING") {
+                    // Don't keep reconnecting if no new content is coming in
+                    source.close();
+                    $log.log("Task is no longer running, closing even source.")
+                }
+            })
         }
 
         $scope.$on("$destroy", function(){

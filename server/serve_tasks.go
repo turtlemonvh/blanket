@@ -543,15 +543,8 @@ func removeTask(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
 }
 
-func streamTaskLog(c *gin.Context) {
+func fetchTaskById(taskId bson.ObjectId) (tasks.Task, error) {
 	var err error
-	var taskId bson.ObjectId
-
-	taskId, err = getTaskId(c)
-	if err != nil {
-		return
-	}
-
 	task := tasks.Task{}
 	err = DB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
@@ -562,6 +555,20 @@ func streamTaskLog(c *gin.Context) {
 		task, err = fetchTaskFromBucket(&taskId, b)
 		return nil
 	})
+	return task, err
+}
+
+func streamTaskLog(c *gin.Context) {
+	var err error
+	var taskId bson.ObjectId
+
+	taskId, err = getTaskId(c)
+	if err != nil {
+		return
+	}
+
+	task := tasks.Task{}
+	task, err = fetchTaskById(taskId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, "Error opening logfile stream")
 		return
@@ -573,18 +580,69 @@ func streamTaskLog(c *gin.Context) {
 		c.String(http.StatusInternalServerError, "Error opening logfile stream")
 		return
 	}
+
+	// FIXME: Not closing this connection when client leaves
 	defer sub.Stop()
 
+	// FIXME: Close when task state changes from RUNNING and channel is empty
+
+	// https://godoc.org/github.com/gin-gonic/gin#Context.Stream
+	// https://github.com/gin-gonic/gin/blob/master/context.go#L465
+	// https://gobyexample.com/select
+
+	loglineChannelIsEmpty := false
 	lineno := 1
 	c.Stream(func(w io.Writer) bool {
 		// Step function should return a boolean saying whether to stay open
 		// https://github.com/gin-gonic/gin/blob/master/context.go#L465
-		c.Render(-1, sse.Event{
-			Id:    strconv.Itoa(lineno),
-			Event: "message",
-			Data:  <-sub.NewLines,
-		})
-		lineno++
+
+		// FIXME: This has the potential to generate one goroutine per line
+		timeout := make(chan bool, 1)
+		go func() {
+			time.Sleep(5 * time.Second)
+			timeout <- true
+		}()
+
+		// Wait up to 5 seconds for a new value
+		select {
+		case logline := <-sub.NewLines:
+			// Send event with message content
+			c.Render(-1, sse.Event{
+				Id:    strconv.Itoa(lineno),
+				Event: "message",
+				Data:  logline,
+			})
+			lineno++
+			loglineChannelIsEmpty = false
+		case <-timeout:
+			loglineChannelIsEmpty = true
+		}
+
+		// Wait a second
+		if loglineChannelIsEmpty {
+			// Check whether the process is complete
+			// If so, return false so we quite streaming
+			task, err = fetchTaskById(taskId)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"taskId":         taskId,
+					"subscriptionId": sub.Id,
+					"tailedFile":     sub.TailedFile.Filepath,
+				}).Error("error refreshing worker state while processing logstreaming request")
+			} else {
+				if task.State != "RUNNING" {
+					log.WithFields(log.Fields{
+						"taskId":         taskId,
+						"taskState":      task.State,
+						"subscriptionId": sub.Id,
+						"tailedFile":     sub.TailedFile.Filepath,
+					}).Info("stopping logstreaming request because task is no longer running")
+					return false
+				}
+			}
+		}
+
 		return true
 	})
+
 }
