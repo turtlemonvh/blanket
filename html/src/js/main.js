@@ -47,7 +47,7 @@ angular.module('blanketApp')
         }
 
     }])
-    .service('TasksStore', ['$http', 'baseUrl', '$log', '$timeout', 'LocalStore', function($http, baseUrl, $log, $timeout, localStorage) {
+    .service('TasksStore', ['$http', 'baseUrl', '$log', '$timeout', 'LocalStore', 'diffFeatures', '_', function($http, baseUrl, $log, $timeout, localStorage, diffFeatures, _) {
         var self = this;
 
         this.tasks = [];
@@ -73,13 +73,33 @@ angular.module('blanketApp')
 
         // FIXME: handle pagination and offsets
         self.refreshTasks = function() {
-            $http.get(baseUrl + '/task/?limit=50&reverseSort=true').then(function(d) {
+            var r = $http.get(baseUrl + '/task/?limit=50&reverseSort=true').then(function(d) {
                 self.tasks = d.data;
                 _.each(self.tasks, function(v) {
                     self.cleanTask(v);
                 })
                 $log.log("Found " + self.tasks.length + " tasks")
             });
+
+            r.then(function() {
+
+                var df = new diffFeatures.df(function(task) {
+                    return _.map(task.defaultEnv, function(v, k) {
+                        return k + "=" + v;
+                    })
+                });
+
+                // Build up counts, set features attribute
+                _.each(self.tasks, function(task) {
+                    task.allFeatures = _.sortBy(df.addItem(task));
+                })
+
+                // Best features for each task
+                _.each(self.tasks, function(task) {
+                    task.bestFeatures = df.getBestOfFeatures(task.allFeatures);
+                })
+
+            })
         }
 
         self.refreshTaskTypes = function() {

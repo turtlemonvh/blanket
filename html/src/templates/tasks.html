@@ -110,6 +110,7 @@
                 <th>Id</th>
                 <th>Type</th>
                 <th>Tags</th>
+                <th>Env Var Selection</th>
                 <th>Date Created</th>
                 <th>Date Started</th>
                 <th>Date Last Updated</th>
@@ -123,7 +124,20 @@
                 <th scope="row">{{ ($index+1) }}</th>
                 <td><a ng-href="/#/task/{{task.id}}">{{ task.id | limitTo: 8 }}</a></td>
                 <td><a ng-href="{{baseUrl}}/task_type/{{task.type}}">{{ task.type }}</a></td>
-                <td>{{ task.tags.join(', ') }}</td>
+                <td>
+                    <span
+                        class="truncated"
+                        title="{{ task.tags.join('\n') }}">
+                        {{ task.tags.join(', ') }}
+                    </span>
+                </td>
+                <td>
+                    <span 
+                        class="truncated" 
+                        title="{{ task.allFeatures.join('\n') }}">
+                        {{ task.bestFeatures.join(', ') }}
+                    </span>
+                </td>
                 <td>{{ task.createdTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
                 <td ng-if="task.startedTs === 0" >None</td>
                 <td ng-if="task.startedTs !== 0" >{{ task.startedTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
