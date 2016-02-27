@@ -1,4 +1,7 @@
 @import "bootstrap";
+@import "bootstrap/variables";
+@import "bootstrap/mixins";
+
 
 // http://stackoverflow.com/questions/18153234/center-a-column-using-twitter-bootstrap-3
 .col-centered {
@@ -70,3 +73,9 @@ table tr.like-sm-input :not(input) {
     text-overflow: ellipsis;
     display: block;
 }
+
+.truncated:hover {
+    cursor: help;
+}
+
+

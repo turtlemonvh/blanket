@@ -92,6 +92,7 @@ angular.module('blanketApp')
                 // Build up counts, set features attribute
                 _.each(self.tasks, function(task) {
                     task.allFeatures = _.sortBy(df.addItem(task));
+                    task.allFeaturesList = _.join(task.allFeatures, "\n");
                 })
 
                 // Best features for each task
