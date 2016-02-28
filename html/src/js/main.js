@@ -59,10 +59,13 @@ angular.module('blanketApp')
                 "START": "primary",
                 "RUNNING": "warning",
                 "ERROR": "danger",
-                "SUCCESS": "success"
+                "SUCCESS": "success",
+                "TIMEOUT": "danger",
+                "STOPPED": "danger"
             };
             t.labelClass = labelClasses[t.state];
-            t.hasResults = _.intersection(["ERROR", "SUCCESS", "START", "RUNNING"], [t.state]).length !== 0;
+            t.hasResults = _.intersection(["WAIT", "START"], [t.state]).length === 0;
+            t.isComplete = _.intersection(["WAIT", "START", "RUNNING"], [t.state]).length === 0;
 
             // Date fixing
             var dateFields = ['createdTs', 'startedTs', 'lastUpdatedTs'];
@@ -119,6 +122,20 @@ angular.module('blanketApp')
 
         self.stopTask = function(task) {
             $log.log("Stopping task", task);
+            $http({
+                method: 'PUT',
+                url: baseUrl + '/task/' + task.id + "/state?state=STOPPED" 
+            }).then(function(d) {
+                // Give it time to shut down before refreshing the list
+                $log.log("Stopped", task);
+                $timeout(self.refreshTasks, 1000);
+            }, function(d) {
+                $log.error("Problem stopping task", task);
+            });
+        }
+
+        self.deleteTask = function(task) {
+            $log.log("Deleting task", task);
             $http({
                 method: 'DELETE',
                 url: baseUrl + '/task/' + task.id
@@ -300,7 +317,7 @@ angular.module('blanketApp')
         })();
 
         $scope.getStopCommand = function(task) {
-            return task.hasResults ? "Delete" : "Stop";
+            return task.isComplete ? "Delete" : "Stop";
         }
     }])
     .controller('TaskDetailCtl', ['$log', '$http', '$timeout', '$scope', '_', 'TasksStore', 'baseUrl', '_', '$stateParams', '$window',

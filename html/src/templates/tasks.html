@@ -143,7 +143,8 @@
                 <td>{{ task.lastUpdatedTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
                 <td> <span class="label label-{{ task.labelClass }}">{{ task.state }}</span> </td>
                 <td>
-                    <a class="danger" ng-click="data.stopTask(task)">{{ getStopCommand(task) }}</a>
+                    <a ng-if="task.state === 'RUNNING'" class="danger" ng-click="data.stopTask(task)">Stop</a>
+                    <a ng-if="task.state !== 'RUNNING'" class="danger" ng-click="data.deleteTask(task)">{{ getStopCommand(task) }}</a>
                 </td>
             </tr>
         </tbody>
