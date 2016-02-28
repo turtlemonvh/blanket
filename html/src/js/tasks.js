@@ -245,6 +245,17 @@ angular.module('blanketApp')
             })
         }
 
+        // How long has the task been running (in seconds)
+        $scope.timeRunning = function(task) {
+            if (!task.startedTs) {
+                return undefined;
+            }
+            if (task.isComplete) {
+                return (task.lastUpdatedTs - task.startedTs)/1000;
+            }
+            return ((new Date()).getTime() - task.startedTs)/1000;
+        }
+
         $scope.$on("$destroy", function(){
             $log.log("Destroying scope; closing eventlistener for task log", $scope.taskId);
             source.close();

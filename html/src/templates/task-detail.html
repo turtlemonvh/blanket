@@ -57,6 +57,13 @@
                         <td ng-if="task.startedTs !== 0" >{{ task.startedTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
                     </tr>
                     <tr class="like-sm-input active">
+                        <td>Time Running</td>
+                        <td ng-if="task.startedTs === 0" >0 seconds</td>
+                        <td ng-if="task.startedTs !== 0" >{{ timeRunning(task) | number }} s ({{ task.timeout | number }} s max)</td>
+                    </tr>
+
+
+                    <tr class="like-sm-input active">
                         <td>Date Last Updated</td>
                         <td>{{ task.lastUpdatedTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
                     </tr>

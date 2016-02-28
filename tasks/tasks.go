@@ -18,6 +18,10 @@ import (
 	"time"
 )
 
+const (
+	DEFAULT_TIMEOUT = 3600 // default timeout is 1 hour
+)
+
 // Task types are just a load of configuration loaded with viper with a few extra methods
 type TaskType struct {
 	ConfigFile        string // path to TOML config file on disk
@@ -96,7 +100,7 @@ func readTaskType(configFile io.Reader) (TaskType, error) {
 	tt := TaskType{}
 	tt.Config = viper.New()
 	tt.Config.SetConfigType("toml")
-	tt.Config.SetDefault("timeout", 60*60) // default timeout is 1 hour
+	tt.Config.SetDefault("timeout", DEFAULT_TIMEOUT)
 
 	err := tt.Config.ReadConfig(configFile)
 	if err != nil {
@@ -191,6 +195,7 @@ type Task struct {
 	TypeId        string            `json:"type"`          // String name
 	ResultDir     string            `json:"resultDir"`     // Full path
 	TypeDigest    string            `json:"typeDigest"`    // version hash of config file
+	Timeout       int64             `json:"timeout"`       // The max time the task is allowed to run
 	State         string            `json:"state"`         // WAIT, START, RUN, SUCCESS/ERROR/STOPPED/TIMEOUT
 	WorkerId      string            `json:"workerId"`      // Id of the worker that processed this task; set on START
 	Progress      int               `json:"progress"`      // 0-100

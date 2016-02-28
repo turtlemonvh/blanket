@@ -301,6 +301,11 @@ func updateTaskState(c *gin.Context) {
 	typeDigest := c.Query("typeDigest")
 	pid := c.Query("pid")
 	workerId := c.Query("workerId")
+	timeout := c.Query("timeout")
+
+	if _, err = cast.ToIntE(timeout); err != nil {
+		timeout = cast.ToString(tasks.DEFAULT_TIMEOUT)
+	}
 
 	validState := false
 	for _, state := range tasks.ValidTaskStates {
@@ -326,6 +331,7 @@ func updateTaskState(c *gin.Context) {
 			t.TypeDigest = typeDigest
 			t.Progress = 0
 			t.WorkerId = workerId
+			t.Timeout = int64(cast.ToInt(timeout))
 		case "WAIT":
 			// FIXME: Can go back to WAIT after START or RUNNING if requeued
 			return fmt.Errorf("Cannot transition to WAIT state from any other state")

@@ -323,6 +323,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	err = c.TransitionTaskState(t, "START", map[string]string{
 		"typeDigest": tt.ConfigVersionHash,
 		"workerId":   c.Id.Hex(),
+		"timeout":    tt.Config.GetString("timeout"),
 	})
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -394,7 +395,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	}
 	t.Refresh()
 
-	maxTime := t.StartedTs + int64(tt.Config.GetInt("timeout"))
+	maxTime := t.StartedTs + t.Timeout
 	go func() {
 		for true {
 			log.WithFields(log.Fields{
