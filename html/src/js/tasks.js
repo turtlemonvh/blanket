@@ -1,5 +1,6 @@
 angular.module('blanketApp')
-    .service('TasksStore', ['$http', 'baseUrl', '$log', '$timeout', 'LocalStore', 'diffFeatures', '_', function($http, baseUrl, $log, $timeout, localStorage, diffFeatures, _) {
+    .service('TasksStore', ['$http', 'baseUrl', '$log', '$timeout', 'LocalStore', 'diffFeatures', '_', 
+    function($http, baseUrl, $log, $timeout, localStorage, diffFeatures, _) {
         var self = this;
 
         this.tasks = [];
@@ -44,7 +45,7 @@ angular.module('blanketApp')
                 $log.log("Found " + self.tasks.length + " tasks")
             });
 
-            r.then(function() {
+            return r.then(function() {
 
                 var df = new diffFeatures.df(function(task) {
                     return _.map(task.defaultEnv, function(v, k) {
@@ -67,7 +68,7 @@ angular.module('blanketApp')
         }
 
         self.refreshTaskTypes = function() {
-            $http.get(baseUrl + '/task_type/?limit=50').then(function(d) {
+            return $http.get(baseUrl + '/task_type/?limit=50').then(function(d) {
                 self.taskTypes = d.data;
                 _.each(self.taskTypes, function(v) {
                     self.cleanTaskType(v);
@@ -78,7 +79,7 @@ angular.module('blanketApp')
 
         self.stopTask = function(task) {
             $log.log("Stopping task", task);
-            $http({
+            return $http({
                 method: 'PUT',
                 url: baseUrl + '/task/' + task.id + "/state?state=STOPPED" 
             }).then(function(d) {
@@ -92,7 +93,7 @@ angular.module('blanketApp')
 
         self.deleteTask = function(task) {
             $log.log("Deleting task", task);
-            $http({
+            return $http({
                 method: 'DELETE',
                 url: baseUrl + '/task/' + task.id
             }).then(function(d) {
@@ -106,7 +107,7 @@ angular.module('blanketApp')
 
         self.createTask = function(taskConf) {
             $log.log("Launching new task", taskConf);
-            $http({
+            return $http({
                 method: 'POST',
                 url: baseUrl + '/task/',
                 data: {
@@ -122,9 +123,18 @@ angular.module('blanketApp')
             });
         }
     }])
-    .controller('TaskListCtl', ['$log', '$scope', '_', 'TasksStore', 'baseUrl', '_', function($log, $scope, _, TasksStore, baseUrl, _) {
+    .controller('TaskListCtl', ['$log', '$scope', '_', 'TasksStore', 'AutorefreshService', 'baseUrl', '_', 
+    function($log, $scope, _, TasksStore, AutorefreshService, baseUrl, _) {
         $scope.baseUrl = baseUrl;
         $scope.data = TasksStore;
+
+        // As soon as data is ready set the form
+        AutorefreshService.ready.then(function(){
+            if (!$scope.newTaskConf.newTaskType && $scope.data.taskTypes.length !== 0) {
+                $scope.newTaskConf.newTaskType = $scope.data.taskTypes[0];
+            }
+            $scope.newTaskConf.changedTaskType();
+        });
 
         $scope.newTaskConf = (function() {
             var self = {};
