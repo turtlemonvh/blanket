@@ -9,11 +9,15 @@ import (
 	"path"
 )
 
-// FIXME: Includes both nested and flat variables
-// May want to reduce to a single representation
-// Flattening everything would probably be easiest
-func getConfig(c *gin.Context) {
-	conf := viper.AllSettings()
+// Get all configuration variables
+// We use this instead of viper.AllSettings so that we have just 1 value for each path
+func getConfigProcessed(c *gin.Context) {
+	conf := make(map[string]interface{})
+	keys := viper.AllKeys()
+
+	for _, key := range keys {
+		conf[key] = viper.GetString(key)
+	}
 
 	execPath, err := osext.Executable()
 	if err != nil {
@@ -21,7 +25,7 @@ func getConfig(c *gin.Context) {
 			"err": err.Error(),
 		}).Error("Problem getting executable path")
 	} else {
-		conf["basePath"] = path.Dir(execPath)
+		conf["basepath"] = path.Dir(execPath)
 	}
 
 	c.JSON(http.StatusOK, conf)

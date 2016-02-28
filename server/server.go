@@ -136,7 +136,7 @@ func Serve() {
 		})
 	})
 
-	r.GET("/config/", getConfig)
+	r.GET("/config/", getConfigProcessed)
 
 	r.GET("/task/", getTasks)
 	r.GET("/task/:id", getTask)                     // fetch just 1 by id

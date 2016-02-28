@@ -1,9 +1,26 @@
-<div class="col-md-10 col-centered">
-    <h2>Not much here</h2>
-    <b>TO DO</b>
-    <ul>
-        <li>List version information</li>
-        <li>Link to social media / github</li>
-        <li>Add link to docs</li>
-    </ul>
+<div class="col-md-10 col-centered" ng-controller="AboutCtrl">
+
+    <!-- Settings -->
+    <div class="row">
+
+        <div class="col-sm-10">
+            <h3>Settings</h3>
+            <table class="table table-condensed row-centered">
+                <thead>
+                    <tr>
+                        <th>Setting</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="like-sm-input" ng-repeat="(k, v) in appConfig">
+                        <td>{{ k }}</td>
+                        <td>{{ v }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+
 </div>
