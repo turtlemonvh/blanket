@@ -26,6 +26,14 @@ angular.module('blanketApp')
             });
         }
 
+        self.cleanTaskType = function(tt) {
+            // Date fixing
+            var dateFields = ['loadedTs'];
+            _.each(dateFields, function(df) {
+                tt[df] = tt[df] * 1000;
+            });
+        }
+
         // FIXME: handle pagination and offsets
         self.refreshTasks = function() {
             var r = $http.get(baseUrl + '/task/?limit=50&reverseSort=true').then(function(d) {
@@ -62,11 +70,7 @@ angular.module('blanketApp')
             $http.get(baseUrl + '/task_type/?limit=50').then(function(d) {
                 self.taskTypes = d.data;
                 _.each(self.taskTypes, function(v) {
-                    // Date fixing
-                    var dateFields = ['loadedTs'];
-                    _.each(dateFields, function(df) {
-                        v[df] = v[df] * 1000;
-                    });
+                    self.cleanTaskType(v);
                 })
                 $log.log("Found " + self.taskTypes.length + " task types")
             });
@@ -209,6 +213,7 @@ angular.module('blanketApp')
         $scope.taskId = $stateParams.taskId;
         $scope.jsonURL = baseUrl + '/task/' + $scope.taskId
         $scope.task = {};
+        $scope.taskType = {};
 
         self.refreshTask = function() {
             return $http.get($scope.jsonURL).then(function(d) {
@@ -216,7 +221,13 @@ angular.module('blanketApp')
                 TasksStore.cleanTask($scope.task);
             });
         }
-        self.refreshTask();
+        self.refreshTaskType = function() {
+            return $http.get(baseUrl + "/task_type/" + $scope.task.type).then(function(d) {
+                $scope.taskType = d.data;
+                TasksStore.cleanTaskType($scope.taskType);
+            });
+        }
+        self.refreshTask().then(self.refreshTaskType);
 
         // Maybe: http://angular-ui.github.io/ui-router/site/#/api/ui.router.state.$uiViewScroll
         $scope.setScroll = function() {
