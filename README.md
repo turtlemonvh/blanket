@@ -111,16 +111,28 @@ blanket rm
     - blanket rm worker <id>
 
 
+
+
 ## To Do
 
 ### Short List
 
 > See: https://trello.com/b/bOWTSxbO/blanket-dev
 
+- controlling running tasks
+    - If is task has passed its run time, unlock it and return to queue
+    - stop / restart
+    - configurable # restarts
+        - # times allowed, whether they go in new directories
+    - Check for orphaned tasks
+        - in RUNNING state but over time / worker is down
+    - may not want to do  "redo" not and instead make it easy to "launch another"
 
-- fix auto-refresh closing "add new" forms
-- show task type description when launching a new task
-
+- allow user to use a previous task as a template for a new task
+    - just POST to /task/<id>/rerun
+    - return id of the new task
+    - we may need to store more information about the task to do this correctly
+        - e.g. the difference between env variables set on the task itself and those inherited from the task type
 
 
 - HTTP interface
@@ -128,10 +140,10 @@ blanket rm
     - bulk delete
     - a way to show messages for things we have done (toast messages)
     - re-run a task that has run, or is stalled
-    - launch and manage workers
-    - figure out bug where form closes sometimes when clicking "Remove"
     - fix memory leak (was >500 mb when running for a while)
 - Allow configurable executors
+    - see how supervisord does it (and docker)
+        - http://supervisord.org/subprocess.html#subprocess-environment
     - copy command into tmp file; run with bash, zsh, bat
     - make it use a different executor depending on OS (put this in viper)
     - test on windows
@@ -139,19 +151,18 @@ blanket rm
     - http://stackoverflow.com/questions/4571244/creating-a-bat-file-for-python-script
 - Clean up ls/ps commands
     - column alignment
+    - list types, tasks, workers
+    - allow filtering, templating
+    - a lot like docker here
 - allow filling in files as templates
     - have glob patterns to match templates (relative to where they will be copied into)
-- Make use of timeout to stop long running tasks
-    - also restart and cleanup
-    - If is task has passed its run time, unlock it and return to queue
-- allow user to use a previous task as a template for a new task
-- controlling running tasks
-    - stop / restart
-    - configurable # restarts
-        - # times allowed, whether they go in new directories
 - return # tasks found in response to query
-    - make this an options request; we don't want this to slow down ordinary requests
+    - don't put this in ordinary requests so we don't slow those down
+        - /task/count/
+            - everything else (options, etc) is the same
+            - most of the code can be shared between these 2 endpoints
     - if >500, just say >500
+        - can provide a "limit" on this too to describe the number we stop at
     - pagination on HTML interface
         - http://getbootstrap.com/components/#pagination
 - package HTML into a single binary
@@ -161,30 +172,73 @@ blanket rm
         - build js (gulp build)
         - run bindata-assets command
         - then build
-- make names of fields on objects consistent
-    - esp. task types vs tasks
-- allow user to view and edit server configuration on UI
-    - may need to allow them to trigger a restart
-- allow user to back up database from UI
-- workers
-    - assign a unique id to make tracking logfiles for past workers easier
-    - name logfile based on time of day
-    - allow pausing
-    - view worker status via ps / ls
-        - keep list of workers in database so have reference to pids
-    - send worker logs to stdout addition to sending to a file
-        - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
 - make some good examples
 - put api calls into sub directories
-- allow it to run without a configuration file
-    - make sure it has sane defaults
-    - can add an installer later (esp. for windows) or package (for linux) that sets up config for you later
+- add ability to archive tasks and load from archive
+    - archive is basically results directory + a `.blanket-task` file that defines the JSON for that task
+- handle undo
+    - deleting just archives
+    - auto-clean up archives after X days
+    - when archiving, delay a couple seconds
+        - flash message at top of screen (like in the "undo send" in gmail), they can cancel easily
+    - can keep all these actions in a queue of actions in the database that we go through every couple seconds
+        - would still want to remove item from UI immediately first
+    - basically the same as gmail's UI
+- use Docker containers for builds
+    - so we can use this:
+        go build -race .
+    - so users can build static files easily
 
+
+### Bugs
+
+- fix auto-refresh closing "add new" forms
 
 
 ### Larger Efforts
 
+#### Worker cleanup
+
+- assign a unique id to make tracking logfiles for past workers easier
+- name logfile based on time of day
+- allow pausing
+- view worker status via ps / ls
+    - keep list of workers in database so have reference to pids
+- send worker logs to stdout addition to sending to a file
+    - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
+- add ability to stop task and not just delete
+
+
+#### Data migrations
+
+- Keep a configuration bucket in db that defines various properties, including versions
+- Include a uri to run data migrations; each just a generic task that can do anything
+
+- first few
+    - defaultEnv -> execEnv
+    - put results into directories with task name as top directory
+        - allow the directory structure underneath to be configurable
+            - e.g. dates, just ids, etc
+
+
 #### Testing
+
+Set up automated tests
+- https://travis-ci.org/
+- https://www.appveyor.com/
+    - windows CI
+    - https://blog.klauspost.com/travisappveyor-ci-script-for-go/
+- https://coveralls.io/
+    - https://github.com/mattn/goveralls
+- add docker container for running tests so users can test in isolated installation
+
+
+https://www.youtube.com/watch?v=ndmB0bj7eyw
+- http tests
+- testing process behavior
+
+http://talks.golang.org/2012/10things.slide#8
+- testing fs
 
 - https://www.golang-book.com/books/intro/12
 - https://golang.org/pkg/net/http/httptest/
@@ -208,6 +262,9 @@ blanket rm
     - https://github.com/onsi/ginkgo
     - https://github.com/stretchr/testify
 
+- ensure it can run without a configuration file
+    - it currently can run that way just fine
+
 #### Documentation
 
 - set up hugo to generate api docs
@@ -217,24 +274,44 @@ blanket rm
 
 #### Log cleanup
 
-- stream logfiles (for viewing in browser); both worker and process logs
-    - both last few hundred lines in a stream and full download
-    - https://godoc.org/github.com/hpcloud/tail
-    - http://stackoverflow.com/questions/19292113/not-buffered-http-responsewritter-in-golang
-    - https://github.com/julienschmidt/sse
-    - https://godoc.org/github.com/julienschmidt/sse#Streamer.SendString
-    - check how supervisord web does it
-        - https://github.com/Supervisor/supervisor/blob/master/supervisor/ui/tail.html
-        - https://github.com/Supervisor/supervisor/blob/master/supervisor/http.py#L140
-    - python
-        - https://gist.github.com/fiorix/1920022
-        - http://stackoverflow.com/questions/25166770/angularjs-with-server-sent-events
+> Long running bash task
+> for i in $(seq 1 3600); do echo "$(date)"; sleep 1; done
+
+- allow combining stdout stderr
+    - can set to the same file and go takes care of it
+    - https://golang.org/pkg/os/exec/#Cmd
+- fall back to polling logfile (with offset) if eventsource not available
+    - http://caniuse.com/#feat=eventsource
+- fixes to log streaming
+    - if nothing attached to a stream for >5 minutes, close it
+    - stdout and stderr logs
+    - worker logs too
+    - package up SSE log view into a directive
+- multiple loggers for differet output types
+    - http://stackoverflow.com/questions/18361750/correct-approach-to-global-logging-in-golang
+    - types
+        - requests log
+            - https://github.com/gin-gonic/gin/blob/develop/logger.go#L41
+            - https://godoc.org/github.com/gin-gonic/gin#Default
+            - easy to change out request logger
+        - errors and anomalies
+            - use the recovery middleware with a writer to log all panics that happen while serving requests
+            - https://godoc.org/github.com/gin-gonic/gin#RecoveryWithWriter
+        - worker log(s)
+        - task log(s)
+- multiple files + rotate function
+    - http://stackoverflow.com/questions/28796021/how-can-i-log-in-golang-to-a-file-with-log-rotation
+- hup to rotate
+    - https://github.com/natefinch/lumberjack/blob/v2.0/rotate_test.go
 - configurable logging verbosity
     - these are things that every task must provide, or it will be rejected
 - log to multiple locations
     - https://github.com/Sirupsen/logrus
     - https://godoc.org/github.com/Sirupsen/logrus#Logger
+    - http://technosophos.com/2013/09/14/using-gos-built-logger-log-syslog.html
     - https://golang.org/pkg/io/#MultiWriter
+        - https://golang.org/ref/spec#Passing_arguments_to_..._parameters
+        - can call with a slice and get it to expand for you
     - just create your own logging package that takes a config and writes to multiple locations at different verbosities
         - configure as package global objects for easy import
         - https://github.com/Sirupsen/logrus#rotation
@@ -243,12 +320,34 @@ blanket rm
 - better worker logs with SSE and json logs
     - can include little event cards for everything that happened, even highlight errors, provide search and filtering, aggregate events
 - allow user to specify where worker logs go (directory)
+- name worker logs based on
+    - time it started
+    - capabilities (tags)
+    - http://localhost:3000/#/workers
+    - pid is still helpful, but only when it is running, and we have that in the database
 
+
+#### Performance and monitoring
+
+- Stats / Performance
+    - we want to make sure we're not growing in memory, CPU, goroutines, # file descriptors, etc.
+    - put stats into their own bucket
+    - each blob is its own packet of stats for a time window
+    - scanning through this bucket we can quickly pull out the stats we need and make a plot
+    - stat viz: http://www.tnoda.com/blog/2013-12-19, http://cmaurer.github.io/angularjs-nvd3-directives/sparkline.chart.html
+- Add prometheus and expvar metrics
+    - see logstore as an example
+- Add-in for check_mk local checks
+    - listens for status information and writes to a file
+    - may want to just use python stuff that I already made
 
 #### Task Discovery
 
 - allow the user to names more places to look for tasks
 - look for anything that matches a certain pattern and keep a reference to it in the database as a available task type
+- maybe ~/.blanket/task_types/
+    - that could be a good place for configuration
+    - need to define something that makes sense on lots of OSes, even ones where people have limited access
 
 #### Design
 
@@ -258,9 +357,9 @@ blanket rm
     - like a blanket
     - solarized dark would be good
 
+## Specs
 
-
-MVP
+### MVP
 
 - use to run ansible tasks
 - use to queue tasks for OCR app
@@ -270,7 +369,7 @@ MVP
 - allow launching via http, basic ui, or command line
 
 
-Task Execution workflow
+### Task Execution workflow
 
 - user sends POST request to /tasks/<task type>/
 - creates an item in the database with a UUID, and returns UUID to user
@@ -319,12 +418,41 @@ Important details
 
 ## Extra
 
+- clean up About page
+    - link to docs
+    - link to twitter, github
+    - version information
 - security
     - SSL
+        - https://godoc.org/github.com/gin-gonic/gin#Engine.RunTLS
+    - allow running on unix domain docker too
+        - this would make it inaccessible off the user's machine
     - HTTP basic auth
+        - https://godoc.org/github.com/gin-gonic/gin#BasicAuth
+            - don't store username and password directly
+            - store hashed password and compare that
+        - https://godoc.org/golang.org/x/crypto/bcrypt
+        - allow them to do username/password (basic auth) or generate API keys (X-BLANKET-API-KEY)
+            - https://github.com/MaaSiveNet/maasive-py/blob/master/maasivepy/maasivepy.py#L243
+        - https://github.com/gin-gonic/gin/blob/master/auth.go#L40
+            - would be pretty easy to do a version of this that stores users in bolt and uses bcrypt for lookup
+    - could keep session cookies in RAM
+        - flush to a blob in the configuration bucket every minute if any changes
+        - also flush on shutdown
+        - this way we can easily keep list of sessions up to date but still be resilient to restarts
+    - allow the user to control the user account used to run a task of a particular type
+        - that way they can lock it down
+        - will need to make sure user account has access when copying files over
+        - https://golang.org/pkg/os/#ProcAttr
+        - https://golang.org/pkg/syscall/#SysProcAttr
+        - https://golang.org/pkg/syscall/#Credential
+        - yeah, you can set userid and group id
 - other UI
+    - add ability to shut down / restart main server from web ui
+    - allow user to view and edit server configuration on UI
+        - may need to allow them to trigger a restart
+    - allow user to back up database from UI
     - add primitive main dashboard with recent activity
-    - add ability to reconfigure and restart
     - add ability to add new task types
     - allow editing task types on HTTP interface
 - Option to leave task creation request open until task completes
@@ -334,6 +462,8 @@ Important details
 - pulse "running" tag for running tasks to make them more obvious
 - godeps to lock in dependencies and avoid weird changes
 - option to run with tls
+- installer
+    - add an installer (esp. for windows) or package (for linux) that sets up config
 - monitoring
     - https://github.com/shirou/gopsutil
     - total CPU and memory usage of everything
@@ -343,16 +473,6 @@ Important details
     - https://github.com/rcrowley/goagain
 - better browsing interface for files
     - instead of just a list, include modified time, size, etc.
-- Stats
-    - put stats into their own bucket
-    - each blob is its own packet of stats for a time window
-    - scanning through this bucket we can quickly pull out the stats we need and make a plot
-    - stat viz: http://www.tnoda.com/blog/2013-12-19, http://cmaurer.github.io/angularjs-nvd3-directives/sparkline.chart.html
-- Add prometheus and expvar metrics
-    - see logstore as an example
-- Add-in for check_mk local checks
-    - listens for status information and writes to a file
-    - may want to just use python stuff that I already made
 - Clean up formatting of ps command
     - https://golang.org/pkg/text/tabwriter/
     - https://github.com/olekukonko/tablewriter
@@ -360,9 +480,6 @@ Important details
     - https://github.com/docker/docker/blob/master/api/client/ps.go
     - https://github.com/docker/docker/blob/master/api/client/formatter/formatter.go
         - uses tabwriter
-- put results into directories with task name as top directory
-    - allow the directory structure underneath to be configurable
-        - e.g. dates, just ids, etc
 - user accounts, http auth login, account types
     - https://github.com/xyproto/permissionbolt
         - uses boltdb for simple security
@@ -451,6 +568,9 @@ Important details
 - very cool
     - notifications on OSX
         - https://github.com/deckarep/gosx-notifier
+    - chat support for OSS
+        - https://gitter.im/
+
 
 ## Benchmarking
 
