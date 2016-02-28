@@ -136,23 +136,27 @@ angular.module('blanketApp')
                     return;
                 }
 
-                _.each(self.newTaskType.environment.required, function(v, k) {
-                    self.newTask.environment.push({
-                        name: v.name,
-                        value: "",
-                        description: v.description,
-                        required: true
-                    });
-                })
+                if (self.newTaskType.environment && self.newTaskType.environment.required) {
+                    _.each(self.newTaskType.environment.required, function(v, k) {
+                        self.newTask.environment.push({
+                            name: v.name,
+                            value: "",
+                            description: v.description,
+                            required: true
+                        });
+                    })
+                }
 
-                _.each(self.newTaskType.environment.optional, function(v, k) {
-                    self.newTask.environment.push({
-                        name: v.name,
-                        value: "",
-                        description: v.description,
-                        required: false
-                    });
-                })
+                if (self.newTaskType.environment && self.newTaskType.environment.optional) {
+                    _.each(self.newTaskType.environment.optional, function(v, k) {
+                        self.newTask.environment.push({
+                            name: v.name,
+                            value: "",
+                            description: v.description,
+                            required: false
+                        });
+                    })
+                }
 
                 self.addParam();
             }

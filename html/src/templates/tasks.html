@@ -23,8 +23,18 @@
         </form>
 
         <form class="form-horizontal" ng-if="newTaskConf.newTaskType" name="newTaskForm">
-            <hr/>
+            <!-- Description -->
+            <hr ng-if="!!newTaskConf.newTaskType.description" />
+            <div class="form-group" ng-if="!!newTaskConf.newTaskType.description" >
+                <label for="newTaskSettings" class="col-sm-2 control-label">Description</label>
+                <div class="col-sm-10">
+                    <div class="form-control-static">
+                        <pre>{{ newTaskConf.newTaskType.description }}</pre>
+                    </div>
+                </div>
+            </div>
 
+            <hr/>
             <div class="form-group">
                 <label for="newTaskSettings" class="col-sm-2 control-label">Environment Settings</label>
                 <div class="col-sm-10">
