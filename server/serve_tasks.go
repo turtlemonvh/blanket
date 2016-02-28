@@ -299,6 +299,8 @@ func updateTaskState(c *gin.Context) {
 
 	newState := c.Query("state")
 	typeDigest := c.Query("typeDigest")
+	pid := c.Query("pid")
+	workerId := c.Query("workerId")
 
 	validState := false
 	for _, state := range tasks.ValidTaskStates {
@@ -323,6 +325,7 @@ func updateTaskState(c *gin.Context) {
 			t.StartedTs = time.Now().Unix()
 			t.TypeDigest = typeDigest
 			t.Progress = 0
+			t.WorkerId = workerId
 		case "WAIT":
 			// FIXME: Can go back to WAIT after START or RUNNING if requeued
 			return fmt.Errorf("Cannot transition to WAIT state from any other state")
@@ -330,9 +333,18 @@ func updateTaskState(c *gin.Context) {
 			if t.State != "START" {
 				return fmt.Errorf("Cannot transition to RUNNING state from state %s", t.State)
 			}
+			t.Pid = cast.ToInt(pid)
 		case "ERROR":
 			if t.State != "RUNNING" {
 				return fmt.Errorf("Cannot transition to ERROR state from state %s", t.State)
+			}
+		case "STOPPED":
+			if t.State != "RUNNING" {
+				return fmt.Errorf("Cannot transition to STOPPED state from state %s", t.State)
+			}
+		case "TIMEOUT":
+			if t.State != "RUNNING" {
+				return fmt.Errorf("Cannot transition to TIMEOUT state from state %s", t.State)
 			}
 		case "SUCCESS":
 			if t.State != "RUNNING" {
@@ -424,7 +436,7 @@ func postTask(c *gin.Context) {
 
 	// Load task type
 	filename := fmt.Sprintf("%s.toml", req["type"])
-	fullpath := path.Join(viper.GetString("tasks.types_path"), filename)
+	fullpath := path.Join(viper.GetString("tasks.typesPath"), filename)
 	tt, err := tasks.ReadTaskTypeFromFilepath(fullpath)
 	if err != nil {
 		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
@@ -533,7 +545,7 @@ func removeTask(c *gin.Context) {
 
 	// Remove result directory
 	// FIXME: Grab from json instead
-	err = os.RemoveAll(path.Join(viper.GetString("tasks.results_path"), taskId.Hex()))
+	err = os.RemoveAll(path.Join(viper.GetString("tasks.resultsPath"), taskId.Hex()))
 	if err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
@@ -596,7 +608,9 @@ func streamTaskLog(c *gin.Context) {
 		// Step function should return a boolean saying whether to stay open
 		// https://github.com/gin-gonic/gin/blob/master/context.go#L465
 
-		// FIXME: This has the potential to generate one goroutine per line
+		// FIXME: This has the potential to generate one goroutine per line, maxing out 1 goroutine per line we can read in 5 seconds
+		// May want to close the timeout channel when we get a new value
+		// https://gobyexample.com/closing-channels
 		timeout := make(chan bool, 1)
 		go func() {
 			time.Sleep(5 * time.Second)

@@ -17,11 +17,15 @@ import (
 )
 
 var blanketCmdV *cobra.Command
-var CfgFile string
+var (
+	CfgFile  string
+	LogLevel string
+)
 
 func init() {
 	//cobra.OnInitialize(initConfig)
 	RootCmd.PersistentFlags().Int32P("port", "p", 8773, "Port the server will run on")
+	RootCmd.PersistentFlags().StringVar(&LogLevel, "logLevel", "warn", "the logging level to use")
 	RootCmd.PersistentFlags().StringVarP(&CfgFile, "config", "c", "", "config file (default is blanket.yaml|json|toml)")
 	RootCmd.AddCommand(versionCmd)
 	blanketCmdV = RootCmd
@@ -29,6 +33,7 @@ func init() {
 	// FIXME: Add support for multiple outputs and handling log levels via command line or env variable
 	// https://golang.org/src/io/multi.go?s=1355:1397#L47
 	log.SetOutput(os.Stdout)
+	log.SetLevel(log.WarnLevel)
 }
 
 func InitializeConfig() {
@@ -36,9 +41,9 @@ func InitializeConfig() {
 	// https://github.com/spf13/viper#watching-and-re-reading-config-files
 	viper.SetDefault("port", 8773)
 	viper.SetDefault("database", "blanket.db")
-	viper.SetDefault("tasks.types_path", "types")
-	viper.SetDefault("tasks.results_path", "results")
-	viper.SetDefault("workers.logfile_name_template", "worker.{{.Pid}}.log")
+	viper.SetDefault("tasks.typesPath", "types")
+	viper.SetDefault("tasks.resultsPath", "results")
+	viper.SetDefault("workers.logfileNameTemplate", "worker.{{.Id.Hex}}.log")
 
 	viper.SetConfigName("blanket")
 	viper.AddConfigPath("/etc/blanket/")
@@ -47,8 +52,9 @@ func InitializeConfig() {
 	viper.SetConfigFile(CfgFile)
 	err := viper.ReadInConfig()
 	if err != nil {
-		log.Printf("Please either add a config file in one of the predefined locations or pass in a path explicitly.")
-		log.Fatalf("Fatal error config file: %s \n", err)
+		log.WithFields(log.Fields{
+			"error": err.Error(),
+		}).Fatal("Please either add a config file in one of the predefined locations or pass in a path explicitly.")
 	}
 
 	// https://github.com/spf13/viper#working-with-environment-variables
@@ -56,6 +62,21 @@ func InitializeConfig() {
 	viper.AutomaticEnv()
 
 	viper.BindPFlag("port", blanketCmdV.PersistentFlags().Lookup("port"))
+	viper.BindPFlag("logLevel", blanketCmdV.PersistentFlags().Lookup("logLevel"))
+
+	// Set log level
+	var level log.Level
+	level, err = log.ParseLevel(viper.GetString("logLevel"))
+	if err != nil {
+		log.WithFields(log.Fields{
+			"levelChoice": viper.GetString("logLevel"),
+		}).Error("invalid choice for option 'level'. Ignoring and continuing.")
+	} else {
+		log.SetLevel(level)
+		log.WithFields(log.Fields{
+			"level": level,
+		}).Info("setting loglevel from config")
+	}
 }
 
 var RootCmd = &cobra.Command{

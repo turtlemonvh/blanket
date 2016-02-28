@@ -126,7 +126,7 @@ func Serve() {
 	r.Use(gin.WrapF(makeCorsHandler(c)))
 
 	// Make the result dir browseable
-	r.StaticFS("/results", gin.Dir(viper.GetString("tasks.results_path"), true))
+	r.StaticFS("/results", gin.Dir(viper.GetString("tasks.resultsPath"), true))
 
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{

@@ -10,6 +10,7 @@ import (
 	"gopkg.in/mgo.v2/bson"
 	"io"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"path"
 	"regexp"
@@ -29,7 +30,7 @@ var validConfigfileName = regexp.MustCompile(`(\w*).toml`)
 
 // Read types from config directory
 func ReadTypes() ([]TaskType, error) {
-	typesDir := viper.GetString("tasks.types_path")
+	typesDir := viper.GetString("tasks.typesPath")
 
 	// Grab entries out of directory
 	var taskTypes []TaskType
@@ -95,7 +96,7 @@ func readTaskType(configFile io.Reader) (TaskType, error) {
 	tt := TaskType{}
 	tt.Config = viper.New()
 	tt.Config.SetConfigType("toml")
-	tt.Config.SetDefault("timeout", 60)
+	tt.Config.SetDefault("timeout", 60*60) // default timeout is 1 hour
 
 	err := tt.Config.ReadConfig(configFile)
 	if err != nil {
@@ -170,25 +171,28 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 		LastUpdatedTs: time.Now().Unix(),
 		TypeId:        t.Config.GetString("name"),
 		TypeDigest:    "",
-		ResultDir:     path.Join(viper.GetString("tasks.results_path"), taskId.Hex()),
+		ResultDir:     path.Join(viper.GetString("tasks.resultsPath"), taskId.Hex()),
 		State:         "WAIT",
+		WorkerId:      "",
 		Progress:      0,
 		ExecEnv:       mixedEnv,
 		Tags:          t.Config.GetStringSlice("tags"),
 	}, nil
 }
 
-var ValidTaskStates = []string{"WAIT", "START", "RUNNING", "ERROR", "SUCCESS"}
+var ValidTaskStates = []string{"WAIT", "START", "RUNNING", "ERROR", "SUCCESS", "STOPPED", "TIMEOUT"}
 
 type Task struct {
 	Id            bson.ObjectId     `json:"id"`            // time sortable id
+	Pid           int               `json:"pid"`           // the process id used to run the task on disk
 	CreatedTs     int64             `json:"createdTs"`     // when it was first added to the database
 	StartedTs     int64             `json:"startedTs"`     // when it started running
 	LastUpdatedTs int64             `json:"lastUpdatedTs"` // last time any information changed
 	TypeId        string            `json:"type"`          // String name
 	ResultDir     string            `json:"resultDir"`     // Full path
 	TypeDigest    string            `json:"typeDigest"`    // version hash of config file
-	State         string            `json:"state"`         // WAIT, START, RUN, SUCCESS/ERROR
+	State         string            `json:"state"`         // WAIT, START, RUN, SUCCESS/ERROR/STOPPED/TIMEOUT
+	WorkerId      string            `json:"workerId"`      // Id of the worker that processed this task; set on START
 	Progress      int               `json:"progress"`      // 0-100
 	ExecEnv       map[string]string `json:"defaultEnv"`    // Combined with default env
 	Tags          []string          `json:"tags"`          // tags for capabilities of workers
@@ -206,7 +210,7 @@ func (t *Task) ToJSON() (string, error) {
 // FIXME: Move some of the complexity out of worker and into here
 func (t *Task) Execute() error {
 	// Fetch the task type for this task
-	filepath := path.Join(viper.GetString("tasks.types_path"), fmt.Sprintf("%s.toml", t.TypeId))
+	filepath := path.Join(viper.GetString("tasks.typesPath"), fmt.Sprintf("%s.toml", t.TypeId))
 	tt, err := ReadTaskTypeFromFilepath(filepath)
 	if err != nil {
 		return err
@@ -215,4 +219,16 @@ func (t *Task) Execute() error {
 	fmt.Println("tt", tt)
 
 	return nil
+}
+
+// Refresh information about this task by pulling from the blanket server
+func (t *Task) Refresh() error {
+	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/", viper.GetInt("port"), t.Id.Hex())
+	res, err := http.Get(reqURL)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	dec := json.NewDecoder(res.Body)
+	return dec.Decode(t)
 }

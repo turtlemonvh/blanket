@@ -50,7 +50,7 @@ func getTaskType(c *gin.Context) {
 	name := c.Param("name")
 	c.Header("Content-Type", "application/json")
 
-	filepath := path.Join(viper.GetString("tasks.types_path"), fmt.Sprintf("%s.toml", name))
+	filepath := path.Join(viper.GetString("tasks.typesPath"), fmt.Sprintf("%s.toml", name))
 	tt, err := tasks.ReadTaskTypeFromFilepath(filepath)
 	if err != nil {
 		// FIXME: Check for different types of errors

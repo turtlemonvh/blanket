@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib"
 	"github.com/turtlemonvh/blanket/tasks"
+	"gopkg.in/mgo.v2/bson"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,14 +24,15 @@ import (
 )
 
 type WorkerConf struct {
-	Tags          string   `json:"rawTags"`
-	ParsedTags    []string `json:"tags"`
-	Logfile       string   `json:"logfile"`
-	Daemon        bool     `json:"daemon"`
-	Pid           int      `json:"pid"`
-	Stopping      bool     `json:"stopping"`
-	CheckInterval float64  `json:"checkInterval"`
-	StartedTs     int64    `json:"startedTs"`
+	Id            bson.ObjectId `json:"id"`
+	Tags          string        `json:"rawTags"`
+	ParsedTags    []string      `json:"tags"`
+	Logfile       string        `json:"logfile"`
+	Daemon        bool          `json:"daemon"`
+	Pid           int           `json:"pid"`
+	Stopping      bool          `json:"stopping"`
+	CheckInterval float64       `json:"checkInterval"`
+	StartedTs     int64         `json:"startedTs"`
 	fileCopier    lib.FileCopier
 }
 
@@ -126,11 +128,12 @@ func (c *WorkerConf) Run() error {
 			}
 		}()
 
+		c.Id = bson.NewObjectId()
 		c.Pid = os.Getpid()
 		c.ParsedTags = strings.Split(c.Tags, ",")
 
 		c.fileCopier = lib.FileCopier{
-			BasePath: viper.GetString("tasks.types_path"),
+			BasePath: viper.GetString("tasks.typesPath"),
 		}
 
 		err = c.SetLogfileName()
@@ -151,12 +154,14 @@ func (c *WorkerConf) Run() error {
 		defer f.Close()
 
 		// Log json output to file
+		// All logs before this go to stdout
 		log.SetFormatter(&log.JSONFormatter{})
 		log.SetOutput(f)
 
 		log.WithFields(log.Fields{
 			"tags":          c.ParsedTags,
 			"pid":           c.Pid,
+			"id":            c.Id.Hex(),
 			"checkInterval": c.CheckInterval,
 			"logfile":       c.Logfile,
 		}).Info("Starting executable")
@@ -172,7 +177,7 @@ func (c *WorkerConf) SetLogfileName() error {
 		return nil
 	}
 
-	tmpl, err := template.New("logfile").Parse(viper.GetString("workers.logfile_name_template"))
+	tmpl, err := template.New("logfile").Parse(viper.GetString("workers.logfileNameTemplate"))
 	if err != nil {
 		return err
 	}
@@ -302,9 +307,10 @@ func toSliceStringSlice(i interface{}) [][]string {
 	return r
 }
 
+// FIXME: Flush logfiles, close logfiles
 func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	// Fetch information about the task type
-	ttFilepath := path.Join(viper.GetString("tasks.types_path"), fmt.Sprintf("%s.toml", t.TypeId))
+	ttFilepath := path.Join(viper.GetString("tasks.typesPath"), fmt.Sprintf("%s.toml", t.TypeId))
 	tt, err := tasks.ReadTaskTypeFromFilepath(ttFilepath)
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -313,11 +319,15 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		return err
 	}
 
-	// Try to lock the task for editing
-	err = c.TransitionTaskState(t, "START", map[string]string{"typeDigest": tt.ConfigVersionHash})
+	// Mark the task as in progress on this worker at a specific version of the config
+	err = c.TransitionTaskState(t, "START", map[string]string{
+		"typeDigest": tt.ConfigVersionHash,
+		"workerId":   c.Id.Hex(),
+	})
 	if err != nil {
 		log.WithFields(log.Fields{
-			"err": err.Error(),
+			"err":    err.Error(),
+			"taskId": t.Id,
 		}).Error("failed to transition task to state START")
 		return err
 	}
@@ -334,7 +344,8 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	err = tmpl.Execute(&cmdString, t.ExecEnv)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"err": err.Error(),
+			"err":    err.Error(),
+			"taskId": t.Id,
 		}).Error("error evaluating template for command")
 		return err
 	}
@@ -356,38 +367,113 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	}
 	cmd.Env = env
 
-	err = c.TransitionTaskState(t, "RUNNING", make(map[string]string))
-	if err != nil {
-		log.WithFields(log.Fields{
-			"err": err.Error(),
-		}).Error("failed to transition task to state RUNNING")
-		return err
-	}
-
 	err = cmd.Start()
 	if err != nil {
 		log.WithFields(log.Fields{
-			"err": err.Error(),
+			"err":    err.Error(),
+			"taskId": t.Id,
 		}).Error("problems starting task execution")
 		terr := c.TransitionTaskState(t, "ERROR", make(map[string]string))
 		if terr != nil {
 			log.WithFields(log.Fields{
-				"err": terr.Error(),
+				"err":    terr.Error(),
+				"taskId": t.Id,
 			}).Error("after failing to start task execution, failed to transition task to state ERROR")
 			return terr
 		}
 		return err
 	}
 
+	err = c.TransitionTaskState(t, "RUNNING", map[string]string{"pid": cast.ToString(cmd.Process.Pid)})
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err":    err.Error(),
+			"taskId": t.Id,
+		}).Error("failed to transition task to state RUNNING")
+		return err
+	}
+	t.Refresh()
+
+	maxTime := t.StartedTs + int64(tt.Config.GetInt("timeout"))
+	go func() {
+		for true {
+			log.WithFields(log.Fields{
+				"taskId":       t.Id,
+				"maxTime":      maxTime,
+				"processState": cmd.ProcessState,
+			}).Debug("looping in task process monitoring thread")
+
+			// Check if started
+			if cmd.Process == nil {
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			// Check if still running
+			if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+				log.WithFields(log.Fields{
+					"taskId": t.Id,
+				}).Info("returning from task process monitoring thread because task has exited")
+				return
+			}
+
+			// Check that we're not over time
+			checkTime := time.Now().Unix()
+			if checkTime > maxTime {
+				err = c.TransitionTaskState(t, "TIMEOUT", make(map[string]string))
+				if err != nil {
+					log.WithFields(log.Fields{
+						"err":    err.Error(),
+						"taskId": t.Id,
+					}).Error("failed to transition task to state TIMEOUT")
+				} else {
+					log.WithFields(log.Fields{
+						"taskId":    t.Id,
+						"maxTime":   maxTime,
+						"checkTime": checkTime,
+					}).Error("killing task because over max time allowed for execution")
+					if cmd.Process != nil {
+						cmd.Process.Kill()
+						return
+					}
+				}
+			}
+
+			// Check that we haven't stopped this task from another process
+			t.Refresh()
+			if t.State == "STOPPED" {
+				if cmd.Process != nil {
+					log.WithFields(log.Fields{
+						"taskId": t.Id,
+						"pid":    cmd.Process.Pid,
+					}).Warn("killing task because state is STOPPED")
+					cmd.Process.Kill()
+					return
+				}
+			}
+
+			// Flush log files
+			cmd.Stdout.(*os.File).Sync()
+			cmd.Stderr.(*os.File).Sync()
+			log.WithFields(log.Fields{
+				"taskId": t.Id,
+			}).Debug("Flushing logfiles for task")
+
+			time.Sleep(time.Duration(c.CheckInterval*1000) * time.Millisecond)
+		}
+	}()
+
 	err = cmd.Wait()
 	if err != nil {
 		log.WithFields(log.Fields{
-			"err": err.Error(),
+			"err":    err.Error(),
+			"taskId": t.Id,
 		}).Error("problems finishing task execution")
 		terr := c.TransitionTaskState(t, "ERROR", make(map[string]string))
 		if terr != nil {
 			log.WithFields(log.Fields{
-				"err": terr.Error(),
+				"err":    terr.Error(),
+				"taskId": t.Id,
 			}).Error("after failing to finish task execution, failed to transition task to state ERROR")
 			return terr
 		}
@@ -397,7 +483,8 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	err = c.TransitionTaskState(t, "SUCCESS", make(map[string]string))
 	if err != nil {
 		log.WithFields(log.Fields{
-			"err": err.Error(),
+			"err":    err.Error(),
+			"taskId": t.Id,
 		}).Error("failed to transition task to state SUCCESS")
 	}
 
@@ -409,23 +496,29 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 	err := os.MkdirAll(t.ResultDir, os.ModePerm)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"err": err.Error(),
+			"err":    err.Error(),
+			"taskId": t.Id,
 		}).Error("failed to create scratch directory for task")
 		return err, func() {}
 	}
+
+	// FIXME: Can set to the same file to get golang to combine streams
+	// https://golang.org/pkg/os/exec/#Cmd
 	stdoutPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stdout.log"))
 	stderrPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stderr.log"))
 	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"err": err.Error(),
+			"err":    err.Error(),
+			"taskId": t.Id,
 		}).Error("failed to create stdout file for task")
 		return err, func() {}
 	}
 	stderrFile, err := os.Create(stderrPath)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"err": err.Error(),
+			"err":    err.Error(),
+			"taskId": t.Id,
 		}).Error("failed to create stderr file for task")
 		return err, func() {
 			stdoutFile.Close()
@@ -445,7 +538,8 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 	err = c.fileCopier.CopyFiles(filesToInclude, t.ResultDir)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"err": err.Error(),
+			"err":    err.Error(),
+			"taskId": t.Id,
 		}).Error("failed copy files for task")
 		return err, fileCloser
 	}
@@ -496,7 +590,6 @@ func (c *WorkerConf) FindTask() (tasks.Task, error) {
 	dec := json.NewDecoder(res.Body)
 	dec.Decode(&respTasks)
 
-	// FIXME: Handle empty results
 	// Always sorted oldest to newest
 	if len(respTasks) > 0 {
 		return respTasks[0], nil
