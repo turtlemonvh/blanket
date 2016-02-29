@@ -2,6 +2,7 @@ angular.module('blanketApp')
     .service('TasksStore', ['$http', 'baseUrl', '$log', '$timeout', 'diffFeatures', '_', 'LocalStore', 'uibDateParser',
     function($http, baseUrl, $log, $timeout, diffFeatures, _, localStorage, dateParser) {
         var self = this;
+        this.queryMaxItems = 50;
 
         var baseDate = new Date();
         baseDate.setSeconds(0)
@@ -72,7 +73,8 @@ angular.module('blanketApp')
 
         // FIXME: handle pagination and offsets
         self.refreshTasks = function() {
-            var queryString = '/task/?limit=50&reverseSort=true';
+            var queryString = '/task/?reverseSort=true';
+            queryString += "&limit=" + self.queryMaxItems;
 
             if (self.taskFilterConfig.tags !== "") {
                 queryString += "&requiredTags=" + self.taskFilterConfig.tags;
@@ -123,7 +125,8 @@ angular.module('blanketApp')
         }
 
         self.refreshTaskTypes = function() {
-            return $http.get(baseUrl + '/task_type/?limit=50').then(function(d) {
+            var queryString = '/task_type/?limit=' + self.queryMaxItems;
+            return $http.get(baseUrl + queryString).then(function(d) {
                 self.taskTypes = d.data;
                 _.each(self.taskTypes, function(v) {
                     self.cleanTaskType(v);
@@ -196,8 +199,15 @@ angular.module('blanketApp')
             endDate: "",
             startDateParsed: undefined,
             endDateParsed: undefined,
-            getDescription: function() {
-                var s = "Showing all tasks";
+            getDescriptionPrefix: function() {
+                if (TasksStore.tasks.length == TasksStore.queryMaxItems) {
+                    return "Showing first " + TasksStore.queryMaxItems + " tasks";
+                } else {
+                    return "Showing all tasks";
+                }
+            },
+            getDescriptionPostfix: function() {
+                var s = "";
 
                 fc.startDateParsed = TasksStore.parseDate(fc.startDate);
                 fc.endDateParsed = TasksStore.parseDate(fc.endDate);
