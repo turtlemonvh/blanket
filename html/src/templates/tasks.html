@@ -2,7 +2,7 @@
     <div class="row list-header">
         <h2>Tasks</h2>
         <div class="list-actions">
-            <button ng-click="newTaskConf.addingTask = true" type="button" class="btn btn-success btn-sm">New</button>
+            <button ng-click="newTaskConf.addingTask = !newTaskConf.addingTask" type="button" class="btn btn-success btn-sm">New</button>
             <button ng-click="data.refreshTasks()" type="button" class="btn btn-info btn-sm">Refresh List</button>
         </div>
     </div>
@@ -98,7 +98,7 @@
 
             <!-- Submit -->
             <hr/>
-            <div class="form-group">
+            <div class="form-group submit">
                 <div class="col-sm-offset-8 col-sm-4 pull-right">
                     <button 
                         type="submit" 
@@ -113,6 +113,75 @@
             </div>
         </form>
     </div>
+    <div class="row filter-details">
+        <div>
+            <p class="text-muted" ng-click="filterConfig.editing = !filterConfig.editing">
+                {{ filterConfig.getDescription() }}
+            </p>
+        </div>
+    </div>
+
+    <div class="row filter-edit" ng-if="!!filterConfig.editing">
+        <form class="form-horizontal" name="filterForm">
+            <div class="form-group">
+                <label for="taskFilterTags" class="col-sm-2 control-label">Tags</label>
+                <div class="col-sm-10">
+                    <input type="text" class="form-control" ng-model="filterConfig.tags" placeholder="blue,red">
+                    <span class="help-block">A comma separated list of tag values with no spaces between them.</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="taskFilterStates" class="col-sm-2 control-label">States</label>
+                <div class="col-sm-10">
+                    <select 
+                        class="form-control" 
+                        multiple
+                        ng-model="filterConfig.states" 
+                        ng-options="state for state in taskStates">
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="taskFilterTypes" class="col-sm-2 control-label">Task Types</label>
+                <div class="col-sm-10">
+                    <select 
+                        class="form-control" 
+                        multiple
+                        ng-model="filterConfig.taskTypes" 
+                        ng-options="taskType for taskType in taskTypeNames">
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="taskFilterStartDate" class="col-sm-2 control-label">Earliest Creation Date</label>
+                <div class="col-sm-10">
+                    <input type="text" class="form-control" ng-model="filterConfig.startDate" placeholder="2015/02/28 16:42">
+                    <span class="help-block">The creation date of the oldest task you'd like to see listed. Format like: `2015/02/28 16:42`</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="taskFilterEndDate" class="col-sm-2 control-label">Latest Creation Date</label>
+                <div class="col-sm-10">
+                    <input type="text" class="form-control" ng-model="filterConfig.endDate" placeholder="2015/02/28 16:42">
+                    <span class="help-block">The creation date of the newest task you'd like to see listed. Format like: `2015/02/28 16:42`</span>
+                </div>
+            </div>
+
+            <!-- Submit -->
+            <hr/>
+            <div class="form-group submit">
+                <div class="col-sm-offset-8 col-sm-4 pull-right">
+                    <button type="submit" class="btn btn-sm stacked-right" ng-click="filterConfig.editing = !filterConfig.editing">Close</button>
+                </div>
+            </div>
+
+        </form>
+    </div>
+
     <table class="table table-condensed table-hover row-centered">
         <thead> 
             <tr>

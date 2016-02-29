@@ -5,6 +5,7 @@
   "main": "gulpfile.js",
   "devDependencies": {
     "angular": "^1.4.9",
+    "angular-ui-bootstrap": "^1.2.1",
     "bootstrap": "^3.3.6",
     "bootstrap-sass": "^3.3.6",
     "bower": "^1.7.7",

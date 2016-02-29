@@ -38,6 +38,32 @@ button.stacked-right {
 div.create-item-area {
     margin-left: 0px;
     margin-right: 0px;
+    border: 1px dashed black;
+    padding: 10px;
+}
+
+
+div.row.filter-edit, div.row.filter-details {
+    margin: 10px 0px;
+    padding: 10px;
+}
+
+div.row.filter-edit {
+    border: 1px dashed black;
+}
+
+
+div.row.filter-details {
+    &:hover {
+        cursor: pointer;
+        p.text-muted {
+            color: $brand-info;
+        }
+    }
+}
+
+div.form-group.submit {
+    margin-bottom: 0px;
 }
 
 div.list-header {

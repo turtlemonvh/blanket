@@ -1,22 +1,23 @@
 angular.module('blanketApp')
-    .service('TasksStore', ['$http', 'baseUrl', '$log', '$timeout', 'LocalStore', 'diffFeatures', '_', 
-    function($http, baseUrl, $log, $timeout, localStorage, diffFeatures, _) {
+    .service('TasksStore', ['$http', 'baseUrl', '$log', '$timeout', 'diffFeatures', '_', 'LocalStore',
+    function($http, baseUrl, $log, $timeout, diffFeatures, _, localStorage) {
         var self = this;
 
         this.tasks = [];
         this.taskTypes = [];
 
+        this.taskLabelClasses = {
+            "WAIT": "default",
+            "START": "primary",
+            "RUNNING": "warning",
+            "ERROR": "danger",
+            "SUCCESS": "success",
+            "TIMEOUT": "danger",
+            "STOPPED": "danger"
+        };
+
         self.cleanTask = function(t) {
-            var labelClasses = {
-                "WAIT": "default",
-                "START": "primary",
-                "RUNNING": "warning",
-                "ERROR": "danger",
-                "SUCCESS": "success",
-                "TIMEOUT": "danger",
-                "STOPPED": "danger"
-            };
-            t.labelClass = labelClasses[t.state];
+            t.labelClass = self.taskLabelClasses[t.state];
             t.hasResults = _.intersection(["WAIT", "START"], [t.state]).length === 0;
             t.isComplete = _.intersection(["WAIT", "START", "RUNNING"], [t.state]).length === 0;
 
@@ -34,6 +35,33 @@ angular.module('blanketApp')
                 tt[df] = tt[df] * 1000;
             });
         }
+
+        self.taskFilterConfig = {};
+
+        self.loadTaskFilterConfig = function() {
+            var conf = localStorage.getItem("blanket.taskFilters") || "{}";
+            var o = JSON.parse(conf);
+            _.each(o, function(v, k) {
+                self.taskFilterConfig[k] = v;
+            });
+        }
+        self.loadTaskFilterConfig();
+
+        function setTaskFilterConfig(fc) {
+            self.taskFilterConfig = {
+                tags: fc.tags,
+                taskTypes: fc.taskTypes,
+                states: fc.states,
+                startDate: fc.startDate,
+                endDate: fc.endDate,
+            }
+            $log.log("Setting filter config", self.taskFilterConfig);
+
+            // FIXME: Requery too
+            localStorage.setItem("blanket.taskFilters", JSON.stringify(self.taskFilterConfig));
+        }
+        self.setTaskFilterConfig = _.debounce(setTaskFilterConfig, 500);
+
 
         // FIXME: handle pagination and offsets
         self.refreshTasks = function() {
@@ -123,17 +151,77 @@ angular.module('blanketApp')
             });
         }
     }])
-    .controller('TaskListCtl', ['$log', '$scope', '_', 'TasksStore', 'AutorefreshService', 'baseUrl', '_', 
-    function($log, $scope, _, TasksStore, AutorefreshService, baseUrl, _) {
+    .controller('TaskListCtl', ['$log', '$scope', '_', 'TasksStore', 'AutorefreshService', 'baseUrl', '_', 'uibDateParser',
+    function($log, $scope, _, TasksStore, AutorefreshService, baseUrl, _, dateParser) {
         $scope.baseUrl = baseUrl;
         $scope.data = TasksStore;
+        $scope.taskStates = _.keys(TasksStore.taskLabelClasses);
+        $scope.taskTypeNames = [];
+
+        var currentDescription = "";
+        var baseDate = new Date();
+        baseDate.setSeconds(0)
+
+        var fc = {
+            loaded: false,
+            editing: false,
+            tags: "",
+            taskTypes: [],
+            states: [],
+            startDate: "",
+            endDate: "",
+            startDateParsed: undefined,
+            endDateParsed: undefined,
+            getDescription: function() {
+                var s = "Showing all tasks";
+
+                fc.startDateParsed = dateParser.parse(fc.startDate, 'yyyy/M!/d! H:mm', baseDate);
+                fc.endDateParsed = dateParser.parse(fc.endDate, 'yyyy/M!/d! H:mm', baseDate);
+                if (fc.startDateParsed && fc.endDateParsed) {
+                    s += " created between " + fc.startDateParsed + " and " + fc.endDateParsed;
+                } else if (fc.startDateParsed) {
+                    s += " created after " + fc.startDateParsed;
+                } else if (fc.endDateParsed) {
+                    s += " created before " + fc.endDateParsed;
+                }
+
+                if (fc.states.length !== 0) {
+                    s += " in states [" + _.join(fc.states, ",") + "]"
+                }
+
+                if (fc.tags !== "") {
+                    s += " with tags in [" + fc.tags + "]"
+                }
+
+                if (fc.taskTypes.length !== 0) {
+                    s += " of types [" + _.join(fc.taskTypes, ",") + "]";
+                }
+
+                if (s !== currentDescription && fc.loaded) {
+                    TasksStore.setTaskFilterConfig(fc);
+                }
+
+                currentDescription = s;
+                return s;
+            }
+        };
+        $scope.filterConfig = fc;
 
         // As soon as data is ready set the form
         AutorefreshService.ready.then(function(){
+            // Set the task type
             if (!$scope.newTaskConf.newTaskType && $scope.data.taskTypes.length !== 0) {
                 $scope.newTaskConf.newTaskType = $scope.data.taskTypes[0];
             }
             $scope.newTaskConf.changedTaskType();
+            $scope.taskTypeNames = _.map($scope.data.taskTypes, 'name');
+
+            // Load filter config from localStorage
+            if (fc.loaded) return;
+            _.each(TasksStore.taskFilterConfig, function(v, k) {
+                fc[k] = v;
+            });
+            fc.loaded = true;
         });
 
         $scope.newTaskConf = (function() {

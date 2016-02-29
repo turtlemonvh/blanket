@@ -32,7 +32,8 @@ const EXTERNAL_LIBS = {
     angular: "./node_modules/angular/angular.js",
     bootstrap: "./node_modules/bootstrap/dist/js/bootstrap.js",
     lodash: "./bower_components/lodash/dist/lodash.js",
-    uiRouter: "./bower_components/angular-ui-router/release/angular-ui-router.js"
+    uiRouter: "./bower_components/angular-ui-router/release/angular-ui-router.js",
+    uiDateParser: "./node_modules/angular-ui-bootstrap/src/dateparser/dateparser.js"
 };
 
 const SIZE_OPTS = {

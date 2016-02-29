@@ -1,4 +1,4 @@
-angular.module('blanketApp', ["ui.router"])
+angular.module('blanketApp', ["ui.router", "ui.bootstrap.dateparser"])
     .config(["$stateProvider", "$urlRouterProvider", function($stateProvider, $urlRouterProvider) {
         // For any unmatched url, redirect to home
         $urlRouterProvider.otherwise("/");
