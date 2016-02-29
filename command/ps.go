@@ -65,10 +65,10 @@ func init() {
 func (c *PSConf) ListTasks() {
 	v := url.Values{}
 	if c.State != "" && !c.All {
-		v.Set("state", strings.ToUpper(c.State))
+		v.Set("states", strings.ToUpper(c.State))
 	}
 	if c.Type != "" {
-		v.Set("type", c.Type)
+		v.Set("types", c.Type)
 	}
 	if c.RequiredTags != "" {
 		v.Set("requiredTags", c.RequiredTags)

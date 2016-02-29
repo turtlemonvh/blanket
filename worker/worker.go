@@ -573,7 +573,7 @@ func (c *WorkerConf) FindTask() (tasks.Task, error) {
 	// The worker needs to make sure it has all the tags of whatever task it requests
 	v := url.Values{}
 
-	v.Set("state", "WAIT")
+	v.Set("states", "WAIT")
 	v.Set("maxTags", c.Tags)
 	v.Set("limit", "1")
 	v.Set("reverseSort", "true") // oldest to newest

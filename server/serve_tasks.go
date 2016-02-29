@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	log "github.com/Sirupsen/logrus"
@@ -20,6 +21,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	FAR_FUTURE_SECONDS = int64(60 * 60 * 24 * 365 * 100)
 )
 
 // Gets the full byte representation of the objectid
@@ -46,6 +51,14 @@ func getTaskId(c *gin.Context) (bson.ObjectId, error) {
 	return tid, err
 }
 
+func MapKeys(m map[string]bool) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
+}
+
 func getTasks(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
@@ -63,11 +76,46 @@ func getTasks(c *gin.Context) {
 		maxTaskTags = strings.Split(maxTags, ",")
 	}
 
+	allowedTaskStates := make(map[string]bool)
+	sentAllowedStates := c.Query("states")
+	if sentAllowedStates != "" {
+		for _, tstate := range strings.Split(sentAllowedStates, ",") {
+			allowedTaskStates[tstate] = true
+		}
+	}
+
+	allowedTaskTypes := make(map[string]bool)
+	sentAllowedTypes := c.Query("types")
+	if sentAllowedTypes != "" {
+		for _, tt := range strings.Split(sentAllowedTypes, ",") {
+			allowedTaskTypes[tt] = true
+		}
+	}
+
 	limit := cast.ToInt(c.Query("limit"))
 	offset := cast.ToInt(c.Query("offset"))
-	taskType := c.Query("type")
-	taskState := c.Query("state")
 	reverseSort := c.Query("reverseSort")
+
+	// Should be unix timestamps, in seconds
+	startTimeSent := c.Query("createdAfter")
+	endTimeSent := c.Query("createdBefore")
+
+	startTime := time.Unix(0, 0)
+	endTime := time.Unix(FAR_FUTURE_SECONDS, 0)
+	startTimeSentInt, err := strconv.ParseInt(startTimeSent, 10, 64)
+	if err == nil {
+		startTime = time.Unix(startTimeSentInt, 0)
+	}
+	endTimeSentInt, err := strconv.ParseInt(endTimeSent, 10, 64)
+	if err == nil {
+		endTime = time.Unix(endTimeSentInt, 0)
+	}
+	smallestId := bson.NewObjectIdWithTime(startTime)
+	largestId := bson.NewObjectIdWithTime(endTime)
+
+	// https://godoc.org/labix.org/v2/mgo/bson#NewObjectIdWithTime
+	// NewObjectIdWithTime
+	// https://godoc.org/github.com/boltdb/bolt#Cursor.Seek
 
 	// FIXME: Range queries
 
@@ -81,9 +129,13 @@ func getTasks(c *gin.Context) {
 	log.WithFields(log.Fields{
 		"requiredTaskTags": requiredTaskTags,
 		"maxTaskTags":      maxTaskTags,
-		"taskType":         taskType,
-		"taskState":        taskState,
+		"taskTypes":        MapKeys(allowedTaskTypes),
+		"taskStates":       MapKeys(allowedTaskStates),
 		"limit":            limit,
+		"startTime":        startTime,
+		"endTime":          endTime,
+		"smallestId":       smallestId.Hex(),
+		"largestId":        largestId.Hex(),
 	}).Debug("Task request params")
 
 	result := "["
@@ -98,15 +150,37 @@ func getTasks(c *gin.Context) {
 		isFirst := true
 
 		// Sort order
-		iterFunction := c.Next
-		startIterFunction := c.First
+		var (
+			checkFunction func(bts []byte) bool
+			k             []byte
+			v             []byte
+			iterFunction  func() ([]byte, []byte)
+			endBytes      []byte
+		)
 		if reverseSort == "true" {
+			// Have to just jump to the end, since seeking to a far future key goes to the end
+			// Seek only goes in 1 order
+			// Seek manually to the highest value
+			for k, v = c.Last(); k != nil && bytes.Compare(k, IdBytes(largestId)) >= 0; k, v = c.Prev() {
+				continue
+			}
 			iterFunction = c.Prev
-			startIterFunction = c.Last
+			endBytes = IdBytes(smallestId)
+			checkFunction = func(bts []byte) bool {
+				return k != nil && bytes.Compare(k, endBytes) >= 0
+			}
+		} else {
+			// Normal case
+			k, v = c.Seek(IdBytes(smallestId))
+			iterFunction = c.Next
+			endBytes = IdBytes(largestId)
+			checkFunction = func(bts []byte) bool {
+				return k != nil && bytes.Compare(k, endBytes) <= 0
+			}
 		}
 
 		nfound := 0
-		for k, v := startIterFunction(); k != nil; k, v = iterFunction() {
+		for ; checkFunction(k); k, v = iterFunction() {
 			// e.g. 50-40 == 10
 			if nfound-offset == limit {
 				break
@@ -117,10 +191,10 @@ func getTasks(c *gin.Context) {
 			json.Unmarshal(v, &t)
 
 			// Filter results
-			if taskType != "" && t.TypeId != taskType {
+			if len(allowedTaskTypes) != 0 && !allowedTaskTypes[t.TypeId] {
 				continue
 			}
-			if taskState != "" && t.State != taskState {
+			if len(allowedTaskStates) != 0 && !allowedTaskStates[t.State] {
 				continue
 			}
 

@@ -1,7 +1,10 @@
 angular.module('blanketApp')
-    .service('TasksStore', ['$http', 'baseUrl', '$log', '$timeout', 'diffFeatures', '_', 'LocalStore',
-    function($http, baseUrl, $log, $timeout, diffFeatures, _, localStorage) {
+    .service('TasksStore', ['$http', 'baseUrl', '$log', '$timeout', 'diffFeatures', '_', 'LocalStore', 'uibDateParser',
+    function($http, baseUrl, $log, $timeout, diffFeatures, _, localStorage, dateParser) {
         var self = this;
+
+        var baseDate = new Date();
+        baseDate.setSeconds(0)
 
         this.tasks = [];
         this.taskTypes = [];
@@ -15,6 +18,10 @@ angular.module('blanketApp')
             "TIMEOUT": "danger",
             "STOPPED": "danger"
         };
+
+        self.parseDate = function(dateString) {
+            return dateParser.parse(dateString, 'yyyy/M!/d! H:mm', baseDate);
+        }
 
         self.cleanTask = function(t) {
             t.labelClass = self.taskLabelClasses[t.state];
@@ -49,7 +56,7 @@ angular.module('blanketApp')
 
         function setTaskFilterConfig(fc) {
             self.taskFilterConfig = {
-                tags: fc.tags,
+                tags: fc.tags, // comma separated
                 taskTypes: fc.taskTypes,
                 states: fc.states,
                 startDate: fc.startDate,
@@ -57,15 +64,35 @@ angular.module('blanketApp')
             }
             $log.log("Setting filter config", self.taskFilterConfig);
 
-            // FIXME: Requery too
             localStorage.setItem("blanket.taskFilters", JSON.stringify(self.taskFilterConfig));
+            self.refreshTasks();
         }
         self.setTaskFilterConfig = _.debounce(setTaskFilterConfig, 500);
 
 
         // FIXME: handle pagination and offsets
         self.refreshTasks = function() {
-            var r = $http.get(baseUrl + '/task/?limit=50&reverseSort=true').then(function(d) {
+            var queryString = '/task/?limit=50&reverseSort=true';
+
+            if (self.taskFilterConfig.tags !== "") {
+                queryString += "&requiredTags=" + self.taskFilterConfig.tags;
+            }
+            if (self.taskFilterConfig.taskTypes.length) {
+                queryString += "&types=" + _.join(self.taskFilterConfig.taskTypes, ",");
+            }
+            if (self.taskFilterConfig.states.length) {
+                queryString += "&states=" + _.join(self.taskFilterConfig.states, ",");
+            }
+            var parsedStartDate = self.parseDate(self.taskFilterConfig.startDate);
+            var parsedEndDate = self.parseDate(self.taskFilterConfig.endDate);
+            if (parsedStartDate) {
+                queryString += "&createdAfter=" + Math.floor(parsedStartDate.getTime() / 1000);
+            }
+            if (parsedEndDate) {
+                queryString += "&createdBefore=" + Math.floor(parsedEndDate.getTime() / 1000);
+            }
+
+            var r = $http.get(baseUrl + queryString).then(function(d) {
                 self.tasks = d.data;
                 _.each(self.tasks, function(v) {
                     self.cleanTask(v);
@@ -158,10 +185,7 @@ angular.module('blanketApp')
         $scope.taskStates = _.keys(TasksStore.taskLabelClasses);
         $scope.taskTypeNames = [];
 
-        var currentDescription = "";
-        var baseDate = new Date();
-        baseDate.setSeconds(0)
-
+        var currentFilterDescription = "";
         var fc = {
             loaded: false,
             editing: false,
@@ -175,8 +199,8 @@ angular.module('blanketApp')
             getDescription: function() {
                 var s = "Showing all tasks";
 
-                fc.startDateParsed = dateParser.parse(fc.startDate, 'yyyy/M!/d! H:mm', baseDate);
-                fc.endDateParsed = dateParser.parse(fc.endDate, 'yyyy/M!/d! H:mm', baseDate);
+                fc.startDateParsed = TasksStore.parseDate(fc.startDate);
+                fc.endDateParsed = TasksStore.parseDate(fc.endDate);
                 if (fc.startDateParsed && fc.endDateParsed) {
                     s += " created between " + fc.startDateParsed + " and " + fc.endDateParsed;
                 } else if (fc.startDateParsed) {
@@ -197,11 +221,11 @@ angular.module('blanketApp')
                     s += " of types [" + _.join(fc.taskTypes, ",") + "]";
                 }
 
-                if (s !== currentDescription && fc.loaded) {
+                if (s !== currentFilterDescription && fc.loaded) {
                     TasksStore.setTaskFilterConfig(fc);
                 }
 
-                currentDescription = s;
+                currentFilterDescription = s;
                 return s;
             }
         };
