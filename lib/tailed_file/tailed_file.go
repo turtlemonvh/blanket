@@ -47,36 +47,6 @@ func init() {
 	defaultTfc = &TailedFileCollection{
 		fileList: make(map[string]*TailedFile),
 	}
-
-	// Start cleanup loop
-	// Seems to cause problems
-	/*
-		go func() {
-			for true {
-				defaultTfc.Lock()
-				log.WithFields(log.Fields{
-					"files": defaultTfc.fileList,
-				}).Info("Checking for files with no subscribers")
-
-				for _, tf := range defaultTfc.fileList {
-					log.WithFields(log.Fields{
-						"nsubs": len(tf.Subscribers),
-						"file":  tf.Filepath,
-					}).Info("Checking # subscribers")
-
-					if len(tf.Subscribers) == 0 {
-						log.WithFields(log.Fields{
-							"tailedFile": tf,
-							"file":       tf.Filepath,
-						}).Info("Closing tailed file because no subscribers remain")
-						defaultTfc.StopTailedFile(tf.Filepath)
-					}
-				}
-				defaultTfc.Unlock()
-				time.Sleep(10000 * time.Millisecond)
-			}
-		}()
-	*/
 }
 
 /*

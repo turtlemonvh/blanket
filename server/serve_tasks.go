@@ -27,6 +27,10 @@ const (
 	FAR_FUTURE_SECONDS = int64(60 * 60 * 24 * 365 * 100)
 )
 
+/*
+ * Utility functions
+ */
+
 // Gets the full byte representation of the objectid
 // Errors are ignored because just casting a string object to a byte slice will never result in an error
 func IdBytes(id bson.ObjectId) []byte {
@@ -34,7 +38,76 @@ func IdBytes(id bson.ObjectId) []byte {
 	return bts
 }
 
-// Either gets the task id or returns an error
+func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
+	b = tx.Bucket([]byte("tasks"))
+	if b == nil {
+		err = fmt.Errorf("Database format error: Bucket 'tasks' does not exist.")
+	}
+	return
+}
+
+func fetchTaskFromBucket(taskId *bson.ObjectId, b *bolt.Bucket) (t tasks.Task, err error) {
+	result := b.Get(IdBytes(*taskId))
+	err = json.Unmarshal(result, &t)
+	return
+}
+
+func fetchTaskById(taskId bson.ObjectId) (tasks.Task, error) {
+	var err error
+	task := tasks.Task{}
+	err = DB.View(func(tx *bolt.Tx) error {
+		b, err := fetchTaskBucket(tx)
+		if err != nil {
+			return err
+		}
+		task, err = fetchTaskFromBucket(&taskId, b)
+		return nil
+	})
+	return task, err
+}
+
+func saveTaskToBucket(t tasks.Task, b *bolt.Bucket) (err error) {
+	js, err := t.ToJSON()
+	if err != nil {
+		return err
+	}
+
+	err = b.Put(IdBytes(t.Id), []byte(js))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func modifyTaskInTransaction(taskId *bson.ObjectId, f func(t *tasks.Task) error) error {
+	err := DB.Update(func(tx *bolt.Tx) error {
+		bucket, err := fetchTaskBucket(tx)
+		if err != nil {
+			return err
+		}
+		t, err := fetchTaskFromBucket(taskId, bucket)
+		if err != nil {
+			return err
+		}
+
+		// Main function; accepts a task object and can perform checks and modify it
+		err = f(&t)
+		if err != nil {
+			return err
+		} else {
+			t.LastUpdatedTs = time.Now().Unix()
+		}
+
+		err = saveTaskToBucket(t, bucket)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	return err
+}
+
+// Either gets the task id from a context object or returns an error
 // Will also set the response for the request if there was a problem
 func getTaskId(c *gin.Context) (bson.ObjectId, error) {
 	var err error
@@ -51,6 +124,7 @@ func getTaskId(c *gin.Context) (bson.ObjectId, error) {
 	return tid, err
 }
 
+// Return just the keys for a map
 func MapKeys(m map[string]bool) []string {
 	ks := make([]string, 0, len(m))
 	for k := range m {
@@ -58,6 +132,10 @@ func MapKeys(m map[string]bool) []string {
 	}
 	return ks
 }
+
+/*
+ * Request handlers
+ */
 
 func getTasks(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
@@ -112,12 +190,6 @@ func getTasks(c *gin.Context) {
 	}
 	smallestId := bson.NewObjectIdWithTime(startTime)
 	largestId := bson.NewObjectIdWithTime(endTime)
-
-	// https://godoc.org/labix.org/v2/mgo/bson#NewObjectIdWithTime
-	// NewObjectIdWithTime
-	// https://godoc.org/github.com/boltdb/bolt#Cursor.Seek
-
-	// FIXME: Range queries
 
 	if limit < 1 {
 		limit = 10
@@ -198,7 +270,7 @@ func getTasks(c *gin.Context) {
 				continue
 			}
 
-			// all tags in requiredTaskTags must be present on every task
+			// All tags in requiredTaskTags must be present on every task
 			if len(requiredTaskTags) > 0 {
 				hasTags := true
 				for _, requestedTag := range requiredTaskTags {
@@ -218,7 +290,7 @@ func getTasks(c *gin.Context) {
 				}
 			}
 
-			// all tags on each task must be present in maxTaskTags
+			// All tags on each task must be present in maxTaskTags
 			if len(maxTaskTags) > 0 {
 				taskHasExtraTags := false
 				for _, existingTag := range t.Tags {
@@ -292,73 +364,8 @@ func getTask(c *gin.Context) {
 	c.String(http.StatusOK, result)
 }
 
-func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
-	b = tx.Bucket([]byte("tasks"))
-	if b == nil {
-		err = fmt.Errorf("Database format error: Bucket 'tasks' does not exist.")
-	}
-	return
-}
-
-func fetchTaskFromBucket(taskId *bson.ObjectId, b *bolt.Bucket) (t tasks.Task, err error) {
-	result := b.Get(IdBytes(*taskId))
-	err = json.Unmarshal(result, &t)
-	return
-}
-
-func saveTaskToBucket(t tasks.Task, b *bolt.Bucket) (err error) {
-	js, err := t.ToJSON()
-	if err != nil {
-		return err
-	}
-
-	err = b.Put(IdBytes(t.Id), []byte(js))
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func modifyTaskInTransaction(taskId *bson.ObjectId, f func(t *tasks.Task) error) error {
-	err := DB.Update(func(tx *bolt.Tx) error {
-		bucket, err := fetchTaskBucket(tx)
-		if err != nil {
-			return err
-		}
-		t, err := fetchTaskFromBucket(taskId, bucket)
-		if err != nil {
-			return err
-		}
-
-		// Main function; accepts a task object and can perform checks and modify it
-		err = f(&t)
-		if err != nil {
-			return err
-		} else {
-			t.LastUpdatedTs = time.Now().Unix()
-		}
-
-		err = saveTaskToBucket(t, bucket)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	return err
-}
-
 /*
 All updates must happen in a single transaction
-
-e.g. for a worker to start work
-- find a valid task
-- mark it in progress
-- save it
-~~~
-- that all has to happen in 1 step
-
-For other updates it is less crucial.
-
 */
 func updateTaskState(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
@@ -633,21 +640,6 @@ func removeTask(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
-}
-
-func fetchTaskById(taskId bson.ObjectId) (tasks.Task, error) {
-	var err error
-	task := tasks.Task{}
-	err = DB.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("tasks"))
-		if b == nil {
-			errorString := "Database format error: Bucket 'tasks' does not exist."
-			return fmt.Errorf(errorString)
-		}
-		task, err = fetchTaskFromBucket(&taskId, b)
-		return nil
-	})
-	return task, err
 }
 
 func streamTaskLog(c *gin.Context) {
