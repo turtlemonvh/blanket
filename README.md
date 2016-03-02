@@ -163,7 +163,6 @@ blanket rm
 
 - Clean up ls/ps commands
     - list types, tasks, workers
-    - allow filtering, templating
     - a lot like docker here
 
 - set environment variables in task to make working within blanket easier

@@ -49,6 +49,7 @@ type PSConf struct {
 	Types        string
 	RequiredTags string
 	MaxTags      string
+	Template     string
 	Limit        int
 	ParsedTags   []string
 }
@@ -59,6 +60,7 @@ func init() {
 	psCmd.Flags().StringVarP(&psConf.Types, "types", "t", "", "Only list tasks of these types (comma separated)")
 	psCmd.Flags().StringVar(&psConf.RequiredTags, "requiredTags", "", "Only list tasks whose tags are a superset of these tags (comma separated)")
 	psCmd.Flags().StringVar(&psConf.MaxTags, "maxTags", "", "Only list tasks whose tags are a subset of these tags (comma separated)")
+	psCmd.Flags().StringVar(&psConf.Template, "template", "", "The template to use for listing tasks")
 	psCmd.Flags().IntVarP(&psConf.Limit, "limit", "l", 500, "Maximum number of items to return")
 	psCmd.Flags().BoolVarP(&psConf.Quiet, "quiet", "q", false, "Print ids only")
 	RootCmd.AddCommand(psCmd)
@@ -96,11 +98,19 @@ func (c *PSConf) ListTasks() {
 	dec := json.NewDecoder(res.Body)
 	dec.Decode(&tasks)
 
-	templateString := "{{.id}}\t{{.type}}\t{{.state}}\t{{.tags}}\n"
-	if c.Quiet {
-		templateString = "{{.id}}\n"
+	if c.Template == "" {
+		c.Template = "{{.id}} {{.type}} {{.state}} {{.tags}}"
+	} else if c.Quiet {
+		c.Template = "{{.id}}"
 	}
-	tmpl, err := template.New("tasks").Parse(templateString)
+
+	// Clean up template strings
+	c.Template = strings.Replace(c.Template, " ", "\t", -1)
+	if !strings.HasSuffix(c.Template, "\n") {
+		c.Template += "\n"
+	}
+
+	tmpl, err := template.New("tasks").Parse(c.Template)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
