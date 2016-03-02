@@ -1,5 +1,7 @@
 # Blanket
 
+> WARNING: Work in progress. Useful but still rough.
+
 A RESTy wrapper for services.
 
 ## Quick Start
@@ -49,12 +51,29 @@ Run worker with certain capabilities
 Running tests
 
     # For just a module
-    # http://crosbymichael.com/go-helpful-commands.html
+    # From: http://crosbymichael.com/go-helpful-commands.html
     go test ./tasks
 
     # For everything
     go test github.com/turtlemonvh/blanket/...
     go test ./...
+
+
+## Running the web UI
+
+> I'm working on figuring out the best way to handle packaging this, either as a plugin or as a included component of the build
+> Pros of including: easy setup, no separate process for installing plugin, single executable
+> Cons of including: no longer go-getable, more complex build process
+> I'm leaning toward the plugin option and creating a simple command for managing plugins.
+
+    cd html
+
+    # Install dependencies
+    npm install
+    bower install
+
+    # Run test server
+    gulp
 
 
 ## API
@@ -63,7 +82,7 @@ Running tests
 blanket
 ```
 
-- launches server
+- runs server
 
 ```
 blanket worker -t <tags> -n <number>
@@ -91,18 +110,17 @@ blanket ps
 blanket rm
 ```
 
+- remove a single task
 - FIXME: change to
     - blanket rm task <id>
     - blanket rm worker <id>
-
-
 
 
 ## To Do
 
 ### Short List
 
-> See: https://trello.com/b/bOWTSxbO/blanket-dev
+> Also see: https://trello.com/b/bOWTSxbO/blanket-dev
 
 - allow user to use a previous task as a template for a new task
     - just POST to /task/<id>/rerun
@@ -148,8 +166,10 @@ blanket rm
     - BLANKET_APP_TASK_RESULTS_DIRECTORY
     - BLANKET_APP_WORKER_PID
     - BLANKET_APP_SERVER_PORT
+
 - allow filling in files as templates
     - have glob patterns to match templates (relative to where they will be copied into)
+
 - package HTML into a single binary
     - maybe make this a plugin
         - https://www.elastic.co/guide/en/elasticsearch/plugins/2.2/index.html
@@ -165,10 +185,12 @@ blanket rm
             - build js (gulp build)
             - run bindata-assets command
             - then build
+
 - make some good examples
 - put api calls into sub directories
 - add ability to archive tasks and load from archive
     - archive is basically results directory + a `.blanket-task` file that defines the JSON for that task
+
 - handle undo
     - deleting just archives
     - auto-clean up archives after X days
@@ -177,6 +199,7 @@ blanket rm
     - can keep all these actions in a queue of actions in the database that we go through every couple seconds
         - would still want to remove item from UI immediately first
     - basically the same as gmail's UI
+
 - use Docker containers for builds
     - so we can use this:
         go build -race .
@@ -394,7 +417,7 @@ http://talks.golang.org/2012/10things.slide#8
     * It's just a bunch of json and a few tar.gzs for the directory contents
 
 
-## Extra
+## Backlog
 
 - clean up About page
     - link to docs

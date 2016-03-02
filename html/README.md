@@ -6,6 +6,7 @@ Running locally with reload on change:
 
     # Install
     npm install
+    bower install
 
     # Run dev server; build content too
     gulp serve
@@ -34,12 +35,7 @@ Checking syntax of js files
 
 ## TODO
 
-* move http calls into a central data service
-    * poll for changes on a configurable interval
-    * make url configurable
-* break into separate pages
 * limit results to first 100 items
-* make display more compact
 * allow editing of TOML files inline
     * edit button that pops up form
 * integrate stuff from html5bp
@@ -49,4 +45,3 @@ Checking syntax of js files
 * add some command line flags to make top label commands easier to work with
     * http://stackoverflow.com/questions/23023650/is-it-possible-to-pass-a-flag-to-gulp-to-have-it-run-tasks-in-different-ways
 * move some code to external libraries to make it easier to include in other projects
-
