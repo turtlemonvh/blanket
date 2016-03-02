@@ -63,9 +63,11 @@ func InitializeConfig() {
 
 	viper.BindPFlag("port", blanketCmdV.PersistentFlags().Lookup("port"))
 	viper.BindPFlag("logLevel", blanketCmdV.PersistentFlags().Lookup("logLevel"))
+}
 
-	// Set log level
+func InitializeLogging() {
 	var level log.Level
+	var err error
 	level, err = log.ParseLevel(viper.GetString("logLevel"))
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -88,6 +90,7 @@ var RootCmd = &cobra.Command{
            in a single binary!`,
 	Run: func(cmd *cobra.Command, args []string) {
 		InitializeConfig()
+		InitializeLogging()
 		server.Serve()
 	},
 }

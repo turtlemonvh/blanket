@@ -17,6 +17,7 @@ var workerCmd = &cobra.Command{
 	Short: "Run a worker with capabilities defined by tags",
 	Run: func(cmd *cobra.Command, args []string) {
 		InitializeConfig()
+		InitializeLogging()
 		err := workerConf.Run()
 		if err != nil {
 			log.WithFields(log.Fields{

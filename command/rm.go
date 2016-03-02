@@ -30,6 +30,8 @@ var rmCmd = &cobra.Command{
 	Short: "Remove tasks",
 	Run: func(cmd *cobra.Command, args []string) {
 		InitializeConfig()
+		viper.Set("logLevel", "error")
+		InitializeLogging()
 		if len(args) < 1 {
 			fmt.Println("ERROR: Missing required positional argument 'taskId'")
 			cmd.Usage()

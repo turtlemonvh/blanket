@@ -121,6 +121,10 @@ func (t *TaskType) String() string {
 	return fmt.Sprintf("%s [loaded=%d]", t.Config.GetString("name"), t.LoadedTs)
 }
 
+func (t *TaskType) GetName() string {
+	return t.Config.GetString("name")
+}
+
 func (t *TaskType) ToJSON() (string, error) {
 	ttSettings := t.Config.AllSettings()
 	ttSettings["loadedTs"] = t.LoadedTs
@@ -130,8 +134,8 @@ func (t *TaskType) ToJSON() (string, error) {
 	return string(bts), err
 }
 
+// Return a map of default values, {name => value}
 func (t *TaskType) DefaultEnv() map[string]string {
-	// Interface that is a []map[string]interface{}
 	defaultEnv := cast.ToSlice(t.Config.Get("environment.default"))
 	env := make(map[string]string)
 	for _, envVar := range defaultEnv {
@@ -139,6 +143,24 @@ func (t *TaskType) DefaultEnv() map[string]string {
 		evName := cast.ToString(ev["name"])
 		evValue := cast.ToString(ev["value"])
 		env[evName] = evValue
+	}
+	return env
+}
+
+func (t *TaskType) HasRequiredEnv() bool {
+	defaultEnv := cast.ToSlice(t.Config.Get("environment.required"))
+	return len(defaultEnv) != 0
+}
+
+// Return a map of default values, {name => type(string)}
+func (t *TaskType) RequiredEnv() map[string]string {
+	defaultEnv := cast.ToSlice(t.Config.Get("environment.required"))
+	env := make(map[string]string)
+	for _, envVar := range defaultEnv {
+		ev := cast.ToStringMap(envVar)
+		evName := cast.ToString(ev["name"])
+		evType := cast.ToString(ev["type"])
+		env[evName] = evType
 	}
 	return env
 }

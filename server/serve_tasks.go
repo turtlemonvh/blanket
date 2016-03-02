@@ -531,22 +531,36 @@ func postTask(c *gin.Context) {
 	}
 
 	// Load environment variables
-	var defaultEnv map[string]string
+	envVars := make(map[string]string)
 	if req["environment"] != nil {
-		defaultEnv = cast.ToStringMapString(req["environment"])
-		if len(defaultEnv) == 0 {
-			log.WithFields(log.Fields{
-				"environment": req["environment"],
-			}).Error("environment is not a map[string]string")
+		envVars = cast.ToStringMapString(req["environment"])
+		if len(envVars) == 0 {
 			c.String(http.StatusBadRequest, `{"error": "The 'environment' parameter must be a map of string keys to string values."}`)
 			return
 		}
 
-		// FIXME: Check that required variables are set
+		// Check that required variables are set
+		var missingVars []string
+		for varName, _ := range tt.RequiredEnv() {
+			if envVars[varName] == "" {
+				missingVars = append(missingVars, varName)
+			}
+
+			// FIXME: Check types of variables, maybe by checking that they can be cast to that type then back to string with no loss
+		}
+		if len(missingVars) > 0 {
+			c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "Missing environment variables required for this task type: %s"}`, missingVars))
+			return
+		}
+
+	} else if tt.HasRequiredEnv() {
+		// Environment not set but we have required fields
+		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "The task type '%s' has required environment variables. The 'environment' parameter must be set and contain these values."}`, tt.GetName()))
+		return
 	}
 
 	// Create task object
-	t, err := tt.NewTask(defaultEnv)
+	t, err := tt.NewTask(envVars)
 	if err != nil {
 		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
 		return
@@ -664,25 +678,15 @@ func streamTaskLog(c *gin.Context) {
 		c.String(http.StatusInternalServerError, "Error opening logfile stream")
 		return
 	}
-
-	// FIXME: Not closing this connection when client leaves
 	defer sub.Stop()
-
-	// FIXME: Close when task state changes from RUNNING and channel is empty
-
-	// https://godoc.org/github.com/gin-gonic/gin#Context.Stream
-	// https://github.com/gin-gonic/gin/blob/master/context.go#L465
-	// https://gobyexample.com/select
 
 	loglineChannelIsEmpty := false
 	lineno := 1
 	c.Stream(func(w io.Writer) bool {
-		// Step function should return a boolean saying whether to stay open
-		// https://github.com/gin-gonic/gin/blob/master/context.go#L465
+		// This function returns a boolean indicating whether the stream should stay open
+		// Every time this is called, also checks if client has left
 
 		// FIXME: This has the potential to generate one goroutine per line, maxing out 1 goroutine per line we can read in 5 seconds
-		// May want to close the timeout channel when we get a new value
-		// https://gobyexample.com/closing-channels
 		timeout := make(chan bool, 1)
 		go func() {
 			time.Sleep(5 * time.Second)
@@ -704,10 +708,10 @@ func streamTaskLog(c *gin.Context) {
 			loglineChannelIsEmpty = true
 		}
 
-		// Wait a second
+		// If we have emptied the channel, decide whether to stop sending data
 		if loglineChannelIsEmpty {
 			// Check whether the process is complete
-			// If so, return false so we quite streaming
+			// If so, return false so we quit streaming
 			task, err = fetchTaskById(taskId)
 			if err != nil {
 				log.WithFields(log.Fields{

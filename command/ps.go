@@ -35,6 +35,8 @@ var psCmd = &cobra.Command{
 	Short: "List active and queued tasks",
 	Run: func(cmd *cobra.Command, args []string) {
 		InitializeConfig()
+		viper.Set("logLevel", "error")
+		InitializeLogging()
 		psConf.ListTasks()
 	},
 }
@@ -42,8 +44,8 @@ var psCmd = &cobra.Command{
 type PSConf struct {
 	All          bool
 	Quiet        bool
-	State        string
-	Type         string
+	States       string
+	Types        string
 	RequiredTags string
 	MaxTags      string
 	Limit        int
@@ -53,8 +55,8 @@ type PSConf struct {
 func init() {
 	// Add options for tags, state, and view template
 	psCmd.Flags().BoolVarP(&psConf.All, "all", "a", false, "Print tasks in all states")
-	psCmd.Flags().StringVarP(&psConf.State, "state", "s", "RUNNING", "Only list tasks in this state")
-	psCmd.Flags().StringVarP(&psConf.Type, "type", "t", "", "Only list tasks of this type")
+	psCmd.Flags().StringVarP(&psConf.States, "state", "s", "running", "Only list tasks in these states (comma separated)")
+	psCmd.Flags().StringVarP(&psConf.Types, "types", "t", "", "Only list tasks of these types (comma separated)")
 	psCmd.Flags().StringVar(&psConf.RequiredTags, "requiredTags", "", "Only list tasks whose tags are a superset of these tags (comma separated)")
 	psCmd.Flags().StringVar(&psConf.MaxTags, "maxTags", "", "Only list tasks whose tags are a subset of these tags (comma separated)")
 	psCmd.Flags().IntVar(&psConf.Limit, "limit", 500, "Maximum number of items to return")
@@ -64,11 +66,11 @@ func init() {
 
 func (c *PSConf) ListTasks() {
 	v := url.Values{}
-	if c.State != "" && !c.All {
-		v.Set("states", strings.ToUpper(c.State))
+	if c.States != "" && !c.All {
+		v.Set("states", strings.ToUpper(c.States))
 	}
-	if c.Type != "" {
-		v.Set("types", c.Type)
+	if c.Types != "" {
+		v.Set("types", c.Types)
 	}
 	if c.RequiredTags != "" {
 		v.Set("requiredTags", c.RequiredTags)
