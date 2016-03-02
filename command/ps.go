@@ -15,21 +15,6 @@ import (
 	"text/template"
 )
 
-/*
-
-Like `docker ps`
-
-Lists
-- running tasks
-- queued tasks (with -a)
-
-Other commands list
-- task types
-- workers and their status
-
-
-*/
-
 var psConf PSConf
 var psCmd = &cobra.Command{
 	Use:   "ps",
@@ -104,7 +89,7 @@ func (c *PSConf) ListTasks() {
 		c.Template = "{{.id}}"
 	}
 
-	// Clean up template strings
+	// Prepare template strings for tabwriter
 	c.Template = strings.Replace(c.Template, " ", "\t", -1)
 	if !strings.HasSuffix(c.Template, "\n") {
 		c.Template += "\n"

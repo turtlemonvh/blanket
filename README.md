@@ -40,7 +40,7 @@ Delete a task
     ./blanket ps -q | tail -n5 | xargs -I {} ./blanket rm {}
 
     # Remove all
-    ./blanket ps -a -q | xargs -I {} ./blanket rm {}
+    ./blanket ps -q | xargs -I {} ./blanket rm {}
 
 Run worker with certain capabilities
 
@@ -54,16 +54,16 @@ Running tests
 
     # For everything
     go test github.com/turtlemonvh/blanket/...
+    go test ./...
 
 
 ## API
 
 ```
-blanket server
+blanket
 ```
 
 - launches server
-- option to run in unix socket instead of 0.0.0.0 or 127.0.0.1 for security
 
 ```
 blanket worker -t <tags> -n <number>
@@ -71,21 +71,6 @@ blanket worker -t <tags> -n <number>
 
 - launches n workers with capabilities defined by (optional) comma separated tags
 - also command to kill workers
-
-```
-blanket task run <task> -d{<data>}
-```
-
-- run a task of the specified type, passing in a config file to parameterize
-- returns a task id that can be used to track status, just like `docker run -d`
-- '-d' works just like curl option; can be a file or inline json
-- does basic data processing at this step so it can tell whether required fields are missing
-
-```
-blanket task stop <task> <task_id>
-```
-
-- like `docker stop`
 
 ```
 blanket ps
@@ -160,10 +145,6 @@ blanket rm
         - e.g. https://github.com/Sirupsen/logrus/blob/master/terminal_windows.go
     - can also define "base" executor and an array of arguments
         - like for docker
-
-- Clean up ls/ps commands
-    - list types, tasks, workers
-    - a lot like docker here
 
 - set environment variables in task to make working within blanket easier
     - BLANKET_APP_TASK_ID
