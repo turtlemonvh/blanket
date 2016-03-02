@@ -11,7 +11,7 @@ View tasks
 
     curl -s -X GET localhost:8773/task/ | python -mjson.tool
     # OR
-    ./blanket ps -a
+    ./blanket ps
 
 Add a new task
 
@@ -128,10 +128,6 @@ blanket rm
         - also runNumber
             - starts at 1
 
-
-- check that required env variables are set in HTTP api and not just in UI
-
-
 - Allow configurable executors
     - see how supervisord does it (and docker)
         - http://supervisord.org/subprocess.html#subprocess-environment
@@ -154,15 +150,6 @@ blanket rm
     - BLANKET_APP_SERVER_PORT
 - allow filling in files as templates
     - have glob patterns to match templates (relative to where they will be copied into)
-- return # tasks found in response to query
-    - don't put this in ordinary requests so we don't slow those down
-        - /task/count/
-            - everything else (options, etc) is the same
-            - most of the code can be shared between these 2 endpoints
-    - if >500, just say >500
-        - can provide a "limit" on this too to describe the number we stop at
-    - pagination on HTML interface
-        - http://getbootstrap.com/components/#pagination
 - package HTML into a single binary
     - maybe make this a plugin
         - https://www.elastic.co/guide/en/elasticsearch/plugins/2.2/index.html
@@ -439,6 +426,7 @@ http://talks.golang.org/2012/10things.slide#8
         - https://golang.org/pkg/syscall/#Credential
         - yeah, you can set userid and group id
 - other UI
+    - user should be able to upload files to include in a task run
     - add ability to shut down / restart main server from web ui
     - allow user to view and edit server configuration on UI
         - may need to allow them to trigger a restart
@@ -524,7 +512,8 @@ http://talks.golang.org/2012/10things.slide#8
 - allow TOML file inheritance, starting with a different base task type
     - https://github.com/spf13/viper/blob/master/viper.go#L938
     - to start, everything is bash
-- pagination of results
+- pagination of results on html UI
+    - http://getbootstrap.com/components/#pagination
 - moving tasks in different states to different buckets
     - would make scanning to find new tasks faster if all ERROR/SUCCESS tasks weren't in the same place
 - recommended tool for making your thing available
