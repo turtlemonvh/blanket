@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"text/template"
 )
 
@@ -54,19 +55,18 @@ type PSConf struct {
 
 func init() {
 	// Add options for tags, state, and view template
-	psCmd.Flags().BoolVarP(&psConf.All, "all", "a", false, "Print tasks in all states")
-	psCmd.Flags().StringVarP(&psConf.States, "state", "s", "running", "Only list tasks in these states (comma separated)")
+	psCmd.Flags().StringVarP(&psConf.States, "state", "s", "", "Only list tasks in these states (comma separated).")
 	psCmd.Flags().StringVarP(&psConf.Types, "types", "t", "", "Only list tasks of these types (comma separated)")
 	psCmd.Flags().StringVar(&psConf.RequiredTags, "requiredTags", "", "Only list tasks whose tags are a superset of these tags (comma separated)")
 	psCmd.Flags().StringVar(&psConf.MaxTags, "maxTags", "", "Only list tasks whose tags are a subset of these tags (comma separated)")
-	psCmd.Flags().IntVar(&psConf.Limit, "limit", 500, "Maximum number of items to return")
+	psCmd.Flags().IntVarP(&psConf.Limit, "limit", "l", 500, "Maximum number of items to return")
 	psCmd.Flags().BoolVarP(&psConf.Quiet, "quiet", "q", false, "Print ids only")
 	RootCmd.AddCommand(psCmd)
 }
 
 func (c *PSConf) ListTasks() {
 	v := url.Values{}
-	if c.States != "" && !c.All {
+	if c.States != "" {
 		v.Set("states", strings.ToUpper(c.States))
 	}
 	if c.Types != "" {
@@ -96,7 +96,7 @@ func (c *PSConf) ListTasks() {
 	dec := json.NewDecoder(res.Body)
 	dec.Decode(&tasks)
 
-	templateString := "{{.id}} {{.type}} {{.state}} {{.tags}} \n"
+	templateString := "{{.id}}\t{{.type}}\t{{.state}}\t{{.tags}}\n"
 	if c.Quiet {
 		templateString = "{{.id}}\n"
 	}
@@ -107,22 +107,26 @@ func (c *PSConf) ListTasks() {
 
 	// FIXME: Clean up formatting to make fields the same size
 	headerRow := map[string]interface{}{
-		"id":            fmt.Sprintf("%-36s", "Id"),
-		"createdTs":     "CreatedTs",
-		"startedTs":     "StartedTs",
-		"lastUpdatedTs": "LastUpdatedTs",
-		"type":          "TypeId",
-		"resultDir":     "ResultDir",
-		"state":         "State",
-		"progress":      "Progress",
-		"defaultEnv":    "ExecEnv",
-		"tags":          "Tags",
+		"id":            "ID",
+		"createdTs":     "CREATED_TS",
+		"startedTs":     "STARTED_TS",
+		"lastUpdatedTs": "LAST_UPDATED_TS",
+		"type":          "TYPE",
+		"resultDir":     "RESULT_DIR",
+		"state":         "STATE",
+		"progress":      "PROGRESS",
+		"defaultEnv":    "ENV",
+		"tags":          "TAGS",
 	}
 
+	w := tabwriter.NewWriter(os.Stdout, 0, 8, 1, '\t', 0)
+
 	if !c.Quiet && len(tasks) != 0 {
-		tmpl.Execute(os.Stdout, headerRow)
+		tmpl.Execute(w, headerRow)
 	}
 	for _, t := range tasks {
-		tmpl.Execute(os.Stdout, t)
+		tmpl.Execute(w, t)
 	}
+
+	w.Flush()
 }

@@ -119,6 +119,17 @@ blanket rm
 
 > See: https://trello.com/b/bOWTSxbO/blanket-dev
 
+- allow user to use a previous task as a template for a new task
+    - just POST to /task/<id>/rerun
+    - return id of the new task
+    - we may need to store more information about the task to do this correctly
+        - e.g. the difference between env variables set on the task itself and those inherited from the task type
+    - add this as an action on the task detail page; actions
+        - stop/delete
+        - archive
+        - Run another like this
+    - put these next to "Basic Settings" in the UI
+
 - controlling running tasks
     - If is task has passed its run time, unlock it and return to queue
     - stop / restart
@@ -127,20 +138,15 @@ blanket rm
     - Check for orphaned tasks
         - in RUNNING state but over time / worker is down
     - may not want to do  "redo" not and instead make it easy to "launch another"
-
-- allow user to use a previous task as a template for a new task
-    - just POST to /task/<id>/rerun
-    - return id of the new task
-    - we may need to store more information about the task to do this correctly
-        - e.g. the difference between env variables set on the task itself and those inherited from the task type
+    - add background process that looks for orphaned jobs and cleans them up
+        - need to be able to track that a job is a "re-run" of another job
+        - also runNumber
+            - starts at 1
 
 
-- HTTP interface
-    - add confirmations for delete / stop commands
-    - bulk delete
-    - a way to show messages for things we have done (toast messages)
-    - re-run a task that has run, or is stalled
-    - fix memory leak (was >500 mb when running for a while)
+- check that required env variables are set in HTTP api and not just in UI
+
+
 - Allow configurable executors
     - see how supervisord does it (and docker)
         - http://supervisord.org/subprocess.html#subprocess-environment
@@ -149,11 +155,23 @@ blanket rm
     - test on windows
     - e.g. http://ss64.com/nt/syntax-run.html
     - http://stackoverflow.com/questions/4571244/creating-a-bat-file-for-python-script
+    - http://stackoverflow.com/questions/13008255/how-to-execute-a-simple-windows-dos-command-in-golang
+    - add some files that compile OS specific variables
+        - e.g. https://github.com/Sirupsen/logrus/blob/master/terminal_windows.go
+    - can also define "base" executor and an array of arguments
+        - like for docker
+
 - Clean up ls/ps commands
-    - column alignment
     - list types, tasks, workers
     - allow filtering, templating
     - a lot like docker here
+
+- set environment variables in task to make working within blanket easier
+    - BLANKET_APP_TASK_ID
+    - BLANKET_APP_RESULTS_DIRECTORY
+    - BLANKET_APP_TASK_RESULTS_DIRECTORY
+    - BLANKET_APP_WORKER_PID
+    - BLANKET_APP_SERVER_PORT
 - allow filling in files as templates
     - have glob patterns to match templates (relative to where they will be copied into)
 - return # tasks found in response to query
@@ -166,12 +184,20 @@ blanket rm
     - pagination on HTML interface
         - http://getbootstrap.com/components/#pagination
 - package HTML into a single binary
-    - https://github.com/jteeuwen/go-bindata
-    - https://github.com/elazarl/go-bindata-assetfs
-    - need to add instructions
-        - build js (gulp build)
-        - run bindata-assets command
-        - then build
+    - maybe make this a plugin
+        - https://www.elastic.co/guide/en/elasticsearch/plugins/2.2/index.html
+        - https://www.elastic.co/guide/en/elasticsearch/plugins/2.2/management.html
+    - plugins that implement a UI report
+        - what URLs map to them
+            - e.g. "_plugin/ui"
+        - have all http requests at that path forwarded to them
+    - UI gets packaged into a separate single binary
+        - https://github.com/jteeuwen/go-bindata
+        - https://github.com/elazarl/go-bindata-assetfs
+        - need to add instructions
+            - build js (gulp build)
+            - run bindata-assets command
+            - then build
 - make some good examples
 - put api calls into sub directories
 - add ability to archive tasks and load from archive
@@ -220,6 +246,12 @@ blanket rm
         - allow the directory structure underneath to be configurable
             - e.g. dates, just ids, etc
 
+#### Packaging
+
+- installer
+    - add an installer (esp. for windows) or package (for linux) that sets up config
+- look into making it a service
+    - https://github.com/kardianos/service
 
 #### Testing
 
@@ -232,6 +264,8 @@ Set up automated tests
     - https://github.com/mattn/goveralls
 - add docker container for running tests so users can test in isolated installation
 
+- fs abstraction
+    - https://github.com/spf13/afero
 
 https://www.youtube.com/watch?v=ndmB0bj7eyw
 - http tests
@@ -287,39 +321,14 @@ http://talks.golang.org/2012/10things.slide#8
     - stdout and stderr logs
     - worker logs too
     - package up SSE log view into a directive
-- multiple loggers for differet output types
-    - http://stackoverflow.com/questions/18361750/correct-approach-to-global-logging-in-golang
-    - types
-        - requests log
-            - https://github.com/gin-gonic/gin/blob/develop/logger.go#L41
-            - https://godoc.org/github.com/gin-gonic/gin#Default
-            - easy to change out request logger
-        - errors and anomalies
-            - use the recovery middleware with a writer to log all panics that happen while serving requests
-            - https://godoc.org/github.com/gin-gonic/gin#RecoveryWithWriter
-        - worker log(s)
-        - task log(s)
 - multiple files + rotate function
     - http://stackoverflow.com/questions/28796021/how-can-i-log-in-golang-to-a-file-with-log-rotation
 - hup to rotate
     - https://github.com/natefinch/lumberjack/blob/v2.0/rotate_test.go
 - configurable logging verbosity
     - these are things that every task must provide, or it will be rejected
-- log to multiple locations
-    - https://github.com/Sirupsen/logrus
-    - https://godoc.org/github.com/Sirupsen/logrus#Logger
-    - http://technosophos.com/2013/09/14/using-gos-built-logger-log-syslog.html
-    - https://golang.org/pkg/io/#MultiWriter
-        - https://golang.org/ref/spec#Passing_arguments_to_..._parameters
-        - can call with a slice and get it to expand for you
-    - just create your own logging package that takes a config and writes to multiple locations at different verbosities
-        - configure as package global objects for easy import
-        - https://github.com/Sirupsen/logrus#rotation
-        - https://github.com/natefinch/lumberjack
-            - package for rotation
 - better worker logs with SSE and json logs
     - can include little event cards for everything that happened, even highlight errors, provide search and filtering, aggregate events
-- allow user to specify where worker logs go (directory)
 - name worker logs based on
     - time it started
     - capabilities (tags)
@@ -394,7 +403,9 @@ http://talks.golang.org/2012/10things.slide#8
     - recorded on database
 
 
-Important details
+### Important details
+
+> This is how we want it to work, not necessarily how it works now.
 
 * The task config is not locked when the task is added, but when it is executed
     * if you change the input files in the time between when a task is added and when it is executed, you will execute the new version of the task
@@ -455,31 +466,23 @@ Important details
     - add primitive main dashboard with recent activity
     - add ability to add new task types
     - allow editing task types on HTTP interface
+    - add confirmations for delete / stop commands
+    - bulk delete
+    - a way to show messages for things we have done (toast messages)
+    - re-run a task that has run, or is stalled
+    - fix memory leak (was >500 mb when running for a while)
 - Option to leave task creation request open until task completes
+    - would make testing easier
     - also adds it with super high priority so it is picked up fast
     - like this: https://github.com/celery/celery/issues/2275#issuecomment-56828471
 - allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
-- pulse "running" tag for running tasks to make them more obvious
 - godeps to lock in dependencies and avoid weird changes
-- option to run with tls
-- installer
-    - add an installer (esp. for windows) or package (for linux) that sets up config
 - monitoring
     - https://github.com/shirou/gopsutil
     - total CPU and memory usage of everything
     - total disk space of all results
-- option to do a clean reload
-    - https://github.com/fvbock/endless
-    - https://github.com/rcrowley/goagain
 - better browsing interface for files
     - instead of just a list, include modified time, size, etc.
-- Clean up formatting of ps command
-    - https://golang.org/pkg/text/tabwriter/
-    - https://github.com/olekukonko/tablewriter
-    - https://socketloop.com/references/golang-text-tabwriter-newwriter-function-and-write-method-example
-    - https://github.com/docker/docker/blob/master/api/client/ps.go
-    - https://github.com/docker/docker/blob/master/api/client/formatter/formatter.go
-        - uses tabwriter
 - user accounts, http auth login, account types
     - https://github.com/xyproto/permissionbolt
         - uses boltdb for simple security
@@ -522,8 +525,9 @@ Important details
         - input string is request json, output string is response json
 - pluggable result store
     - allow writing to a tmp directory and then storing on s3
-- use render to output templates content in responses
-    - https://github.com/unrolled/render#gin
+    - this should probably just be part of the task, but uploading and then clearing the directory would be a common cool task
+    - also a nil result store that will only keep output if the task fails
+        - but the task could do that itself too
 - Scheduling / future execution
     - https://godoc.org/github.com/robfig/cron
     - https://github.com/robfig/cron
@@ -535,7 +539,8 @@ Important details
     - max_concurrent_tasks
 - Task dependencies
     - similar to airflow and bamboo
-- add `?v` argument to provide pretty printed output
+- add `?v` argument to provide pretty printed output, like consul
+    - http://stackoverflow.com/questions/19038598/how-can-i-pretty-print-json-using-go
 - allow TOML file inheritance, starting with a different base task type
     - https://github.com/spf13/viper/blob/master/viper.go#L938
     - to start, everything is bash
@@ -544,10 +549,6 @@ Important details
     - would make scanning to find new tasks faster if all ERROR/SUCCESS tasks weren't in the same place
 - recommended tool for making your thing available
     - https://ngrok.com/
-- allow uploading created files to s3
-    - this should probably just be part of the task, but uploading and then clearing the directory would be a common cool task
-- fs abstraction
-    - https://github.com/spf13/afero
 - Cookie cutter / quickstart
     - generates an example project for people to get started developing wrapper in various languages with docs included
 - distributed:
@@ -570,9 +571,12 @@ Important details
         - https://github.com/deckarep/gosx-notifier
     - chat support for OSS
         - https://gitter.im/
+    - menubar application
+        - https://github.com/maxogden/menubar
+        - could package this into distributions on windows and mac
 
 
-## Benchmarking
+## Similar Projects
 
 - check out iron.io for data model and UI
     - http://www.iron.io/
@@ -592,6 +596,8 @@ Important details
     - celery api
 - https://github.com/RichardKnop/machinery
     - celery replica in golang
+- https://github.com/airbnb/airflow
+    - task management, scheduling, dependencies
 - https://github.com/glycerine/goq
     - sungridengine replica in golang with encryption
 - https://github.com/hammerlab/ketrew
