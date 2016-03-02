@@ -137,42 +137,33 @@ func MapKeys(m map[string]bool) []string {
  * Request handlers
  */
 
-func getTasks(c *gin.Context) {
-	c.Header("Content-Type", "application/json")
+type TaskSearchConf struct {
+	limit             int
+	offset            int
+	reverseSort       bool
+	requiredTags      []string
+	maxTags           []string
+	smallestId        bson.ObjectId
+	largestId         bson.ObjectId
+	allowedTaskStates map[string]bool
+	allowedTaskTypes  map[string]bool
+}
 
-	// Tags that each task must contain
-	var requiredTaskTags []string
-	tags := c.Query("requiredTags")
-	if tags != "" {
-		requiredTaskTags = strings.Split(tags, ",")
+func TaskSearchConfFromContext(c *gin.Context) *TaskSearchConf {
+	tc := &TaskSearchConf{}
+
+	tc.limit = cast.ToInt(c.Query("limit"))
+	tc.offset = cast.ToInt(c.Query("offset"))
+
+	// Default values for limit and offset
+	if tc.limit < 1 {
+		tc.limit = 500
+	}
+	if tc.offset < 0 {
+		tc.offset = 0
 	}
 
-	// The total set of tags each task is allowed to contain
-	var maxTaskTags []string
-	maxTags := c.Query("maxTags")
-	if maxTags != "" {
-		maxTaskTags = strings.Split(maxTags, ",")
-	}
-
-	allowedTaskStates := make(map[string]bool)
-	sentAllowedStates := c.Query("states")
-	if sentAllowedStates != "" {
-		for _, tstate := range strings.Split(sentAllowedStates, ",") {
-			allowedTaskStates[tstate] = true
-		}
-	}
-
-	allowedTaskTypes := make(map[string]bool)
-	sentAllowedTypes := c.Query("types")
-	if sentAllowedTypes != "" {
-		for _, tt := range strings.Split(sentAllowedTypes, ",") {
-			allowedTaskTypes[tt] = true
-		}
-	}
-
-	limit := cast.ToInt(c.Query("limit"))
-	offset := cast.ToInt(c.Query("offset"))
-	reverseSort := c.Query("reverseSort")
+	tc.reverseSort = c.Query("reverseSort") == "true"
 
 	// Should be unix timestamps, in seconds
 	startTimeSent := c.Query("createdAfter")
@@ -188,29 +179,59 @@ func getTasks(c *gin.Context) {
 	if err == nil {
 		endTime = time.Unix(endTimeSentInt, 0)
 	}
-	smallestId := bson.NewObjectIdWithTime(startTime)
-	largestId := bson.NewObjectIdWithTime(endTime)
+	tc.smallestId = bson.NewObjectIdWithTime(startTime)
+	tc.largestId = bson.NewObjectIdWithTime(endTime)
 
-	if limit < 1 {
-		limit = 10
+	// Filtering based on tags, states, types
+	tags := c.Query("requiredTags")
+	if tags != "" {
+		tc.requiredTags = strings.Split(tags, ",")
 	}
-	if offset < 0 {
-		offset = 0
+
+	maxTags := c.Query("maxTags")
+	if maxTags != "" {
+		tc.maxTags = strings.Split(maxTags, ",")
 	}
+
+	sentAllowedStates := c.Query("states")
+	tc.allowedTaskStates = make(map[string]bool)
+	if sentAllowedStates != "" {
+		for _, tstate := range strings.Split(sentAllowedStates, ",") {
+			tc.allowedTaskStates[tstate] = true
+		}
+	}
+
+	sentAllowedTypes := c.Query("types")
+	tc.allowedTaskTypes = make(map[string]bool)
+	if sentAllowedTypes != "" {
+		for _, ttype := range strings.Split(sentAllowedTypes, ",") {
+			tc.allowedTaskTypes[ttype] = true
+		}
+	}
+
+	return tc
+}
+
+func getTasks(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+
+	tc := TaskSearchConfFromContext(c)
+
+	justCounts := c.Query("count") == "true"
 
 	log.WithFields(log.Fields{
-		"requiredTaskTags": requiredTaskTags,
-		"maxTaskTags":      maxTaskTags,
-		"taskTypes":        MapKeys(allowedTaskTypes),
-		"taskStates":       MapKeys(allowedTaskStates),
-		"limit":            limit,
-		"startTime":        startTime,
-		"endTime":          endTime,
-		"smallestId":       smallestId.Hex(),
-		"largestId":        largestId.Hex(),
+		"requiredTaskTags": tc.requiredTags,
+		"maxTaskTags":      tc.maxTags,
+		"taskTypes":        MapKeys(tc.allowedTaskTypes),
+		"taskStates":       MapKeys(tc.allowedTaskStates),
+		"limit":            tc.limit,
+		"smallestId":       tc.smallestId.Hex(),
+		"largestId":        tc.largestId.Hex(),
+		"justCounts":       justCounts,
 	}).Debug("Task request params")
 
 	result := "["
+	nfound := 0
 	if err := DB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("tasks"))
 		if b == nil {
@@ -229,32 +250,31 @@ func getTasks(c *gin.Context) {
 			iterFunction  func() ([]byte, []byte)
 			endBytes      []byte
 		)
-		if reverseSort == "true" {
+		if tc.reverseSort {
 			// Have to just jump to the end, since seeking to a far future key goes to the end
 			// Seek only goes in 1 order
 			// Seek manually to the highest value
-			for k, v = c.Last(); k != nil && bytes.Compare(k, IdBytes(largestId)) >= 0; k, v = c.Prev() {
+			for k, v = c.Last(); k != nil && bytes.Compare(k, IdBytes(tc.largestId)) >= 0; k, v = c.Prev() {
 				continue
 			}
 			iterFunction = c.Prev
-			endBytes = IdBytes(smallestId)
+			endBytes = IdBytes(tc.smallestId)
 			checkFunction = func(bts []byte) bool {
 				return k != nil && bytes.Compare(k, endBytes) >= 0
 			}
 		} else {
 			// Normal case
-			k, v = c.Seek(IdBytes(smallestId))
+			k, v = c.Seek(IdBytes(tc.smallestId))
 			iterFunction = c.Next
-			endBytes = IdBytes(largestId)
+			endBytes = IdBytes(tc.largestId)
 			checkFunction = func(bts []byte) bool {
 				return k != nil && bytes.Compare(k, endBytes) <= 0
 			}
 		}
 
-		nfound := 0
 		for ; checkFunction(k); k, v = iterFunction() {
 			// e.g. 50-40 == 10
-			if nfound-offset == limit {
+			if nfound-tc.offset == tc.limit {
 				break
 			}
 
@@ -263,17 +283,17 @@ func getTasks(c *gin.Context) {
 			json.Unmarshal(v, &t)
 
 			// Filter results
-			if len(allowedTaskTypes) != 0 && !allowedTaskTypes[t.TypeId] {
+			if len(tc.allowedTaskTypes) != 0 && !tc.allowedTaskTypes[t.TypeId] {
 				continue
 			}
-			if len(allowedTaskStates) != 0 && !allowedTaskStates[t.State] {
+			if len(tc.allowedTaskStates) != 0 && !tc.allowedTaskStates[t.State] {
 				continue
 			}
 
-			// All tags in requiredTaskTags must be present on every task
-			if len(requiredTaskTags) > 0 {
+			// All tags in tc.requiredTags must be present on every task
+			if len(tc.requiredTags) > 0 {
 				hasTags := true
-				for _, requestedTag := range requiredTaskTags {
+				for _, requestedTag := range tc.requiredTags {
 					found := false
 					for _, existingTag := range t.Tags {
 						if requestedTag == existingTag {
@@ -290,12 +310,12 @@ func getTasks(c *gin.Context) {
 				}
 			}
 
-			// All tags on each task must be present in maxTaskTags
-			if len(maxTaskTags) > 0 {
+			// All tags on each task must be present in tc.maxTags
+			if len(tc.maxTags) > 0 {
 				taskHasExtraTags := false
 				for _, existingTag := range t.Tags {
 					found := false
-					for _, allowedTag := range maxTaskTags {
+					for _, allowedTag := range tc.maxTags {
 						if allowedTag == existingTag {
 							found = true
 						}
@@ -311,13 +331,15 @@ func getTasks(c *gin.Context) {
 			}
 
 			// Keep track of found items, and build string that will be returned
-			// FIXME: Return this in chunks
 			nfound += 1
-			if nfound > offset {
-				if !isFirst {
-					result += ","
+			if nfound > tc.offset {
+				if !justCounts {
+					if !isFirst {
+						result += ","
+					}
+					// FIXME: Return this in chunks
+					result += string(v)
 				}
-				result += string(v)
 				isFirst = false
 			}
 		}
@@ -330,7 +352,11 @@ func getTasks(c *gin.Context) {
 	}
 	result += "]"
 
-	c.String(http.StatusOK, result)
+	if justCounts {
+		c.String(http.StatusOK, cast.ToString(nfound))
+	} else {
+		c.String(http.StatusOK, result)
+	}
 }
 
 // Doesn't read task in; assumes value is valid JSON for speed
