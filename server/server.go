@@ -19,6 +19,7 @@ import (
 	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/boltdb/bolt"
+	"github.com/gin-gonic/contrib/ginrus"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
 	"github.com/spf13/viper"
@@ -116,10 +117,13 @@ func Serve() {
 		}
 	}
 
-	// Basic info routes
-	r := gin.Default()
+	if log.GetLevel() != log.DebugLevel {
+		gin.SetMode(gin.ReleaseMode)
+	}
 
-	//r.Use(gin.WrapF(c.HandlerFunc))
+	r := gin.New()
+	r.Use(ginrus.Ginrus(log.StandardLogger(), time.RFC3339, true))
+	r.Use(gin.Recovery())
 	r.Use(gin.WrapF(makeCorsHandler(c)))
 
 	// Make the result dir browseable

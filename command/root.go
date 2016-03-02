@@ -25,7 +25,7 @@ var (
 func init() {
 	//cobra.OnInitialize(initConfig)
 	RootCmd.PersistentFlags().Int32P("port", "p", 8773, "Port the server will run on")
-	RootCmd.PersistentFlags().StringVar(&LogLevel, "logLevel", "warn", "the logging level to use")
+	RootCmd.PersistentFlags().StringVar(&LogLevel, "logLevel", "info", "the logging level to use")
 	RootCmd.PersistentFlags().StringVarP(&CfgFile, "config", "c", "", "config file (default is blanket.yaml|json|toml)")
 	RootCmd.AddCommand(versionCmd)
 	blanketCmdV = RootCmd
