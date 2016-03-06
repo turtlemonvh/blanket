@@ -36,6 +36,7 @@ type WorkerConf struct {
 	fileCopier    lib.FileCopier
 }
 
+// Called from another process
 // Sends sigterm
 func (c *WorkerConf) Stop() error {
 	p, err := os.FindProcess(c.Pid)
@@ -116,6 +117,7 @@ func (c *WorkerConf) Run() error {
 			// If the shutdown request initiated from the outside this won't update anything
 			log.Warn("Received shutdown signal; stopping after current task completes")
 
+			// FIXME: Update lastHeardTs too
 			c.Stopping = true
 			err = c.UpdateInDatabase()
 			if err != nil {
@@ -165,6 +167,16 @@ func (c *WorkerConf) Run() error {
 			"checkInterval": c.CheckInterval,
 			"logfile":       c.Logfile,
 		}).Info("Starting executable")
+
+		// FIXME: Fire off heatbeat in a goroutine
+		// - checks if worker should be paused or shut down
+		// - do this instead of sending a signal from the parent process
+		// - keep track of last heartbeat
+		// - last task run should be searchable via the tasks
+		go func() {
+			// Will stop when worker process shuts down
+			return
+		}()
 
 		c.MustRegister()
 		c.ProcessTasks()
@@ -259,10 +271,17 @@ func (c *WorkerConf) Shutdown() {
 
 // FIXME: Once working on a task, send logs of errors into its logfiles
 func (c *WorkerConf) ProcessTasks() {
-	for !c.Stopping {
-		time.Sleep(time.Duration(c.CheckInterval*1000) * time.Millisecond)
+	var err error
+	var t tasks.Task
 
-		t, err := c.FindTask()
+	for !c.Stopping {
+		if err != nil {
+			// Only pause when we had a problem
+			time.Sleep(time.Duration(c.CheckInterval*1000) * time.Millisecond)
+		}
+
+		// FIXME: Handle task not found differently than a 500, 401, etc
+		t, err = c.ClaimTask()
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
@@ -275,18 +294,14 @@ func (c *WorkerConf) ProcessTasks() {
 		}
 
 		log.WithFields(log.Fields{
-			"taskId": t.Id,
-			"typeId": t.TypeId,
-			"tags":   t.Tags,
+			"task": t,
 		}).Info("Found task to process")
 
 		err = c.ProcessOne(&t)
 		if err == nil {
 			log.WithFields(log.Fields{
-				"taskId": t.Id,
-				"typeId": t.TypeId,
-				"tags":   t.Tags,
-			}).Infof("processed task successfully; checking for next task in %f seconds", c.CheckInterval)
+				"task": t,
+			}).Infof("processed task successfully")
 		} else {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
@@ -311,25 +326,15 @@ func toSliceStringSlice(i interface{}) [][]string {
 func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	// Fetch information about the task type
 	ttFilepath := path.Join(viper.GetString("tasks.typesPath"), fmt.Sprintf("%s.toml", t.TypeId))
+
+	// FIXME: Copy template into result directory
+	// Do this BEFORE reading to make sure we're reading the version we save
+
 	tt, err := tasks.ReadTaskTypeFromFilepath(ttFilepath)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err": err.Error(),
 		}).Error("failed to get task type information")
-		return err
-	}
-
-	// Mark the task as in progress on this worker at a specific version of the config
-	err = c.TransitionTaskState(t, "START", map[string]string{
-		"typeDigest": tt.ConfigVersionHash,
-		"workerId":   c.Id.Hex(),
-		"timeout":    tt.Config.GetString("timeout"),
-	})
-	if err != nil {
-		log.WithFields(log.Fields{
-			"err":    err.Error(),
-			"taskId": t.Id,
-		}).Error("failed to transition task to state START")
 		return err
 	}
 
@@ -385,7 +390,12 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		return err
 	}
 
-	err = c.TransitionTaskState(t, "RUNNING", map[string]string{"pid": cast.ToString(cmd.Process.Pid)})
+	// FIXME: Move more fields here
+	err = c.TransitionTaskState(t, "RUNNING", map[string]string{
+		"pid":        cast.ToString(cmd.Process.Pid),
+		"timeout":    tt.Config.GetString("timeout"),
+		"typeDigest": tt.ConfigVersionHash,
+	})
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err":    err.Error(),
@@ -550,7 +560,7 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 
 func (c *WorkerConf) TransitionTaskState(t *tasks.Task, state string, extraVars map[string]string) error {
 	urlParams := url.Values{}
-	urlParams.Set("state", state) // START, RUNNING, ERROR/SUCCESS
+	urlParams.Set("state", state) // RUNNING, ERROR/SUCCESS/TIMEOUT/STOPPED
 	for k, v := range extraVars {
 		urlParams.Set(k, v)
 	}
@@ -568,32 +578,29 @@ func (c *WorkerConf) TransitionTaskState(t *tasks.Task, state string, extraVars 
 	return nil
 }
 
-func (c *WorkerConf) FindTask() (tasks.Task, error) {
+// Find the oldest task we are eligible to run
+func (c *WorkerConf) ClaimTask() (tasks.Task, error) {
 	// Call the REST api and get a task with the required tags
 	// The worker needs to make sure it has all the tags of whatever task it requests
-	v := url.Values{}
-
-	v.Set("states", "WAIT")
-	v.Set("maxTags", c.Tags)
-	v.Set("limit", "1")
-	v.Set("reverseSort", "true") // oldest to newest
-
-	paramsString := v.Encode()
-	reqURL := fmt.Sprintf("http://localhost:%d/task/", viper.GetInt("port")) + "?" + paramsString
+	reqURL := fmt.Sprintf("http://localhost:%d/task/claim/%s", viper.GetInt("port"), c.Id.Hex())
 	res, err := http.Get(reqURL)
 	if err != nil {
 		return tasks.Task{}, err
 	}
 	defer res.Body.Close()
 
-	// Handle response by looking for item with latest timestamp
-	var respTasks []tasks.Task
-	dec := json.NewDecoder(res.Body)
-	dec.Decode(&respTasks)
-
-	// Always sorted oldest to newest
-	if len(respTasks) > 0 {
-		return respTasks[0], nil
+	if res.StatusCode != 200 {
+		// FIXME: Get the error content from the JSON response
+		return tasks.Task{}, fmt.Errorf("Problem claiming task; status code :: %s", res.Status)
 	}
-	return tasks.Task{}, nil
+
+	// Try to marshall this into a task object
+	var t tasks.Task
+	dec := json.NewDecoder(res.Body)
+	err = dec.Decode(&t)
+	if err != nil {
+		return tasks.Task{}, fmt.Errorf("Error decoding claimed task; possible data corruption or server/worker version mismatch :: %s", err.Error())
+	}
+
+	return t, nil
 }

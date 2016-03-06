@@ -198,7 +198,7 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 		TypeId:        t.Config.GetString("name"),
 		TypeDigest:    "",
 		ResultDir:     path.Join(viper.GetString("tasks.resultsPath"), taskId.Hex()),
-		State:         "WAIT",
+		State:         "WAITING",
 		WorkerId:      "",
 		Progress:      0,
 		ExecEnv:       mixedEnv,
@@ -206,19 +206,23 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 	}, nil
 }
 
-var ValidTaskStates = []string{"WAIT", "START", "RUNNING", "ERROR", "SUCCESS", "STOPPED", "TIMEOUT"}
+var (
+	ValidTaskStates         = []string{"WAITING", "CLAIMED", "RUNNING", "ERROR", "SUCCESS", "STOPPED", "TIMEDOUT"}
+	ValidTerminalTaskStates = []string{"ERROR", "SUCCESS", "STOPPED", "TIMEDOUT"}
+)
 
+// FIXME: Reason field for why a task was stopped? audit trail of actions?
 type Task struct {
 	Id            bson.ObjectId     `json:"id"`            // time sortable id
 	Pid           int               `json:"pid"`           // the process id used to run the task on disk
-	CreatedTs     int64             `json:"createdTs"`     // when it was first added to the database
-	StartedTs     int64             `json:"startedTs"`     // when it started running
+	CreatedTs     int64             `json:"createdTs"`     // when it was first added to the queue
+	StartedTs     int64             `json:"startedTs"`     // when it was pulled from the queue
 	LastUpdatedTs int64             `json:"lastUpdatedTs"` // last time any information changed
 	TypeId        string            `json:"type"`          // String name
 	ResultDir     string            `json:"resultDir"`     // Full path
 	TypeDigest    string            `json:"typeDigest"`    // version hash of config file
 	Timeout       int64             `json:"timeout"`       // The max time the task is allowed to run
-	State         string            `json:"state"`         // WAIT, START, RUN, SUCCESS/ERROR/STOPPED/TIMEOUT
+	State         string            `json:"state"`         // See ValidTaskStates
 	WorkerId      string            `json:"workerId"`      // Id of the worker that processed this task; set on START
 	Progress      int               `json:"progress"`      // 0-100
 	ExecEnv       map[string]string `json:"defaultEnv"`    // Combined with default env
