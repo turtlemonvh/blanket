@@ -83,7 +83,7 @@ func (Q *BlanketBoltQueue) ListTasks(tags []string, limit int) (string, int, err
 // but also are still in the queue (i.e. ack or nack function never got called)
 // - In rabbitmq and other queues this is handled for you with a configurable ttl on ack requests
 // - In mongo, postgres, bolt, claims are made by setting the workerId field
-// When cleaning up unacked, check if the task is in the database >state START; if so, maybe just ack failed and we don't want to re-run and duplicate
+// When cleaning up unacked, check if the task is in the database >state CLAIMED; if so, maybe just ack failed and we don't want to re-run and duplicate
 func (Q *BlanketBoltQueue) CleanupUnclaimedTasks() error {
 	// FIXME: Implement me
 	// Find all tasks in queue with a worker id that have a lastModifiedTs older than the TTL

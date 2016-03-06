@@ -30,7 +30,7 @@ FIXME:
 	- could do this with a hash of the object in a generic way, but that requires transactions, which mongo doesn't have
 - add "not found" errors
 - make sure bolt is only referenced here and in the queue file
-- will need to query queue for any tasks in WAIT state
+- will need to query queue for any tasks in WAITING state
 - add specific functions for heartbeats, since they need to check if they're getting killed AND set a value
 	- we don't want either thing (heartbeat or kill message) to overwrite what is there
 	- whenever we set a single field, we need isolation (like for updateTaskProgress)
@@ -479,7 +479,7 @@ func (DB *BlanketBoltDB) UpdateTaskProgress(taskId bson.ObjectId, progress int) 
 }
 
 // Things to clean up
-// - tasks still in state `START` X min after StartedTs because:
+// - tasks still in state `CLAIMED` X min after StartedTs because:
 // 	- worker failed to parse worker object
 // 	- worker crashed trying to run the task
 func (DB *BlanketBoltDB) CleanupStalledTasks() error {
@@ -515,8 +515,8 @@ type TaskRunConfig struct {
 func (DB *BlanketBoltDB) RunTask(taskId bson.ObjectId, fields *TaskRunConfig) error {
 	// Set lots of fields
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
-		if t.State != "STARTING" {
-			return fmt.Errorf("Task found in unexpected state; found '%s', expected 'STARTING'", t.State)
+		if t.State != "CLAIMED" {
+			return fmt.Errorf("Task found in unexpected state; found '%s', expected 'CLAIMED'", t.State)
 		}
 		t.State = "RUNNING"
 		t.Progress = 0

@@ -11,12 +11,12 @@ angular.module('blanketApp')
         this.taskTypes = [];
 
         this.taskLabelClasses = {
-            "WAIT": "default",
-            "START": "primary",
+            "WAITING": "default",
+            "CLAIMED": "primary",
             "RUNNING": "warning",
             "ERROR": "danger",
             "SUCCESS": "success",
-            "TIMEOUT": "danger",
+            "TIMEDOUT": "danger",
             "STOPPED": "danger"
         };
 
@@ -26,8 +26,8 @@ angular.module('blanketApp')
 
         self.cleanTask = function(t) {
             t.labelClass = self.taskLabelClasses[t.state];
-            t.hasResults = _.intersection(["WAIT", "START"], [t.state]).length === 0;
-            t.isComplete = _.intersection(["WAIT", "START", "RUNNING"], [t.state]).length === 0;
+            t.hasResults = _.intersection(["WAITING", "CLAIMED"], [t.state]).length === 0;
+            t.isComplete = _.intersection(["WAITING", "CLAIMED", "RUNNING"], [t.state]).length === 0;
 
             // Date fixing
             var dateFields = ['createdTs', 'startedTs', 'lastUpdatedTs'];

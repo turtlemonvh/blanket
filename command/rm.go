@@ -9,21 +9,6 @@ import (
 	"os"
 )
 
-/*
-
-Like `docker ps`
-
-Lists
-- running tasks
-- queued tasks (with -a)
-
-Other commands list
-- task types
-- workers and their status
-
-
-*/
-
 var rmConf RmConf
 var rmCmd = &cobra.Command{
 	Use:   "rm",
@@ -46,6 +31,7 @@ type RmConf struct {
 	TaskId string
 }
 
+// FIXME: Accept stdin
 func init() {
 	// Add options for tags, state, and view template
 	rmCmd.Flags().BoolVarP(&rmConf.Force, "force", "f", false, "Force deletion of tasks (ignore errors and warnings)")

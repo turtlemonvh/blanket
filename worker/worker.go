@@ -431,12 +431,12 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			// Check that we're not over time
 			checkTime := time.Now().Unix()
 			if checkTime > maxTime {
-				err = c.TransitionTaskState(t, "TIMEOUT", make(map[string]string))
+				err = c.TransitionTaskState(t, "TIMEDOUT", make(map[string]string))
 				if err != nil {
 					log.WithFields(log.Fields{
 						"err":    err.Error(),
 						"taskId": t.Id,
-					}).Error("failed to transition task to state TIMEOUT")
+					}).Error("failed to transition task to state TIMEDOUT")
 				} else {
 					log.WithFields(log.Fields{
 						"taskId":    t.Id,
@@ -560,7 +560,7 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 
 func (c *WorkerConf) TransitionTaskState(t *tasks.Task, state string, extraVars map[string]string) error {
 	urlParams := url.Values{}
-	urlParams.Set("state", state) // RUNNING, ERROR/SUCCESS/TIMEOUT/STOPPED
+	urlParams.Set("state", state) // RUNNING, ERROR/SUCCESS/TIMEDOUT/STOPPED
 	for k, v := range extraVars {
 		urlParams.Set(k, v)
 	}
