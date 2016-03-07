@@ -108,19 +108,17 @@ func shutDownWorker(c *gin.Context) {
 // Should only be called by the worker itself as it is shutting down
 func deleteWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
-
 	workerId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
-
 	err = DB.DeleteWorker(workerId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
-	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId))
+	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId.Hex()))
 }
 
 // FIXME: Wait until worker registers itself in the database to return, up to X seconds

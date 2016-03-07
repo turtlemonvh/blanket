@@ -50,9 +50,9 @@ func (Q *BlanketBoltQueue) AddTask(t *tasks.Task) error {
 
 func (Q *BlanketBoltQueue) ListTasks(tags []string, limit int) (string, int, error) {
 	tc := &database.TaskSearchConf{
-		Limit:       limit,
-		ReverseSort: true,
-		MaxTags:     tags,
+		Limit:        limit,
+		ReverseSort:  true,
+		RequiredTags: tags,
 		//JustUnclaimed: true,
 		SmallestId: bson.NewObjectIdWithTime(time.Unix(0, 0)),
 		LargestId:  bson.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),

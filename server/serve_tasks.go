@@ -210,7 +210,7 @@ func runTask(c *gin.Context) {
 	// TypeDigest
 	tc := &database.TaskRunConfig{
 		Timeout:       cast.ToInt(c.Query("timeout")),
-		LastUpdatedTs: cast.ToInt(c.Query("lastUpdatedTs")),
+		LastUpdatedTs: time.Now().Unix(),
 		Pid:           cast.ToInt(c.Query("pid")),
 		TypeDigest:    c.Query("typeDigest"),
 	}
@@ -223,10 +223,12 @@ func runTask(c *gin.Context) {
 	c.JSON(http.StatusOK, "{}")
 }
 
+// FIXME: Implement this
 // Called for stopping
 func cancelTask(c *gin.Context) {
 	// Upsert in database, setting any item that has that Id to STOPPED state
 	// If it doesn't exist, the 'tombstone' will just have the taskId and state=STOPPED
+	c.JSON(http.StatusInternalServerError, "{}")
 }
 
 // Set the task to a terminal state like: STOPPING,

@@ -23,6 +23,19 @@ import (
 	"time"
 )
 
+// Utility
+
+func toSliceStringSlice(i interface{}) [][]string {
+	s := cast.ToSlice(i)
+	var r [][]string
+	for _, v := range s {
+		r = append(r, cast.ToStringSlice(v))
+	}
+	return r
+}
+
+// Worker
+
 type WorkerConf struct {
 	Id            bson.ObjectId `json:"id"`
 	Tags          string        `json:"rawTags"`
@@ -34,16 +47,6 @@ type WorkerConf struct {
 	CheckInterval float64       `json:"checkInterval"`
 	StartedTs     int64         `json:"startedTs"`
 	fileCopier    lib.FileCopier
-}
-
-// Called from another process
-// Sends sigterm
-func (c *WorkerConf) Stop() error {
-	p, err := os.FindProcess(c.Pid)
-	if err != nil {
-		return err
-	}
-	return p.Signal(syscall.SIGTERM)
 }
 
 // FIXME: Ensure this works ok on windows: https://golang.org/pkg/os/#Signal
@@ -133,10 +136,6 @@ func (c *WorkerConf) Run() error {
 		c.Id = bson.NewObjectId()
 		c.Pid = os.Getpid()
 		c.ParsedTags = strings.Split(c.Tags, ",")
-
-		c.fileCopier = lib.FileCopier{
-			BasePath: viper.GetString("tasks.typesPath"),
-		}
 
 		err = c.SetLogfileName()
 		if err != nil {
@@ -241,6 +240,16 @@ func (c *WorkerConf) UpdateInDatabase() error {
 	return err
 }
 
+// Called from another process
+// Sends sigterm
+func (c *WorkerConf) Stop() error {
+	p, err := os.FindProcess(c.Pid)
+	if err != nil {
+		return err
+	}
+	return p.Signal(syscall.SIGTERM)
+}
+
 // Deregisters itself
 // Send a DELETE request to /worker/<id>/ to make sure db is cleared
 // Logs that request was succesful and is shutting down
@@ -281,7 +290,7 @@ func (c *WorkerConf) ProcessTasks() {
 		}
 
 		// FIXME: Handle task not found differently than a 500, 401, etc
-		t, err = c.ClaimTask()
+		t, err = c.MarkTaskAsClaimed()
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
@@ -293,6 +302,7 @@ func (c *WorkerConf) ProcessTasks() {
 			continue
 		}
 
+		// FIXME: This is producing invalid JSON
 		log.WithFields(log.Fields{
 			"task": t,
 		}).Info("Found task to process")
@@ -311,15 +321,6 @@ func (c *WorkerConf) ProcessTasks() {
 
 	log.Info("Finished final task, shutting down")
 	c.Shutdown()
-}
-
-func toSliceStringSlice(i interface{}) [][]string {
-	s := cast.ToSlice(i)
-	var r [][]string
-	for _, v := range s {
-		r = append(r, cast.ToStringSlice(v))
-	}
-	return r
 }
 
 // FIXME: Flush logfiles, close logfiles
@@ -351,7 +352,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("problems starting task execution")
-		terr := c.TransitionTaskState(t, "ERROR", make(map[string]string))
+		terr := c.MarkTaskAsFinished(t, "ERROR")
 		if terr != nil {
 			log.WithFields(log.Fields{
 				"err":    terr.Error(),
@@ -363,9 +364,9 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	}
 
 	// FIXME: Move more fields here
-	err = c.TransitionTaskState(t, "RUNNING", map[string]string{
-		"pid":        cast.ToString(cmd.Process.Pid),
+	err = c.MarkTaskAsRunning(t, map[string]string{
 		"timeout":    tt.Config.GetString("timeout"),
+		"pid":        cast.ToString(cmd.Process.Pid),
 		"typeDigest": tt.ConfigVersionHash,
 	})
 	if err != nil {
@@ -379,6 +380,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 
 	maxTime := t.StartedTs + t.Timeout
 	go func() {
+		// FIXME: Seems to behave strange when parent function has exited
 		for true {
 			log.WithFields(log.Fields{
 				"taskId":       t.Id,
@@ -403,7 +405,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			// Check that we're not over time
 			checkTime := time.Now().Unix()
 			if checkTime > maxTime {
-				err = c.TransitionTaskState(t, "TIMEDOUT", make(map[string]string))
+				err = c.MarkTaskAsFinished(t, "TIMEDOUT")
 				if err != nil {
 					log.WithFields(log.Fields{
 						"err":    err.Error(),
@@ -452,7 +454,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("problems finishing task execution")
-		terr := c.TransitionTaskState(t, "ERROR", make(map[string]string))
+		terr := c.MarkTaskAsFinished(t, "ERROR")
 		if terr != nil {
 			log.WithFields(log.Fields{
 				"err":    terr.Error(),
@@ -463,7 +465,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		return err
 	}
 
-	err = c.TransitionTaskState(t, "SUCCESS", make(map[string]string))
+	err = c.MarkTaskAsFinished(t, "SUCCESS")
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err":    err.Error(),
@@ -474,6 +476,8 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	return err
 }
 
+// Create the execution directory for a task
+// Includes attaching log files to the cmd object
 func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) (error, func()) {
 	// Set up output files and configure the task to run in the correct location
 	err := os.MkdirAll(t.ResultDir, os.ModePerm)
@@ -517,6 +521,12 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 		stderrFile.Close()
 	}
 
+	// The copier should use the location of the task type as its starting point
+	// for relative path searches for files
+	c.fileCopier = lib.FileCopier{
+		BasePath: path.Dir(tt.ConfigFile),
+	}
+
 	filesToInclude := toSliceStringSlice(tt.Config.Get("files_to_include"))
 	err = c.fileCopier.CopyFiles(filesToInclude, t.ResultDir)
 	if err != nil {
@@ -525,21 +535,42 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 			"taskId": t.Id,
 		}).Error("failed copy files for task")
 		return err, fileCloser
+	} else {
+		log.WithFields(log.Fields{
+			"files":  filesToInclude,
+			"taskId": t.Id,
+		}).Error("copied files for task")
 	}
 
 	return err, fileCloser
 }
 
-// FIXME: Need to change URL
-// Set task to one of the following states: RUNNING, ERROR/SUCCESS/TIMEDOUT/STOPPED
-func (c *WorkerConf) TransitionTaskState(t *tasks.Task, state string, extraVars map[string]string) error {
+func (c *WorkerConf) MarkTaskAsRunning(t *tasks.Task, extraVars map[string]string) error {
 	urlParams := url.Values{}
-	urlParams.Set("state", state)
+	urlParams.Set("state", "RUNNING")
 	for k, v := range extraVars {
 		urlParams.Set(k, v)
 	}
 	paramsString := urlParams.Encode()
-	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/state", viper.GetInt("port"), t.Id.Hex()) + "?" + paramsString
+	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/run", viper.GetInt("port"), t.Id.Hex()) + "?" + paramsString
+	req, err := http.NewRequest("PUT", reqURL, nil)
+	if err != nil {
+		return err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	return nil
+}
+
+// Set task to one of the following states: ERROR/SUCCESS/TIMEDOUT/STOPPED
+func (c *WorkerConf) MarkTaskAsFinished(t *tasks.Task, state string) error {
+	urlParams := url.Values{}
+	urlParams.Set("state", state)
+	paramsString := urlParams.Encode()
+	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/finish", viper.GetInt("port"), t.Id.Hex()) + "?" + paramsString
 	req, err := http.NewRequest("PUT", reqURL, nil)
 	if err != nil {
 		return err
@@ -553,7 +584,7 @@ func (c *WorkerConf) TransitionTaskState(t *tasks.Task, state string, extraVars 
 }
 
 // Find the oldest task we are eligible to run
-func (c *WorkerConf) ClaimTask() (tasks.Task, error) {
+func (c *WorkerConf) MarkTaskAsClaimed() (tasks.Task, error) {
 	// Call the REST api and get a task with the required tags
 	// The worker needs to make sure it has all the tags of whatever task it requests
 	reqURL := fmt.Sprintf("http://localhost:%d/task/claim/%s", viper.GetInt("port"), c.Id.Hex())

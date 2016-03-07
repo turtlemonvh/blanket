@@ -138,7 +138,7 @@ func TaskSearchConfFromContext(c *gin.Context) *TaskSearchConf {
 
 type TaskRunConfig struct {
 	Timeout       int
-	LastUpdatedTs int
+	LastUpdatedTs int64
 	Pid           int
 	TypeDigest    string
 }
