@@ -1,10 +1,8 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/cast"
 	"github.com/turtlemonvh/blanket/worker"
 	"net/http"
 )
@@ -13,65 +11,59 @@ import (
 // For each item in the db, check that a process exists that has the right name
 func getWorkers(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
-
-	result, err := DB.GetWorkers()
+	ws, err := DB.GetWorkers()
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
-	c.String(http.StatusOK, result)
+	c.JSON(http.StatusOK, ws)
 }
 
 // Get just the configuration for this worker as json
 func getWorker(c *gin.Context) {
-	workerId := c.Param("id")
-
 	c.Header("Content-Type", "application/json")
-
-	result, err := DB.GetWorker(workerId)
+	workerId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
-	c.String(http.StatusOK, result)
+
+	worker, err := DB.GetWorker(workerId)
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, worker)
 }
 
-// Register with pid
+// Register with Id
 // Continue to write to old log via append
 func updateWorker(c *gin.Context) {
-	var err error
-	var workerPid int
-
 	c.Header("Content-Type", "application/json")
 
-	workerPid, err = cast.ToIntE(c.Param("id"))
+	workerId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "The 'id' parameter must be an integer, not %s."}`, workerPid)
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
 	w := worker.WorkerConf{}
 	err = c.BindJSON(&w)
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
 	// Validate worker conf before saving
-	if workerPid != w.Pid {
-		errMsg := fmt.Sprintf(`{"error": "Problem parsing conf. Pid does not equal the expected value ('%d' != '%d')"}`, w.Pid, workerPid)
+	if workerId != w.Id {
+		errMsg := fmt.Sprintf(`{"error": "Problem parsing conf. Id does not equal the expected value ('%d' != '%d')"}`, w.Id, workerId)
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
 
 	err = DB.UpdateWorker(&w)
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 	c.String(http.StatusOK, "{}")
@@ -82,23 +74,17 @@ func updateWorker(c *gin.Context) {
 // If the worker is already down but didn't remove itself from the database, calling this
 // function will remove the worker entry from the database too.
 func shutDownWorker(c *gin.Context) {
-	workerId := c.Param("id")
 	c.Header("Content-Type", "application/json")
 
-	// FIXME: Return bytes or string?
-	workerStr, err := DB.GetWorker(workerId)
+	workerId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
-	// Turn into a worker conf object
-	w := worker.WorkerConf{}
-	err = json.Unmarshal([]byte(workerStr), &w)
+	w, err := DB.GetWorker(workerId)
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -109,29 +95,31 @@ func shutDownWorker(c *gin.Context) {
 		err = DB.DeleteWorker(workerId)
 	}
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
 	// FIXME: Send SIGKILL if still not finished
 
-	c.String(http.StatusOK, `{"status": "ok"}`)
+	c.String(http.StatusOK, `{}`)
 }
 
 // Remove the worker's record from the db if it exists
 // Should only be called by the worker itself as it is shutting down
 func deleteWorker(c *gin.Context) {
-	workerId := c.Param("id")
 	c.Header("Content-Type", "application/json")
 
-	err := DB.DeleteWorker(workerId)
+	workerId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
+	err = DB.DeleteWorker(workerId)
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		return
+	}
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId))
 }
 
@@ -155,8 +143,7 @@ func launchWorker(c *gin.Context) {
 
 	err = w.Run()
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -167,18 +154,14 @@ func launchWorker(c *gin.Context) {
 func getWorkerLogfile(c *gin.Context) {
 	c.Header("Content-Type", "text/plain")
 
-	workerId := c.Param("id")
-
-	// FIXME: Return bytes or string?
-	workerStr, err := DB.GetWorker(workerId)
+	workerId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
-		c.String(http.StatusInternalServerError, fmt.Sprintf(`Error: "%s"`, err.Error()))
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
-	// Turn into a worker conf object
-	w := worker.WorkerConf{}
-	err = json.Unmarshal([]byte(workerStr), &w)
+	// FIXME: Return bytes or string?
+	w, err := DB.GetWorker(workerId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, fmt.Sprintf(`Error: "%s"`, err.Error()))
 		return

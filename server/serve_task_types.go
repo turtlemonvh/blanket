@@ -21,7 +21,7 @@ func getTaskTypes(c *gin.Context) {
 		log.WithFields(log.Fields{
 			"error": err.Error(),
 		}).Warn("Error reading task types")
-		c.String(http.StatusInternalServerError, "[]")
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -32,7 +32,7 @@ func getTaskTypes(c *gin.Context) {
 			log.WithFields(log.Fields{
 				"error": err.Error(),
 			}).Warn("Error marshalling task type to json")
-			c.String(http.StatusInternalServerError, "[]")
+			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 			return
 		}
 		if !isFirst {
@@ -53,11 +53,11 @@ func getTaskType(c *gin.Context) {
 	filepath := path.Join(viper.GetString("tasks.typesPath"), fmt.Sprintf("%s.toml", name))
 	tt, err := tasks.ReadTaskTypeFromFilepath(filepath)
 	if err != nil {
-		// FIXME: Check for different types of errors
+		// FIXME: Handle not found errors differently
 		log.WithFields(log.Fields{
 			"error": err.Error(),
 		}).Warn("Error reading task type")
-		c.String(http.StatusInternalServerError, "{}")
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 	js, err := tt.ToJSON()
@@ -65,7 +65,7 @@ func getTaskType(c *gin.Context) {
 		log.WithFields(log.Fields{
 			"error": err.Error(),
 		}).Warn("Error marshalling task type to json")
-		c.String(http.StatusInternalServerError, "{}")
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 	c.String(http.StatusOK, js)

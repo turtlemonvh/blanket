@@ -11,7 +11,6 @@ import (
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/tasks"
-	"github.com/turtlemonvh/blanket/worker"
 	"gopkg.in/mgo.v2/bson"
 	"io"
 	"io/ioutil"
@@ -44,19 +43,6 @@ func getTaskId(c *gin.Context) (bson.ObjectId, error) {
 	return tid, err
 }
 
-// Return just the keys for a bool map
-func MapKeys(m map[string]bool) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
-}
-
-func MakeErrorString(errmsg string) string {
-	return fmt.Sprintf(`{"error": "%s"}`, errmsg)
-}
-
 /*
  * Request handlers
  */
@@ -78,7 +64,15 @@ func getTasks(c *gin.Context) {
 		"justCounts":       tc.JustCounts,
 	}).Debug("Task request params")
 
-	result, nfound, err := DB.GetTasks(tc)
+	var result string
+	var nfound int
+	var err error
+	if c.Query("queued") == "true" {
+		result, nfound, err = Q.ListTasks(tc.MaxTags, tc.Limit)
+	} else {
+		result, nfound, err = DB.GetTasks(tc)
+	}
+
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -117,24 +111,25 @@ func getTask(c *gin.Context) {
 // FIXME: Add logging
 func claimTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
-
-	var err error
 	errMsg := ""
-	workerId := c.Param("workerid")
 
-	// Fetch worker config from DB
-	var ws string
-	ws, err = DB.GetWorker(workerId)
+	workerId, err := SafeObjectId(c.Param("workerid"))
 	if err != nil {
-		errMsg += fmt.Sprintf("Error fetching worker config from database; possible registration error :: %s", err.Error())
-		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
-	w := &worker.WorkerConf{}
-	err = json.Unmarshal([]byte(ws), w)
+
+	// Fetch worker config from DB
+	// Problem: worker id is a pid now
+	w, err := DB.GetWorker(workerId)
 	if err != nil {
-		errMsg += fmt.Sprintf("Corrupt worker configuration :: %s", err.Error())
-		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
+		errMsg = "Error fetching worker config from database; possible registration error or corrupt worker configuration"
+		log.WithFields(log.Fields{
+			"err":      err.Error(),
+			"workerId": workerId,
+		}).Debug(errMsg)
+		errMsg = MakeErrorString(errMsg + fmt.Sprintf(":: %s", err.Error()))
+		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
 
@@ -142,11 +137,11 @@ func claimTask(c *gin.Context) {
 	var t tasks.Task
 	var ackCb func() error
 	var nackCb func() error
-	t, ackCb, nackCb, err = Q.ClaimTask(w)
+	t, ackCb, nackCb, err = Q.ClaimTask(&w)
 	if err != nil {
 		// FIXME: Return 404 if a not found error, 400 for other errors
 		// Task could not be found, probably
-		errMsg += fmt.Sprintf("Problem claiming task :: %s", err.Error())
+		errMsg = fmt.Sprintf("Problem claiming task :: %s", err.Error())
 		c.String(http.StatusNotFound, MakeErrorString(errMsg))
 		return
 	}
@@ -156,7 +151,7 @@ func claimTask(c *gin.Context) {
 	t.Progress = 0
 	t.LastUpdatedTs = time.Now().Unix()
 	t.StartedTs = time.Now().Unix()
-	t.WorkerId = workerId
+	t.WorkerId = workerId.Hex()
 	// Just nil values for these
 	// Will be set when transitioning to state RUN
 	t.TypeDigest = ""
@@ -173,7 +168,7 @@ func claimTask(c *gin.Context) {
 	// Save to database
 	err = DB.StartTask(&t)
 	if err != nil {
-		errMsg += fmt.Sprintf("Error saving to database :: %s", err.Error())
+		errMsg = fmt.Sprintf("Error saving to database :: %s", err.Error())
 		err = nackCb()
 		if err != nil {
 			errMsg += fmt.Sprintf("; Subsequent error returning to queue :: %s", err.Error())
@@ -182,7 +177,7 @@ func claimTask(c *gin.Context) {
 	} else {
 		err = ackCb()
 		if err != nil {
-			errMsg += fmt.Sprintf("Error acking task in queue after saving to database; task run may be duplicated :: %s", err.Error())
+			errMsg = fmt.Sprintf("Error acking task in queue after saving to database; task run may be duplicated :: %s", err.Error())
 			c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
 		} else {
 			// Everything is fine
@@ -296,7 +291,7 @@ func updateTaskProgress(c *gin.Context) {
 	c.String(http.StatusOK, "{}")
 }
 
-// OK
+// TESTME
 // FIXME: Also grab extra tags, e.g. machine specific tag
 func postTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
@@ -311,6 +306,8 @@ func postTask(c *gin.Context) {
 	if !strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
 		c.Request.Header.Set("Content-Type", "application/json")
 	}
+
+	// FIXME: This looks wrong...
 	taskData, _, err = c.Request.FormFile("data")
 	if err != nil {
 		dv := c.Request.FormValue("data")
@@ -339,11 +336,9 @@ func postTask(c *gin.Context) {
 	}
 
 	// Load task type
-	filename := fmt.Sprintf("%s.toml", req["type"])
-	fullpath := path.Join(viper.GetString("tasks.typesPath"), filename)
-	tt, err := tasks.ReadTaskTypeFromFilepath(fullpath)
+	tt, err := tasks.FetchTaskType(cast.ToString(req["type"]))
 	if err != nil {
-		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -352,7 +347,7 @@ func postTask(c *gin.Context) {
 	if req["environment"] != nil {
 		envVars = cast.ToStringMapString(req["environment"])
 		if len(envVars) == 0 {
-			c.String(http.StatusBadRequest, `{"error": "The 'environment' parameter must be a map of string keys to string values."}`)
+			c.String(http.StatusBadRequest, MakeErrorString("The 'environment' parameter must be a map of string keys to string values."))
 			return
 		}
 
@@ -366,20 +361,22 @@ func postTask(c *gin.Context) {
 			// FIXME: Check types of variables, maybe by checking that they can be cast to that type then back to string with no loss
 		}
 		if len(missingVars) > 0 {
-			c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "Missing environment variables required for this task type: %s"}`, missingVars))
+			errMsg := fmt.Sprintf("Missing environment variables required for this task type: %s", missingVars)
+			c.String(http.StatusBadRequest, MakeErrorString(errMsg))
 			return
 		}
 
 	} else if tt.HasRequiredEnv() {
 		// Environment not set but we have required fields
-		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "The task type '%s' has required environment variables. The 'environment' parameter must be set and contain these values."}`, tt.GetName()))
+		errMsg := fmt.Sprintf("The task type '%s' has required environment variables. The 'environment' parameter must be set and contain these values.", tt.GetName())
+		c.String(http.StatusBadRequest, MakeErrorString(errMsg))
 		return
 	}
 
 	// Create task object
 	t, err := tt.NewTask(envVars)
 	if err != nil {
-		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -388,7 +385,7 @@ func postTask(c *gin.Context) {
 		// Create output dir to put files in
 		err = os.MkdirAll(t.ResultDir, os.ModePerm)
 		if err != nil {
-			c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+			c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 			return
 		}
 
@@ -399,7 +396,7 @@ func postTask(c *gin.Context) {
 
 			uploadedFile, _, err := c.Request.FormFile(filename)
 			if err != nil {
-				c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+				c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 				return
 			}
 			defer uploadedFile.Close()
@@ -413,12 +410,11 @@ func postTask(c *gin.Context) {
 	// Add to queue
 	err = Q.AddTask(&t)
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
-	c.String(http.StatusCreated, fmt.Sprintf(`{"id": "%s"}`, t.Id.Hex()))
+	c.JSON(http.StatusCreated, t)
 }
 
 // OK

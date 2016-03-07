@@ -72,7 +72,7 @@ func (c *WorkerConf) Run() error {
 
 		log.WithFields(log.Fields{
 			"path": path,
-		}).Info("Path to current executable is")
+		}).Debug("Path to current executable is")
 
 		cmd := exec.Command(path, "worker")
 		if c.Tags != "" {
@@ -226,7 +226,7 @@ func (c *WorkerConf) UpdateInDatabase() error {
 		return err
 	}
 
-	reqURL := fmt.Sprintf("http://localhost:%d/worker/%d", viper.GetInt("port"), c.Pid)
+	reqURL := fmt.Sprintf("http://localhost:%d/worker/%s", viper.GetInt("port"), c.Id.Hex())
 	req, err := http.NewRequest("PUT", reqURL, bytes.NewReader(bts))
 	if err != nil {
 		return err
@@ -247,7 +247,7 @@ func (c *WorkerConf) UpdateInDatabase() error {
 func (c *WorkerConf) Shutdown() {
 	log.Error("Shutting worker down cleanly")
 
-	reqURL := fmt.Sprintf("http://localhost:%d/worker/%d", viper.GetInt("port"), c.Pid)
+	reqURL := fmt.Sprintf("http://localhost:%d/worker/%s", viper.GetInt("port"), c.Id.Hex())
 	req, err := http.NewRequest("DELETE", reqURL, nil)
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -324,13 +324,10 @@ func toSliceStringSlice(i interface{}) [][]string {
 
 // FIXME: Flush logfiles, close logfiles
 func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
-	// Fetch information about the task type
-	ttFilepath := path.Join(viper.GetString("tasks.typesPath"), fmt.Sprintf("%s.toml", t.TypeId))
-
 	// FIXME: Copy template into result directory
 	// Do this BEFORE reading to make sure we're reading the version we save
 
-	tt, err := tasks.ReadTaskTypeFromFilepath(ttFilepath)
+	tt, err := t.GetTaskType()
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err": err.Error(),
@@ -338,40 +335,15 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		return err
 	}
 
-	// Evaluate template
-	tmpl, err := template.New("tasks").Parse(tt.Config.GetString("command"))
-	if err != nil {
-		log.WithFields(log.Fields{
-			"err": err.Error(),
-		}).Error("problem parsing 'command' parameter as go template")
-		return err
-	}
-	var cmdString bytes.Buffer
-	err = tmpl.Execute(&cmdString, t.ExecEnv)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"err":    err.Error(),
-			"taskId": t.Id,
-		}).Error("error evaluating template for command")
-		return err
-	}
+	var cmd *exec.Cmd
+	cmd, err = t.GetCmd(tt)
 
-	// FIXME: Don't just use bash; use python, zsh, etc configured via viper
-	cmd := exec.Command("bash", "-c", cmdString.String())
 	var fileCloser func()
-	err, fileCloser = c.SetupExecutionDirectory(t, &tt, cmd)
+	err, fileCloser = c.SetupExecutionDirectory(t, tt, cmd)
 	if err != nil {
 		return err
 	}
 	defer fileCloser()
-
-	// Modify execution environment with env variables
-	// e.g. http://craigwickesser.com/2015/02/golang-cmd-with-custom-environment/
-	env := os.Environ()
-	for k, v := range t.ExecEnv {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
-	cmd.Env = env
 
 	err = cmd.Start()
 	if err != nil {
@@ -558,9 +530,10 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 	return err, fileCloser
 }
 
+// Set task to one of the following states: RUNNING, ERROR/SUCCESS/TIMEDOUT/STOPPED
 func (c *WorkerConf) TransitionTaskState(t *tasks.Task, state string, extraVars map[string]string) error {
 	urlParams := url.Values{}
-	urlParams.Set("state", state) // RUNNING, ERROR/SUCCESS/TIMEDOUT/STOPPED
+	urlParams.Set("state", state)
 	for k, v := range extraVars {
 		urlParams.Set(k, v)
 	}
@@ -583,20 +556,26 @@ func (c *WorkerConf) ClaimTask() (tasks.Task, error) {
 	// Call the REST api and get a task with the required tags
 	// The worker needs to make sure it has all the tags of whatever task it requests
 	reqURL := fmt.Sprintf("http://localhost:%d/task/claim/%s", viper.GetInt("port"), c.Id.Hex())
-	res, err := http.Get(reqURL)
+	res, err := http.Post(reqURL, "application/json", nil)
 	if err != nil {
 		return tasks.Task{}, err
 	}
 	defer res.Body.Close()
+	dec := json.NewDecoder(res.Body)
 
 	if res.StatusCode != 200 {
 		// FIXME: Get the error content from the JSON response
+		errMsg := make(map[string]interface{})
+		dec.Decode(&errMsg)
+		log.WithFields(log.Fields{
+			"resp": errMsg["error"],
+		}).Error("Problem claiming task")
 		return tasks.Task{}, fmt.Errorf("Problem claiming task; status code :: %s", res.Status)
 	}
 
 	// Try to marshall this into a task object
+
 	var t tasks.Task
-	dec := json.NewDecoder(res.Body)
 	err = dec.Decode(&t)
 	if err != nil {
 		return tasks.Task{}, fmt.Errorf("Error decoding claimed task; possible data corruption or server/worker version mismatch :: %s", err.Error())

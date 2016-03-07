@@ -21,7 +21,7 @@ angular.module('blanketApp')
             $log.log("Stopping worker", worker);
             $http({
                 method: 'PUT',
-                url: baseUrl + '/worker/' + worker.pid + '/shutdown'
+                url: baseUrl + '/worker/' + worker.id + '/shutdown'
             }).then(function(d) {
                 // Give it time to shut down before refreshing the list
                 $log.log("Shut down worker", worker);
