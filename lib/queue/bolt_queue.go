@@ -7,6 +7,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
+	"gopkg.in/mgo.v2/bson"
 	"time"
 )
 
@@ -34,10 +35,8 @@ func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
 // Should add to the relevant queue(s) based on tags
 // Searching for a string of tags may be more complex on some platforms (e.g. rabbitmq; may require scanning)
 func (Q *BlanketBoltQueue) AddTask(t *tasks.Task) error {
-	fmt.Println("AddTask :: 1 :: ", t)
 	return Q.db.Update(func(tx *bolt.Tx) error {
 		b, err := fetchTaskBucket(tx)
-		fmt.Println("AddTask :: 2 :: ", b)
 		if b == nil {
 			return err
 		}
@@ -45,25 +44,18 @@ func (Q *BlanketBoltQueue) AddTask(t *tasks.Task) error {
 		if err != nil {
 			return err
 		}
-
-		fmt.Println("AddTask :: 3 :: ", err)
-		err = b.Put(IdBytes(t.Id), bts)
-
-		fmt.Println("AddTask :: 4 :: ", err)
-
-		fmt.Println("AddTask :: 5 :: ", IdBytes(t.Id))
-
-		fmt.Println("AddTask :: 6 :: ", string(b.Get(IdBytes(t.Id))))
-		return err
+		return b.Put(IdBytes(t.Id), bts)
 	})
 }
 
 func (Q *BlanketBoltQueue) ListTasks(tags []string, limit int) (string, int, error) {
 	tc := &database.TaskSearchConf{
-		//Limit:       limit, // FIXME: Allow flexible limits
-		ReverseSort: true, // oldest first
-		//RequiredTags: tags,
+		Limit:       limit,
+		ReverseSort: true,
+		MaxTags:     tags,
 		//JustUnclaimed: true,
+		SmallestId: bson.NewObjectIdWithTime(time.Unix(0, 0)),
+		LargestId:  bson.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),
 	}
 	return database.FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
 }
@@ -98,6 +90,8 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 		ReverseSort:   true,
 		MaxTags:       worker.ParsedTags,
 		JustUnclaimed: true,
+		SmallestId:    bson.NewObjectIdWithTime(time.Unix(0, 0)),
+		LargestId:     bson.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),
 	}
 	tasksStr, _, err := database.FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
 	if err != nil {

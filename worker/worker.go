@@ -530,6 +530,7 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 	return err, fileCloser
 }
 
+// FIXME: Need to change URL
 // Set task to one of the following states: RUNNING, ERROR/SUCCESS/TIMEDOUT/STOPPED
 func (c *WorkerConf) TransitionTaskState(t *tasks.Task, state string, extraVars map[string]string) error {
 	urlParams := url.Values{}
