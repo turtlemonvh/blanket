@@ -1,15 +1,14 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	log "github.com/Sirupsen/logrus"
-	"github.com/boltdb/bolt"
 	"github.com/gin-gonic/gin"
 	"github.com/manucorporat/sse"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/tasks"
 	"gopkg.in/mgo.v2/bson"
@@ -23,89 +22,9 @@ import (
 	"time"
 )
 
-const (
-	FAR_FUTURE_SECONDS = int64(60 * 60 * 24 * 365 * 100)
-)
-
 /*
  * Utility functions
  */
-
-// Gets the full byte representation of the objectid
-// Errors are ignored because just casting a string object to a byte slice will never result in an error
-func IdBytes(id bson.ObjectId) []byte {
-	bts, _ := id.MarshalJSON()
-	return bts
-}
-
-func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
-	b = tx.Bucket([]byte("tasks"))
-	if b == nil {
-		err = fmt.Errorf("Database format error: Bucket 'tasks' does not exist.")
-	}
-	return
-}
-
-func fetchTaskFromBucket(taskId *bson.ObjectId, b *bolt.Bucket) (t tasks.Task, err error) {
-	result := b.Get(IdBytes(*taskId))
-	err = json.Unmarshal(result, &t)
-	return
-}
-
-func fetchTaskById(taskId bson.ObjectId) (tasks.Task, error) {
-	var err error
-	task := tasks.Task{}
-	err = DB.View(func(tx *bolt.Tx) error {
-		b, err := fetchTaskBucket(tx)
-		if err != nil {
-			return err
-		}
-		task, err = fetchTaskFromBucket(&taskId, b)
-		return nil
-	})
-	return task, err
-}
-
-func saveTaskToBucket(t tasks.Task, b *bolt.Bucket) (err error) {
-	js, err := t.ToJSON()
-	if err != nil {
-		return err
-	}
-
-	err = b.Put(IdBytes(t.Id), []byte(js))
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func modifyTaskInTransaction(taskId *bson.ObjectId, f func(t *tasks.Task) error) error {
-	err := DB.Update(func(tx *bolt.Tx) error {
-		bucket, err := fetchTaskBucket(tx)
-		if err != nil {
-			return err
-		}
-		t, err := fetchTaskFromBucket(taskId, bucket)
-		if err != nil {
-			return err
-		}
-
-		// Main function; accepts a task object and can perform checks and modify it
-		err = f(&t)
-		if err != nil {
-			return err
-		} else {
-			t.LastUpdatedTs = time.Now().Unix()
-		}
-
-		err = saveTaskToBucket(t, bucket)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	return err
-}
 
 // Either gets the task id from a context object or returns an error
 // Will also set the response for the request if there was a problem
@@ -124,242 +43,49 @@ func getTaskId(c *gin.Context) (bson.ObjectId, error) {
 	return tid, err
 }
 
-// Return just the keys for a map
-func MapKeys(m map[string]bool) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
-}
-
 /*
  * Request handlers
  */
 
-type TaskSearchConf struct {
-	limit             int
-	offset            int
-	reverseSort       bool
-	requiredTags      []string
-	maxTags           []string
-	smallestId        bson.ObjectId
-	largestId         bson.ObjectId
-	allowedTaskStates map[string]bool
-	allowedTaskTypes  map[string]bool
-}
-
-func TaskSearchConfFromContext(c *gin.Context) *TaskSearchConf {
-	tc := &TaskSearchConf{}
-
-	tc.limit = cast.ToInt(c.Query("limit"))
-	tc.offset = cast.ToInt(c.Query("offset"))
-
-	// Default values for limit and offset
-	if tc.limit < 1 {
-		tc.limit = 500
-	}
-	if tc.offset < 0 {
-		tc.offset = 0
-	}
-
-	tc.reverseSort = c.Query("reverseSort") == "true"
-
-	// Should be unix timestamps, in seconds
-	startTimeSent := c.Query("createdAfter")
-	endTimeSent := c.Query("createdBefore")
-
-	startTime := time.Unix(0, 0)
-	endTime := time.Unix(FAR_FUTURE_SECONDS, 0)
-	startTimeSentInt, err := strconv.ParseInt(startTimeSent, 10, 64)
-	if err == nil {
-		startTime = time.Unix(startTimeSentInt, 0)
-	}
-	endTimeSentInt, err := strconv.ParseInt(endTimeSent, 10, 64)
-	if err == nil {
-		endTime = time.Unix(endTimeSentInt, 0)
-	}
-	tc.smallestId = bson.NewObjectIdWithTime(startTime)
-	tc.largestId = bson.NewObjectIdWithTime(endTime)
-
-	// Filtering based on tags, states, types
-	tags := c.Query("requiredTags")
-	if tags != "" {
-		tc.requiredTags = strings.Split(tags, ",")
-	}
-
-	maxTags := c.Query("maxTags")
-	if maxTags != "" {
-		tc.maxTags = strings.Split(maxTags, ",")
-	}
-
-	sentAllowedStates := c.Query("states")
-	tc.allowedTaskStates = make(map[string]bool)
-	if sentAllowedStates != "" {
-		for _, tstate := range strings.Split(sentAllowedStates, ",") {
-			tc.allowedTaskStates[tstate] = true
-		}
-	}
-
-	sentAllowedTypes := c.Query("types")
-	tc.allowedTaskTypes = make(map[string]bool)
-	if sentAllowedTypes != "" {
-		for _, ttype := range strings.Split(sentAllowedTypes, ",") {
-			tc.allowedTaskTypes[ttype] = true
-		}
-	}
-
-	return tc
-}
-
+// OK
 func getTasks(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
-	tc := TaskSearchConfFromContext(c)
-
-	justCounts := c.Query("count") == "true"
+	tc := database.TaskSearchConfFromContext(c)
 
 	log.WithFields(log.Fields{
-		"requiredTaskTags": tc.requiredTags,
-		"maxTaskTags":      tc.maxTags,
-		"taskTypes":        MapKeys(tc.allowedTaskTypes),
-		"taskStates":       MapKeys(tc.allowedTaskStates),
-		"limit":            tc.limit,
-		"smallestId":       tc.smallestId.Hex(),
-		"largestId":        tc.largestId.Hex(),
-		"justCounts":       justCounts,
+		"requiredTaskTags": tc.RequiredTags,
+		"maxTaskTags":      tc.MaxTags,
+		"taskTypes":        MapKeys(tc.AllowedTaskTypes),
+		"taskStates":       MapKeys(tc.AllowedTaskStates),
+		"limit":            tc.Limit,
+		"smallestId":       tc.SmallestId.Hex(),
+		"largestId":        tc.LargestId.Hex(),
+		"justCounts":       tc.JustCounts,
 	}).Debug("Task request params")
 
-	result := "["
-	nfound := 0
-	if err := DB.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("tasks"))
-		if b == nil {
-			errorString := "Database format error: Bucket 'tasks' does not exist."
-			return fmt.Errorf(errorString)
-		}
+	var result string
+	var nfound int
+	var err error
+	if c.Query("queued") == "true" {
+		result, nfound, err = Q.ListTasks(tc.MaxTags, tc.Limit)
+	} else {
+		result, nfound, err = DB.GetTasks(tc)
+	}
 
-		c := b.Cursor()
-		isFirst := true
-
-		// Sort order
-		var (
-			checkFunction func(bts []byte) bool
-			k             []byte
-			v             []byte
-			iterFunction  func() ([]byte, []byte)
-			endBytes      []byte
-		)
-		if tc.reverseSort {
-			// Have to just jump to the end, since seeking to a far future key goes to the end
-			// Seek only goes in 1 order
-			// Seek manually to the highest value
-			for k, v = c.Last(); k != nil && bytes.Compare(k, IdBytes(tc.largestId)) >= 0; k, v = c.Prev() {
-				continue
-			}
-			iterFunction = c.Prev
-			endBytes = IdBytes(tc.smallestId)
-			checkFunction = func(bts []byte) bool {
-				return k != nil && bytes.Compare(k, endBytes) >= 0
-			}
-		} else {
-			// Normal case
-			k, v = c.Seek(IdBytes(tc.smallestId))
-			iterFunction = c.Next
-			endBytes = IdBytes(tc.largestId)
-			checkFunction = func(bts []byte) bool {
-				return k != nil && bytes.Compare(k, endBytes) <= 0
-			}
-		}
-
-		for ; checkFunction(k); k, v = iterFunction() {
-			// e.g. 50-40 == 10
-			if nfound-tc.offset == tc.limit {
-				break
-			}
-
-			// Create an object from bytes
-			t := tasks.Task{}
-			json.Unmarshal(v, &t)
-
-			// Filter results
-			if len(tc.allowedTaskTypes) != 0 && !tc.allowedTaskTypes[t.TypeId] {
-				continue
-			}
-			if len(tc.allowedTaskStates) != 0 && !tc.allowedTaskStates[t.State] {
-				continue
-			}
-
-			// All tags in tc.requiredTags must be present on every task
-			if len(tc.requiredTags) > 0 {
-				hasTags := true
-				for _, requestedTag := range tc.requiredTags {
-					found := false
-					for _, existingTag := range t.Tags {
-						if requestedTag == existingTag {
-							found = true
-						}
-					}
-					if !found {
-						hasTags = false
-						break
-					}
-				}
-				if !hasTags {
-					continue
-				}
-			}
-
-			// All tags on each task must be present in tc.maxTags
-			if len(tc.maxTags) > 0 {
-				taskHasExtraTags := false
-				for _, existingTag := range t.Tags {
-					found := false
-					for _, allowedTag := range tc.maxTags {
-						if allowedTag == existingTag {
-							found = true
-						}
-					}
-					if !found {
-						taskHasExtraTags = true
-						break
-					}
-				}
-				if taskHasExtraTags {
-					continue
-				}
-			}
-
-			// Keep track of found items, and build string that will be returned
-			nfound += 1
-			if nfound > tc.offset {
-				if !justCounts {
-					if !isFirst {
-						result += ","
-					}
-					// FIXME: Return this in chunks
-					result += string(v)
-				}
-				isFirst = false
-			}
-		}
-
-		return nil
-	}); err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
-	result += "]"
 
-	if justCounts {
+	if tc.JustCounts {
 		c.String(http.StatusOK, cast.ToString(nfound))
 	} else {
 		c.String(http.StatusOK, result)
 	}
 }
 
-// Doesn't read task in; assumes value is valid JSON for speed
+// OK
 func getTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
@@ -371,143 +97,204 @@ func getTask(c *gin.Context) {
 		return
 	}
 
-	result := ""
-	err = DB.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("tasks"))
-		if b == nil {
-			errorString := "Database format error: Bucket 'tasks' does not exist."
-			return fmt.Errorf(errorString)
-		}
-		result += string(b.Get(IdBytes(taskId)))
-		return nil
-	})
+	var task tasks.Task
+	task, err = DB.GetTask(taskId)
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		return
+	}
+
+	c.JSON(http.StatusOK, task)
+}
+
+// Fetch from queue, moves to database, sets fields
+// FIXME: Add logging
+func claimTask(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+	errMsg := ""
+
+	workerId, err := SafeObjectId(c.Param("workerid"))
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		return
+	}
+
+	// Fetch worker config from DB
+	// Problem: worker id is a pid now
+	w, err := DB.GetWorker(workerId)
+	if err != nil {
+		errMsg = "Error fetching worker config from database; possible registration error or corrupt worker configuration"
+		log.WithFields(log.Fields{
+			"err":      err.Error(),
+			"workerId": workerId,
+		}).Debug(errMsg)
+		errMsg = MakeErrorString(errMsg + fmt.Sprintf(":: %s", err.Error()))
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
 
-	c.String(http.StatusOK, result)
+	// Claim from queue
+	var t tasks.Task
+	var ackCb func() error
+	var nackCb func() error
+	t, ackCb, nackCb, err = Q.ClaimTask(&w)
+	if err != nil {
+		// FIXME: Return 404 if a not found error, 400 for other errors
+		// Task could not be found, probably
+		errMsg = fmt.Sprintf("Problem claiming task :: %s", err.Error())
+		c.String(http.StatusNotFound, MakeErrorString(errMsg))
+		return
+	}
+
+	// Add fields
+	t.State = "CLAIMED"
+	t.Progress = 0
+	t.LastUpdatedTs = time.Now().Unix()
+	t.StartedTs = time.Now().Unix()
+	t.WorkerId = workerId.Hex()
+	// Just nil values for these
+	// Will be set when transitioning to state RUN
+	t.TypeDigest = ""
+	t.Pid = 0
+	t.Timeout = 0
+
+	// FIXME: Check if task has been canceled
+	// http://stackoverflow.com/questions/3758576/how-to-retract-a-message-in-rabbitmq
+	// There will be a tombstone in the database marking that task as canceled
+	// We will just want to merge details in the database, because all we'll have when canceling is a taskId
+	// - we want to do this in the db inside a transaction
+	// - we do not want to nack the task if this happens, so we need to distinguish between a error to save and a 'stopped' error
+
+	// Save to database
+	err = DB.StartTask(&t)
+	if err != nil {
+		errMsg = fmt.Sprintf("Error saving to database :: %s", err.Error())
+		err = nackCb()
+		if err != nil {
+			errMsg += fmt.Sprintf("; Subsequent error returning to queue :: %s", err.Error())
+		}
+		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
+	} else {
+		err = ackCb()
+		if err != nil {
+			errMsg = fmt.Sprintf("Error acking task in queue after saving to database; task run may be duplicated :: %s", err.Error())
+			c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
+		} else {
+			// Everything is fine
+			c.JSON(http.StatusOK, t)
+		}
+	}
+	return
 }
 
-/*
-All updates must happen in a single transaction
-*/
-func updateTaskState(c *gin.Context) {
+// Transition to RUNNING state
+// FIXME: Should we set ExecEnv and Tags here?
+// - tags should already be set at creation time
+// - execEnv should be more dynamic than it is now
+func runTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
 	var taskId bson.ObjectId
-
 	taskId, err = getTaskId(c)
 	if err != nil {
 		return
 	}
 
-	newState := c.Query("state")
-	typeDigest := c.Query("typeDigest")
-	pid := c.Query("pid")
-	workerId := c.Query("workerId")
-	timeout := c.Query("timeout")
-
-	if _, err = cast.ToIntE(timeout); err != nil {
-		timeout = cast.ToString(tasks.DEFAULT_TIMEOUT)
+	// Set fields:
+	// state = RUNNING
+	// Progress = 0
+	// Timeout
+	// LastUpdatedTs
+	// Pid
+	// TypeDigest
+	tc := &database.TaskRunConfig{
+		Timeout:       cast.ToInt(c.Query("timeout")),
+		LastUpdatedTs: time.Now().Unix(),
+		Pid:           cast.ToInt(c.Query("pid")),
+		TypeDigest:    c.Query("typeDigest"),
+	}
+	err = DB.RunTask(taskId, tc)
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		return
 	}
 
-	validState := false
-	for _, state := range tasks.ValidTaskStates {
-		if state == newState {
-			validState = true
+	c.JSON(http.StatusOK, "{}")
+}
+
+// FIXME: Implement this
+// Called for stopping
+func cancelTask(c *gin.Context) {
+	// Upsert in database, setting any item that has that Id to STOPPED state
+	// If it doesn't exist, the 'tombstone' will just have the taskId and state=STOPPED
+	c.JSON(http.StatusInternalServerError, "{}")
+}
+
+// Set the task to a terminal state like: STOPPING,
+func finishTask(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+
+	var err error
+	var taskId bson.ObjectId
+	taskId, err = getTaskId(c)
+	if err != nil {
+		return
+	}
+
+	// Check that it is a valid task state
+	newState := c.Query("state")
+	isvalid := false
+	for _, s := range tasks.ValidTerminalTaskStates {
+		if newState == s {
+			isvalid = true
 			break
 		}
 	}
-	if !validState {
-		errMsg := fmt.Sprintf(`{"error": "'%s' is not a valid task state"}`, newState)
-		c.String(http.StatusBadRequest, errMsg)
+	if !isvalid {
+		errMsg := fmt.Sprintf("Invalid task state '%s'; must be one of: %v", newState, tasks.ValidTerminalTaskStates)
+		c.String(http.StatusBadRequest, MakeErrorString(errMsg))
 		return
 	}
 
-	err = modifyTaskInTransaction(&taskId, func(t *tasks.Task) error {
-		// Perform some checks that this is a valid transition
-		switch newState {
-		case "START":
-			if t.State != "WAIT" {
-				return fmt.Errorf("Cannot transition to START state from state %s", t.State)
-			}
-			t.StartedTs = time.Now().Unix()
-			t.TypeDigest = typeDigest
-			t.Progress = 0
-			t.WorkerId = workerId
-			t.Timeout = int64(cast.ToInt(timeout))
-		case "WAIT":
-			// FIXME: Can go back to WAIT after START or RUNNING if requeued
-			return fmt.Errorf("Cannot transition to WAIT state from any other state")
-		case "RUNNING":
-			if t.State != "START" {
-				return fmt.Errorf("Cannot transition to RUNNING state from state %s", t.State)
-			}
-			t.Pid = cast.ToInt(pid)
-		case "ERROR":
-			if t.State != "RUNNING" {
-				return fmt.Errorf("Cannot transition to ERROR state from state %s", t.State)
-			}
-		case "STOPPED":
-			if t.State != "RUNNING" {
-				return fmt.Errorf("Cannot transition to STOPPED state from state %s", t.State)
-			}
-		case "TIMEOUT":
-			if t.State != "RUNNING" {
-				return fmt.Errorf("Cannot transition to TIMEOUT state from state %s", t.State)
-			}
-		case "SUCCESS":
-			if t.State != "RUNNING" {
-				return fmt.Errorf("Cannot transition to SUCCESS state from state %s", t.State)
-			}
-			t.Progress = 100
-		}
-		t.State = newState
-		return nil
-	})
+	err = DB.FinishTask(taskId, newState)
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
-	c.String(http.StatusOK, "{}")
+
+	c.JSON(http.StatusOK, "{}")
 }
 
+// OK
 func updateTaskProgress(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
 	var taskId bson.ObjectId
-
 	taskId, err = getTaskId(c)
 	if err != nil {
 		return
 	}
 
-	progress := c.Query("progress")
-	iProgress, err := cast.ToIntE(progress)
-	if err != nil || iProgress > 100 || iProgress < 0 {
-		errMsg := fmt.Sprintf(`{"error": "The required parameter 'progress' is not a valid integer between 0 and 100."}`)
-		c.String(http.StatusBadRequest, errMsg)
+	// FIXME: Ensure it is in the running state
+
+	progress, err := cast.ToIntE(c.Query("progress"))
+	if err != nil || progress > 100 || progress < 0 {
+		c.String(http.StatusBadRequest, MakeErrorString("The required parameter 'progress' is not a valid integer between 0 and 100."))
 		return
 	}
 
-	err = modifyTaskInTransaction(&taskId, func(t *tasks.Task) error {
-		t.Progress = iProgress
-		return nil
-	})
+	err = DB.UpdateTaskProgress(taskId, progress)
 	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 	c.String(http.StatusOK, "{}")
 }
 
-// FIXME: Also grab extra tags
+// TESTME
+// FIXME: Also grab extra tags, e.g. machine specific tag
 func postTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
@@ -515,11 +302,14 @@ func postTask(c *gin.Context) {
 	var taskData io.ReadCloser
 	var err error
 
+	// FIXME: Save location of these files, will need to move to whatever worker executes this
 	// Try to get content from: file, then form value, then body
 	// We assume json if not explicitly using a form
 	if !strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
 		c.Request.Header.Set("Content-Type", "application/json")
 	}
+
+	// FIXME: This looks wrong...
 	taskData, _, err = c.Request.FormFile("data")
 	if err != nil {
 		dv := c.Request.FormValue("data")
@@ -534,13 +324,13 @@ func postTask(c *gin.Context) {
 	err = decoder.Decode(&req)
 	if err != nil {
 		// Getting EOF error unless application/json
-		c.String(http.StatusBadRequest, `{"error": "Error decoding JSON in request body / form field."}`)
+		c.String(http.StatusBadRequest, MakeErrorString("Error decoding JSON in request body / form field."))
 		return
 	}
 
 	// Check required fields
 	if req["type"] == nil {
-		c.String(http.StatusBadRequest, `{"error": "Request is missing required field 'type'."}`)
+		c.String(http.StatusBadRequest, MakeErrorString("Request is missing required field 'type'."))
 		return
 	} else if _, ok := req["type"].(string); !ok {
 		c.String(http.StatusBadRequest, `{"error": "Required field 'type' is not of expected type 'string'."}`)
@@ -548,11 +338,9 @@ func postTask(c *gin.Context) {
 	}
 
 	// Load task type
-	filename := fmt.Sprintf("%s.toml", req["type"])
-	fullpath := path.Join(viper.GetString("tasks.typesPath"), filename)
-	tt, err := tasks.ReadTaskTypeFromFilepath(fullpath)
+	tt, err := tasks.FetchTaskType(cast.ToString(req["type"]))
 	if err != nil {
-		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -561,7 +349,7 @@ func postTask(c *gin.Context) {
 	if req["environment"] != nil {
 		envVars = cast.ToStringMapString(req["environment"])
 		if len(envVars) == 0 {
-			c.String(http.StatusBadRequest, `{"error": "The 'environment' parameter must be a map of string keys to string values."}`)
+			c.String(http.StatusBadRequest, MakeErrorString("The 'environment' parameter must be a map of string keys to string values."))
 			return
 		}
 
@@ -575,20 +363,22 @@ func postTask(c *gin.Context) {
 			// FIXME: Check types of variables, maybe by checking that they can be cast to that type then back to string with no loss
 		}
 		if len(missingVars) > 0 {
-			c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "Missing environment variables required for this task type: %s"}`, missingVars))
+			errMsg := fmt.Sprintf("Missing environment variables required for this task type: %s", missingVars)
+			c.String(http.StatusBadRequest, MakeErrorString(errMsg))
 			return
 		}
 
 	} else if tt.HasRequiredEnv() {
 		// Environment not set but we have required fields
-		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "The task type '%s' has required environment variables. The 'environment' parameter must be set and contain these values."}`, tt.GetName()))
+		errMsg := fmt.Sprintf("The task type '%s' has required environment variables. The 'environment' parameter must be set and contain these values.", tt.GetName())
+		c.String(http.StatusBadRequest, MakeErrorString(errMsg))
 		return
 	}
 
 	// Create task object
 	t, err := tt.NewTask(envVars)
 	if err != nil {
-		c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -597,7 +387,7 @@ func postTask(c *gin.Context) {
 		// Create output dir to put files in
 		err = os.MkdirAll(t.ResultDir, os.ModePerm)
 		if err != nil {
-			c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+			c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 			return
 		}
 
@@ -608,7 +398,7 @@ func postTask(c *gin.Context) {
 
 			uploadedFile, _, err := c.Request.FormFile(filename)
 			if err != nil {
-				c.String(http.StatusBadRequest, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
+				c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 				return
 			}
 			defer uploadedFile.Close()
@@ -619,29 +409,17 @@ func postTask(c *gin.Context) {
 		}
 	}
 
-	// Save task to database
-	if err = DB.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("tasks"))
-		if b == nil {
-			errorString := "Database format error: Bucket 'tasks' does not exist."
-			return fmt.Errorf(errorString)
-		}
-		jsn, err := json.Marshal(t)
-		if err != nil {
-			return err
-		}
-		b.Put(IdBytes(t.Id), jsn)
-		return nil
-
-	}); err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+	// Add to queue
+	err = Q.AddTask(&t)
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
-	c.String(http.StatusCreated, fmt.Sprintf(`{"id": "%s"}`, t.Id.Hex()))
+	c.JSON(http.StatusCreated, t)
 }
 
+// OK
 // Always returns 200, even if item doesn't exist
 // FIXME: Don't remove task if currently running unless ?force=True
 func removeTask(c *gin.Context) {
@@ -655,15 +433,7 @@ func removeTask(c *gin.Context) {
 		return
 	}
 
-	err = DB.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("tasks"))
-		if b == nil {
-			errorString := "Database format error: Bucket 'tasks' does not exist."
-			return fmt.Errorf(errorString)
-		}
-		err := b.Delete(IdBytes(taskId))
-		return err
-	})
+	err = DB.DeleteTask(taskId)
 	if err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
@@ -682,6 +452,7 @@ func removeTask(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
 }
 
+// OK
 func streamTaskLog(c *gin.Context) {
 	var err error
 	var taskId bson.ObjectId
@@ -691,8 +462,8 @@ func streamTaskLog(c *gin.Context) {
 		return
 	}
 
-	task := tasks.Task{}
-	task, err = fetchTaskById(taskId)
+	var task tasks.Task
+	task, err = DB.GetTask(taskId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, "Error opening logfile stream")
 		return
@@ -738,7 +509,7 @@ func streamTaskLog(c *gin.Context) {
 		if loglineChannelIsEmpty {
 			// Check whether the process is complete
 			// If so, return false so we quit streaming
-			task, err = fetchTaskById(taskId)
+			task, err = DB.GetTask(taskId)
 			if err != nil {
 				log.WithFields(log.Fields{
 					"taskId":         taskId,

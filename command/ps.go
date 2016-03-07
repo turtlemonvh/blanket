@@ -85,7 +85,8 @@ func (c *PSConf) ListTasks() {
 
 	if c.Template == "" {
 		c.Template = "{{.id}} {{.type}} {{.state}} {{.tags}}"
-	} else if c.Quiet {
+	}
+	if c.Quiet {
 		c.Template = "{{.id}}"
 	}
 

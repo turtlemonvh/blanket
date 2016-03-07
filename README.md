@@ -33,7 +33,7 @@ Add a task and upload some data files with it. Files will be placed at the root 
 
 Add lots of tasks
 
-    while true; curl -X POST localhost:8773/task/ -F data=@data.json -F blanket.json=@blanket.json; echo "$(date)"; sleep 5; done
+    while true; do curl -X POST localhost:8773/task/ -F data=@data.json -F blanket.json=@blanket.json; echo "$(date)"; sleep 5; done
 
 Delete a task
 
@@ -122,6 +122,27 @@ blanket rm
 
 > Also see: https://trello.com/b/bOWTSxbO/blanket-dev
 
+
+- get task objects from db instead of strings
+- use objectid for workerId field on task objects
+- list queued and non-queued tasks separately in ps and in html UI
+
+
+- add tests for boltdb backend
+    - add task, list in queue
+    - add tasks, filter in queue
+    - add task, get from queue with worker
+    - move task through states with worker
+    - task filtering tests
+        - work on the db level, not http
+- NOTES
+    - all basic interactions + unit tests
+    - can run worker interactions in a separate go routine
+
+- add tools for dealing with corrupt database
+
+- discard first log line because might be partial
+
 - allow user to use a previous task as a template for a new task
     - just POST to /task/<id>/rerun
     - return id of the new task
@@ -145,6 +166,8 @@ blanket rm
         - need to be able to track that a job is a "re-run" of another job
         - also runNumber
             - starts at 1
+    - terminology: timeouts / SLAs
+        - http://pythonhosted.org/airflow/concepts.html#slas
 
 - Allow configurable executors
     - see how supervisord does it (and docker)
@@ -185,6 +208,16 @@ blanket rm
             - build js (gulp build)
             - run bindata-assets command
             - then build
+    - use protocol buffers for communication over stdin/stdout
+        - https://github.com/hashicorp/go-plugin
+        - http://crosbymichael.com/category/go.html
+        - https://github.com/mitchellh/packer/issues/1
+        - https://www.packer.io/docs/extend/developing-plugins.html
+    - alternative
+        - https://npf.io/2015/05/pie/
+        - https://github.com/natefinch/pie
+    - https://github.com/hashicorp/go-getter
+        - for fetching plugins
 
 - make some good examples
 - put api calls into sub directories
@@ -247,15 +280,23 @@ blanket rm
 
 Set up automated tests
 - https://travis-ci.org/
+    - handles makefiles fine
+    - https://docs.travis-ci.com/user/languages/go
+    - ex: https://github.com/streadway/amqp/blob/master/.travis.yml
+    - ex: https://github.com/tsuru/tsuru/blob/master/.travis.yml
 - https://www.appveyor.com/
     - windows CI
     - https://blog.klauspost.com/travisappveyor-ci-script-for-go/
 - https://coveralls.io/
     - https://github.com/mattn/goveralls
+    - has good simple setup instructions
 - add docker container for running tests so users can test in isolated installation
 
 - fs abstraction
     - https://github.com/spf13/afero
+
+- may want to get rid of filesystem methods and instead use this:
+    - https://github.com/Redundancy/go-sync
 
 https://www.youtube.com/watch?v=ndmB0bj7eyw
 - http tests
@@ -295,6 +336,13 @@ http://talks.golang.org/2012/10things.slide#8
     - https://gohugo.io/overview/introduction/
     - render into a single page
         - https://gohugo.io/extras/toc/
+
+- or maybe just read the docs
+    - https://ringpop.readthedocs.org/en/latest/
+    - https://github.com/uber/ringpop-common/tree/master/docs
+
+- or maybe just a wiki
+    - https://github.com/Netflix/zuul/wiki
 
 #### Log cleanup
 
@@ -419,6 +467,12 @@ http://talks.golang.org/2012/10things.slide#8
 
 ## Backlog
 
+- some fancy middleware wrapping
+    - https://github.com/gin-gonic/gin/issues/293#issuecomment-192025259
+    - use the work I did on NYT for gzipping data
+- emails
+    - send emails to a given account with information about a task
+    - would be a good plugin
 - clean up About page
     - link to docs
     - link to twitter, github
@@ -437,6 +491,8 @@ http://talks.golang.org/2012/10things.slide#8
             - https://github.com/MaaSiveNet/maasive-py/blob/master/maasivepy/maasivepy.py#L243
         - https://github.com/gin-gonic/gin/blob/master/auth.go#L40
             - would be pretty easy to do a version of this that stores users in bolt and uses bcrypt for lookup
+        - https://github.com/mholt/caddy/blob/master/middleware/basicauth/basicauth.go
+            - example middleware
     - could keep session cookies in RAM
         - flush to a blob in the configuration bucket every minute if any changes
         - also flush on shutdown
@@ -498,6 +554,7 @@ http://talks.golang.org/2012/10things.slide#8
     - https://github.com/sipin/gorazor
     - ** this is an ideal candidate for plugin design
 - autoscheduling of backups
+    - https://github.com/boltdb/bolt#database-backups
     - list interval in config
     - when starting up, check if newest backup is too old, if so snapshot immediately
     - schedule next snapshot immediately after running first one

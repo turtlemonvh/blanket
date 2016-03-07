@@ -23,13 +23,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib/database"
+	"github.com/turtlemonvh/blanket/lib/queue"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"gopkg.in/tylerb/graceful.v1"
 	"net/http"
 	"time"
 )
 
-var DB *bolt.DB
+var DB database.BlanketDB
+var Q queue.BlanketQueue
 
 func openDatabase() *bolt.DB {
 	db, err := bolt.Open(viper.GetString("database"), 0666, &bolt.Options{Timeout: 1 * time.Second})
@@ -39,49 +42,32 @@ func openDatabase() *bolt.DB {
 	return db
 }
 
-/*
-	FIXME:
-	- we probably want to allow the user to import a set of tasks instead of having defaults
-	- actually, a default task that runs an arbitrary command on the command line would be useful
-	- we'll need to create the directory for it
-
-	- may want to move initialization into a separate init command; this is what django does
-	- then just check for valid initialization in startup
-
-	- include a timeout for all tasks
-	- include task state
-	- include progress %
-	- allow tasks to lauch sub tasks
-
-	- make scripts editable in the interface (like bamboo)
-
-	- task types should always be read from disk
-	- task should include a hash of the config file of the task type
-*/
-
+// Initialize the bolt database to be used as both a queue and a database
+// FIXME:
+// - may want to move initialization into a separate init command; this is what django does
+// - then just check for valid initialization in startup
+// - may the handling of separate or combined connections to a queue or database simpler (e.g. mongo, postgres will prob do both in same connection)
 func setUpDatabase() error {
-	DB = openDatabase()
-	defer DB.Close()
+	db := openDatabase()
+	defer db.Close()
 
 	// Set up base task types
-	err := DB.Update(func(tx *bolt.Tx) error {
+	err := db.Update(func(tx *bolt.Tx) error {
 		var err error
 
-		// Create tasks bucket
-		b := tx.Bucket([]byte("tasks"))
-		if b == nil {
-			b, err = tx.CreateBucket([]byte("tasks"))
-			if err != nil {
-				log.Fatal(err)
-			}
+		requiredBuckets := []string{
+			database.BOLTDB_WORKER_BUCKET,
+			database.BOLTDB_TASK_BUCKET,
+			queue.BOLTDB_TASK_QUEUE_BUCKET,
 		}
 
-		// Create workers bucket
-		b = tx.Bucket([]byte("workers"))
-		if b == nil {
-			b, err = tx.CreateBucket([]byte("workers"))
-			if err != nil {
-				log.Fatal(err)
+		for _, bucketName := range requiredBuckets {
+			b := tx.Bucket([]byte(bucketName))
+			if b == nil {
+				b, err = tx.CreateBucket([]byte(bucketName))
+				if err != nil {
+					log.Fatal(err)
+				}
 			}
 		}
 
@@ -96,8 +82,11 @@ func Serve() {
 	if err := setUpDatabase(); err != nil {
 		log.Fatal(err)
 	}
-	DB = openDatabase()
-	defer DB.Close()
+
+	boltdb := openDatabase()
+	DB = database.NewBlanketBoltDB(boltdb)
+	Q = queue.NewBlanketBoltQueue(boltdb)
+	defer boltdb.Close()
 
 	// https://godoc.org/github.com/rs/cors
 	c := cors.New(cors.Options{
@@ -139,29 +128,41 @@ func Serve() {
 
 	r.GET("/config/", getConfigProcessed)
 
-	r.GET("/task/", getTasks)
-	r.GET("/task/:id", getTask)                     // fetch just 1 by id
-	r.POST("/task/", postTask)                      // create a new one
-	r.PUT("/task/:id/state", updateTaskState)       // update state
-	r.PUT("/task/:id/progress", updateTaskProgress) // update progress
-	r.DELETE("/task/:id", removeTask)               // delete all information, including killing if running
-	r.GET("/task/:id/log", streamTaskLog)           // stdout log
-
 	r.GET("/task_type/", getTaskTypes)
 	r.GET("/task_type/:name", getTaskType)
 
-	r.GET("/worker/", getWorkers)
-	r.POST("/worker/", launchWorker)
+	// Called by user
+	r.POST("/task/", postTask)            // add a new task to the queue
+	r.DELETE("/task/:id", removeTask)     // delete all information, including killing if running
+	r.GET("/task/:id/log", streamTaskLog) // stdout log
+	r.PUT("/task/:id/cancel", cancelTask) // stop execution of a task; will be moved to state STOPPED
+
+	r.GET("/task/", getTasks)   // fixme; pull from queue or database or both
+	r.GET("/task/:id", getTask) // fetch just 1 by id
+
+	// Called by worker
+	r.POST("/task/claim/:workerid", claimTask)      // claim a task; called by a worker
+	r.PUT("/task/:id/run", runTask)                 // start running a task
+	r.PUT("/task/:id/finish", finishTask)           // update state
+	r.PUT("/task/:id/progress", updateTaskProgress) // update progress
+
 	r.GET("/worker/:id", getWorker)
-	r.PUT("/worker/:id", updateWorker)            // initial post and status update
+	r.GET("/worker/", getWorkers)
+	r.POST("/worker/", launchWorker)              // called from front end, doesn't actually hit database
+	r.PUT("/worker/:id", updateWorker)            // used for initial creation + status updates
 	r.PUT("/worker/:id/shutdown", shutDownWorker) // not called by worker itself
-	r.DELETE("/worker/:id", deleteWorker)         // remove from database
-	r.GET("/worker/:id/logs", getWorkerLogfile)
+	r.DELETE("/worker/:id", deleteWorker)         // remove from database; called by worker itself
+	r.GET("/worker/:id/logs", getWorkerLogfile)   // server sent events
 
 	// Start server
 	log.WithFields(log.Fields{
 		"port": viper.GetInt("port"),
 	}).Warn("Main server started")
+
+	// FIXME: Launch background process for automatically
+	// - cleaning queue
+	// - cleaning db
+	// - cleaning workers
 
 	// Graceful shutdown, leaving up to 2 seconds for requests to complete
 	srv := &graceful.Server{

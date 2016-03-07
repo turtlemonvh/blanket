@@ -11,12 +11,12 @@ angular.module('blanketApp')
         this.taskTypes = [];
 
         this.taskLabelClasses = {
-            "WAIT": "default",
-            "START": "primary",
+            "WAITING": "default",
+            "CLAIMED": "primary",
             "RUNNING": "warning",
             "ERROR": "danger",
             "SUCCESS": "success",
-            "TIMEOUT": "danger",
+            "TIMEDOUT": "danger",
             "STOPPED": "danger"
         };
 
@@ -26,8 +26,8 @@ angular.module('blanketApp')
 
         self.cleanTask = function(t) {
             t.labelClass = self.taskLabelClasses[t.state];
-            t.hasResults = _.intersection(["WAIT", "START"], [t.state]).length === 0;
-            t.isComplete = _.intersection(["WAIT", "START", "RUNNING"], [t.state]).length === 0;
+            t.hasResults = _.intersection(["WAITING", "CLAIMED"], [t.state]).length === 0;
+            t.isComplete = _.intersection(["WAITING", "CLAIMED", "RUNNING"], [t.state]).length === 0;
 
             // Date fixing
             var dateFields = ['createdTs', 'startedTs', 'lastUpdatedTs'];
@@ -136,16 +136,16 @@ angular.module('blanketApp')
         }
 
         self.stopTask = function(task) {
-            $log.log("Stopping task", task);
+            $log.log("Canceling task", task);
             return $http({
                 method: 'PUT',
-                url: baseUrl + '/task/' + task.id + "/state?state=STOPPED" 
+                url: baseUrl + '/task/' + task.id + "/cancel" 
             }).then(function(d) {
                 // Give it time to shut down before refreshing the list
-                $log.log("Stopped", task);
+                $log.log("Canceled", task);
                 $timeout(self.refreshTasks, 1000);
             }, function(d) {
-                $log.error("Problem stopping task", task);
+                $log.error("Problem canceling task", task);
             });
         }
 

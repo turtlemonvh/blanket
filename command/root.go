@@ -42,7 +42,7 @@ func InitializeConfig() {
 	viper.SetDefault("port", 8773)
 	viper.SetDefault("database", "blanket.db")
 	viper.SetDefault("tasks.typesPath", "types")
-	viper.SetDefault("tasks.resultsPath", "results")
+	viper.SetDefault("tasks.resultsPath", []string{"results"})
 	viper.SetDefault("workers.logfileNameTemplate", "worker.{{.Id.Hex}}.log")
 
 	viper.SetConfigName("blanket")
