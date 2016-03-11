@@ -135,10 +135,10 @@ func (DB *BlanketBoltDB) GetTask(taskId bson.ObjectId) (tasks.Task, error) {
 
 // FIXME: Move FindTasksInBoltDB and ModifyTaskInBoltTransaction to their own helper library
 // FIXME: Return task objects in a slice instead of a string; may actually want to send on a channel for streaming
-func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *TaskSearchConf) (string, int, error) {
+func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *TaskSearchConf) ([]tasks.Task, int, error) {
 	var err error
 
-	result := "["
+	var result []tasks.Task
 	nfound := 0
 	err = db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))
@@ -147,7 +147,6 @@ func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *TaskSearchConf) (stri
 		}
 
 		c := b.Cursor()
-		isFirst := true
 
 		// Sort order
 		var (
@@ -245,20 +244,14 @@ func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *TaskSearchConf) (stri
 			nfound += 1
 			if nfound > tc.Offset {
 				if !tc.JustCounts {
-					if !isFirst {
-						result += ","
-					}
-					// FIXME: Return this in chunks
-					result += string(v)
+					result = append(result, t)
 				}
-				isFirst = false
 			}
 		}
 
 		return nil
 	})
 
-	result += "]"
 	return result, nfound, err
 }
 
@@ -295,7 +288,7 @@ func ModifyTaskInBoltTransaction(db *bolt.DB, taskId *bson.ObjectId, f func(t *t
 	return err
 }
 
-func (DB *BlanketBoltDB) GetTasks(tc *TaskSearchConf) (string, int, error) {
+func (DB *BlanketBoltDB) GetTasks(tc *TaskSearchConf) ([]tasks.Task, int, error) {
 	return FindTasksInBoltDB(DB.db, BOLTDB_TASK_BUCKET, tc)
 }
 

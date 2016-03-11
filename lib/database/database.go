@@ -43,7 +43,7 @@ type BlanketDB interface {
 	// Task functions
 	GetTask(taskId bson.ObjectId) (tasks.Task, error)
 	DeleteTask(taskId bson.ObjectId) error
-	GetTasks(tc *TaskSearchConf) (string, int, error)
+	GetTasks(tc *TaskSearchConf) ([]tasks.Task, int, error)
 	StartTask(t *tasks.Task) error
 	RunTask(taskId bson.ObjectId, fields *TaskRunConfig) error
 	FinishTask(taskId bson.ObjectId, newState string) error

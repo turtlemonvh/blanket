@@ -64,7 +64,7 @@ func getTasks(c *gin.Context) {
 		"justCounts":       tc.JustCounts,
 	}).Debug("Task request params")
 
-	var result string
+	var result []tasks.Task
 	var nfound int
 	var err error
 	if c.Query("queued") == "true" {
@@ -81,7 +81,7 @@ func getTasks(c *gin.Context) {
 	if tc.JustCounts {
 		c.String(http.StatusOK, cast.ToString(nfound))
 	} else {
-		c.String(http.StatusOK, result)
+		c.JSON(http.StatusOK, result)
 	}
 }
 

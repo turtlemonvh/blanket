@@ -48,7 +48,7 @@ func (Q *BlanketBoltQueue) AddTask(t *tasks.Task) error {
 	})
 }
 
-func (Q *BlanketBoltQueue) ListTasks(tags []string, limit int) (string, int, error) {
+func (Q *BlanketBoltQueue) ListTasks(tags []string, limit int) ([]tasks.Task, int, error) {
 	tc := &database.TaskSearchConf{
 		Limit:        limit,
 		ReverseSort:  true,
@@ -93,13 +93,7 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 		SmallestId:    bson.NewObjectIdWithTime(time.Unix(0, 0)),
 		LargestId:     bson.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),
 	}
-	tasksStr, _, err := database.FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
-	if err != nil {
-		return task, ackCallback, nackCallback, err
-	}
-
-	var ts []tasks.Task
-	err = json.Unmarshal([]byte(tasksStr), &ts)
+	ts, _, err := database.FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
 	if err != nil {
 		return task, ackCallback, nackCallback, err
 	}
