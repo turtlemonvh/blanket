@@ -40,11 +40,6 @@ func (t *Task) String() string {
 	return fmt.Sprintf("%s %s [%d]", t.TypeId, t.Id.Hex(), t.CreatedTs)
 }
 
-func (t *Task) ToJSON() (string, error) {
-	bts, err := json.Marshal(t)
-	return string(bts), err
-}
-
 // Get the command object used to run this task
 // Task type is passed in so the same config is used for every step
 // Maybe task type TOML should be copied when task is added so that it is saved

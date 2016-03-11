@@ -122,11 +122,11 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 		task.WorkerId = worker.Id.Hex()
 
 		// Serilalize and save
-		js, err := task.ToJSON()
+		bts, err := json.Marshal(task)
 		if err != nil {
 			return err
 		}
-		return b.Put(IdBytes(task.Id), []byte(js))
+		return b.Put(IdBytes(task.Id), bts)
 	})
 
 	ackCallback = func() error {
@@ -157,11 +157,11 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 			task.WorkerId = ""
 
 			// Serilalize and save
-			js, err := task.ToJSON()
+			bts, err := json.Marshal(task)
 			if err != nil {
 				return err
 			}
-			return b.Put(IdBytes(task.Id), []byte(js))
+			return b.Put(IdBytes(task.Id), bts)
 		})
 	}
 

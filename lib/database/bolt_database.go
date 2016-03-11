@@ -138,7 +138,7 @@ func (DB *BlanketBoltDB) GetTask(taskId bson.ObjectId) (tasks.Task, error) {
 func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *TaskSearchConf) ([]tasks.Task, int, error) {
 	var err error
 
-	var result []tasks.Task
+	result := []tasks.Task{}
 	nfound := 0
 	err = db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))
@@ -256,12 +256,11 @@ func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *TaskSearchConf) ([]ta
 }
 
 func saveTaskToBucket(t *tasks.Task, b *bolt.Bucket) (err error) {
-	js, err := t.ToJSON()
+	bts, err := json.Marshal(t)
 	if err != nil {
 		return err
 	}
-
-	return b.Put(IdBytes(t.Id), []byte(js))
+	return b.Put(IdBytes(t.Id), bts)
 }
 
 func ModifyTaskInBoltTransaction(db *bolt.DB, taskId *bson.ObjectId, f func(t *tasks.Task) error) error {

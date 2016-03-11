@@ -149,13 +149,13 @@ func (t *TaskType) GetName() string {
 	return t.Config.GetString("name")
 }
 
-func (t *TaskType) ToJSON() (string, error) {
+// Implement Marshaler
+func (t *TaskType) MarshalJSON() ([]byte, error) {
 	ttSettings := t.Config.AllSettings()
 	ttSettings["loadedTs"] = t.LoadedTs
 	ttSettings["configFile"] = t.ConfigFile
 	ttSettings["versionHash"] = t.ConfigVersionHash
-	bts, err := json.Marshal(ttSettings)
-	return string(bts), err
+	return json.Marshal(ttSettings)
 }
 
 // Return a map of default values, {name => value}

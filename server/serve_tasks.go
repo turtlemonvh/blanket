@@ -47,7 +47,6 @@ func getTaskId(c *gin.Context) (bson.ObjectId, error) {
  * Request handlers
  */
 
-// OK
 func getTasks(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
@@ -68,7 +67,7 @@ func getTasks(c *gin.Context) {
 	var nfound int
 	var err error
 	if c.Query("queued") == "true" {
-		result, nfound, err = Q.ListTasks(tc.MaxTags, tc.Limit)
+		result, nfound, err = Q.ListTasks(tc.RequiredTags, tc.Limit)
 	} else {
 		result, nfound, err = DB.GetTasks(tc)
 	}
@@ -85,7 +84,6 @@ func getTasks(c *gin.Context) {
 	}
 }
 
-// OK
 func getTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
@@ -266,7 +264,6 @@ func finishTask(c *gin.Context) {
 	c.JSON(http.StatusOK, "{}")
 }
 
-// OK
 func updateTaskProgress(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
@@ -419,7 +416,6 @@ func postTask(c *gin.Context) {
 	c.JSON(http.StatusCreated, t)
 }
 
-// OK
 // Always returns 200, even if item doesn't exist
 // FIXME: Don't remove task if currently running unless ?force=True
 func removeTask(c *gin.Context) {
@@ -452,7 +448,6 @@ func removeTask(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
 }
 
-// OK
 func streamTaskLog(c *gin.Context) {
 	var err error
 	var taskId bson.ObjectId
@@ -483,13 +478,6 @@ func streamTaskLog(c *gin.Context) {
 		// This function returns a boolean indicating whether the stream should stay open
 		// Every time this is called, also checks if client has left
 
-		// FIXME: This has the potential to generate one goroutine per line, maxing out 1 goroutine per line we can read in 5 seconds
-		timeout := make(chan bool, 1)
-		go func() {
-			time.Sleep(5 * time.Second)
-			timeout <- true
-		}()
-
 		// Wait up to 5 seconds for a new value
 		select {
 		case logline := <-sub.NewLines:
@@ -501,7 +489,7 @@ func streamTaskLog(c *gin.Context) {
 			})
 			lineno++
 			loglineChannelIsEmpty = false
-		case <-timeout:
+		case <-time.After(5 * time.Second):
 			loglineChannelIsEmpty = true
 		}
 
