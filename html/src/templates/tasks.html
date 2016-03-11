@@ -200,7 +200,8 @@
         <tbody>
             <tr ng-repeat="task in data.tasks track by task.id">
                 <th scope="row">{{ ($index+1) }}</th>
-                <td><a ng-href="/#/task/{{task.id}}">{{ task.id | limitTo: 8 }}</a></td>
+                <td ng-if="task.startedTs !== 0"><a ng-href="/#/task/{{task.id}}">{{ task.id | limitTo: 8 }}</a></td>
+                <td ng-if="task.startedTs === 0">{{ task.id | limitTo: 8 }}</td>
                 <td><a ng-href="{{baseUrl}}/task_type/{{task.type}}">{{ task.type }}</a></td>
                 <td>
                     <span
@@ -222,8 +223,9 @@
                 <td>{{ task.lastUpdatedTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
                 <td> <span class="label label-{{ task.labelClass }}">{{ task.state }}</span> </td>
                 <td>
+                    <a ng-if="!task.hasResults" class="danger" ng-click="data.stopTask(task)">Cancel</a>
                     <a ng-if="task.state === 'RUNNING'" class="danger" ng-click="data.stopTask(task)">Stop</a>
-                    <a ng-if="task.state !== 'RUNNING'" class="danger" ng-click="data.deleteTask(task)">{{ getStopCommand(task) }}</a>
+                    <a ng-if="task.isComplete" class="danger" ng-click="data.deleteTask(task)">Delete</a>
                 </td>
             </tr>
         </tbody>

@@ -331,10 +331,6 @@ angular.module('blanketApp')
 
             return self;
         })();
-
-        $scope.getStopCommand = function(task) {
-            return task.isComplete ? "Delete" : "Stop";
-        }
     }])
     .controller('TaskDetailCtl', ['$log', '$http', '$timeout', '$scope', '_', 'TasksStore', 'baseUrl', '_', '$stateParams', '$window',
         function($log, $http, $timeout, $scope, _, TasksStore, baseUrl, _, $stateParams, $window) {

@@ -63,18 +63,38 @@ func getTasks(c *gin.Context) {
 		"justCounts":       tc.JustCounts,
 	}).Debug("Task request params")
 
-	var result []tasks.Task
-	var nfound int
+	result := []tasks.Task{}
+	nfound := 0
 	var err error
-	if c.Query("queued") == "true" {
-		result, nfound, err = Q.ListTasks(tc.RequiredTags, tc.Limit)
-	} else {
-		result, nfound, err = DB.GetTasks(tc)
+
+	// FIXME: Cleanup, parallelize, merge
+	// Need to decide how we want to handle the display of queued tasks
+	searchDB := true
+
+	ntt := len(tc.AllowedTaskTypes)
+	if ntt == 0 || tc.AllowedTaskTypes["WAITING"] {
+		var qresult []tasks.Task
+		var nfoundq int
+		searchDB = ntt == 0 || ntt > 1
+		qresult, nfoundq, err = Q.ListTasks(tc.RequiredTags, tc.Limit)
+		if err != nil {
+			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+			return
+		}
+		result = append(result, qresult...)
+		nfound += nfoundq
 	}
 
-	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
-		return
+	if searchDB {
+		var dbresult []tasks.Task
+		var nfounddb int
+		dbresult, nfounddb, err = DB.GetTasks(tc)
+		if err != nil {
+			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+			return
+		}
+		result = append(result, dbresult...)
+		nfound += nfounddb
 	}
 
 	if tc.JustCounts {

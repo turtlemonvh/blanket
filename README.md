@@ -39,13 +39,14 @@ Delete a task
 
     curl -s -X DELETE localhost:8773/task/b200f6de-0453-46c9-9c70-5dad63db3ebb | python -mjson.tool    
     # OR
-    ./blanket ps -q | tail -n5 | xargs -I {} ./blanket rm {}
+    ./blanket ps -q | tail -n1 | xargs ./blanket rm
 
     # Remove all
     ./blanket ps -q | xargs -I {} ./blanket rm {}
 
 Run worker with certain capabilities
 
+    # You can also launch from the web UI or via an api call
     ./blanket worker -t unix,bash,python,python2,python27
 
 Running tests
@@ -61,10 +62,7 @@ Running tests
 
 ## Running the web UI
 
-> I'm working on figuring out the best way to handle packaging this, either as a plugin or as a included component of the build
-> Pros of including: easy setup, no separate process for installing plugin, single executable
-> Cons of including: no longer go-getable, more complex build process
-> I'm leaning toward the plugin option and creating a simple command for managing plugins.
+> This is going to be extracted into a plugin.
 
     cd html
 
@@ -123,12 +121,11 @@ blanket rm
 > Also see: https://trello.com/b/bOWTSxbO/blanket-dev
 
 
-- get task objects from db instead of strings
 - use objectid for workerId field on task objects
 - list queued and non-queued tasks separately in ps and in html UI
 
-
 - add tests for boltdb backend
+    - https://godoc.org/github.com/gin-gonic/gin#CreateTestContext
     - add task, list in queue
     - add tasks, filter in queue
     - add task, get from queue with worker
@@ -139,9 +136,36 @@ blanket rm
     - all basic interactions + unit tests
     - can run worker interactions in a separate go routine
 
-- add tools for dealing with corrupt database
-
 - discard first log line because might be partial
+
+- run sync + redirect
+
+- allow multi-requests
+    - delete multiple
+    - archive multiple
+
+- move all REST API endpoints to
+    - /api/v1
+    - allows UI to sit at base
+    - base url '/' is just a list of the endpoints where UI plugins are installed
+        - unless content type is json, in which case it is the configuration of the server
+
+- allow user to add task types over HTTP instead of just reading from disk
+    - add API endpoint to rescan from disk
+        - items on disk cannot be updated on the UI
+        - can copy a task from disk up to the UI
+        - command line utility to post all templates in a given location to UI
+            - overwrites whatever is on there
+    - option to export from server to file
+        - as a TOML file or a JSON file
+        - TOML will lose comments in round trip
+    - option to scan just this machine or set a flag in DB so all servers will rescan
+    - kind of like how ES picks up configuration in a cluster
+    - should be able to do this via JSON or TOML
+
+- UX
+    - airflow shows rendered template + log for completed task
+    - also shows list of task details
 
 - allow user to use a previous task as a template for a new task
     - just POST to /task/<id>/rerun
@@ -194,7 +218,7 @@ blanket rm
     - have glob patterns to match templates (relative to where they will be copied into)
 
 - package HTML into a single binary
-    - maybe make this a plugin
+    - make this a plugin, like
         - https://www.elastic.co/guide/en/elasticsearch/plugins/2.2/index.html
         - https://www.elastic.co/guide/en/elasticsearch/plugins/2.2/management.html
     - plugins that implement a UI report
@@ -210,12 +234,6 @@ blanket rm
             - then build
     - use protocol buffers for communication over stdin/stdout
         - https://github.com/hashicorp/go-plugin
-        - http://crosbymichael.com/category/go.html
-        - https://github.com/mitchellh/packer/issues/1
-        - https://www.packer.io/docs/extend/developing-plugins.html
-    - alternative
-        - https://npf.io/2015/05/pie/
-        - https://github.com/natefinch/pie
     - https://github.com/hashicorp/go-getter
         - for fetching plugins
 
@@ -256,6 +274,9 @@ blanket rm
 - send worker logs to stdout addition to sending to a file
     - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
 - add ability to stop task and not just delete
+- keep in the database in a "killed" state
+    - keeps a log of its pid, location of logfiles, start and end time, etc.
+    - allows the user to see the worker logs for the worker that ran that task
 
 
 #### Data migrations
@@ -273,8 +294,26 @@ blanket rm
 
 - installer
     - add an installer (esp. for windows) or package (for linux) that sets up config
+- examples
+    - https://github.com/influxdata/telegraf#installation
+    - https://github.com/influxdata/telegraf/blob/master/scripts/build.py
+        - uses fpm
+    - https://fedoraproject.org/wiki/PackagingDrafts/Go
+        - instructions for fedora / rhel / centos
 - look into making it a service
     - https://github.com/kardianos/service
+- https://packager.io/
+    - tool to make packaging easier
+    - free plan for open source projects
+    - https://github.com/pkgr/installer
+        - example of more complex pre and post install hooks
+- py2rpm
+    - may be a good thing to check out
+    - https://github.com/harlowja/packtools
+- http://stackoverflow.com/questions/15104089/packaging-golang-application-for-debian
+    - recommends against using FPM for DEB packages
+- homebrew
+    - https://github.com/Homebrew/homebrew-binary
 
 #### Testing
 
@@ -384,6 +423,9 @@ http://talks.golang.org/2012/10things.slide#8
     - stat viz: http://www.tnoda.com/blog/2013-12-19, http://cmaurer.github.io/angularjs-nvd3-directives/sparkline.chart.html
 - Add prometheus and expvar metrics
     - see logstore as an example
+    - include expvar in core
+    - make prometheus a plugin
+        - /api/ext/prometheus
 - Add-in for check_mk local checks
     - listens for status information and writes to a file
     - may want to just use python stuff that I already made
@@ -406,42 +448,7 @@ http://talks.golang.org/2012/10things.slide#8
 
 ## Specs
 
-### MVP
-
-- use to run ansible tasks
-- use to queue tasks for OCR app
-- provide log of past runs, and queue for upcoming runs
-- keep all log files
-- allow lots of parameters
-- allow launching via http, basic ui, or command line
-
-
-### Task Execution workflow
-
-- user sends POST request to /tasks/<task type>/
-- creates an item in the database with a UUID, and returns UUID to user
-    - add_time is recorded in database
-- adds task to queue(s)
-- add extra config options for env vars
-    - pass validation regex
-    - pass a small list of types
-- task is picked out of queue
-- hash of config directory for task type is taken
-    - new record for that task type is added to db
-    - can exclude files with a .blanketignore file
-- context variables are merged with default env
-    - some default ones are added for the task
-        - BLANKET_WORKING_DIR
-- templates are evaluated and put in current directory, with same relative paths
-    - everything is assumed to be a template unless explicitly excluded in a .templateignore file
-- task execution starts
-    - start_time is recorded in database
-- when task completes
-    - status is evaluated based on status code by default
-    - recorded on database
-
-
-### Important details
+### Implementation Details
 
 > This is how we want it to work, not necessarily how it works now.
 
@@ -467,9 +474,14 @@ http://talks.golang.org/2012/10things.slide#8
 
 ## Backlog
 
-- some fancy middleware wrapping
-    - https://github.com/gin-gonic/gin/issues/293#issuecomment-192025259
-    - use the work I did on NYT for gzipping data
+- add tools for dealing with corrupt database
+    - list buckets
+    - list ids of items in a bucket
+    - operate on: id, range of ids, whole bucket
+        - dump everything as json; stream out 1 per line
+        - remove items
+- godeps to lock in dependencies and avoid weird changes
+    - https://github.com/sparrc/gdm
 - emails
     - send emails to a given account with information about a task
     - would be a good plugin
@@ -479,9 +491,19 @@ http://talks.golang.org/2012/10things.slide#8
     - version information
 - security
     - SSL
-        - https://godoc.org/github.com/gin-gonic/gin#Engine.RunTLS
+        - https://godoc.org/github.com/gin-gonic/gin#Engine.
+        - maybe guide using letsencrypt
+            - https://caddyserver.com/blog/caddy-0_8-released
+            - https://caddyserver.com/blog/lets-encrypt-progress-report
+            - https://caddyserver.com/docs/automatic-https
+            - https://github.com/ericchiang/letsencrypt
+            - https://github.com/xenolf/lego
+        - would be nice to have a plugin to
+            - fetch and initialize TLS
+            - auto-renew TLS config for you
     - allow running on unix domain docker too
         - this would make it inaccessible off the user's machine
+        - this prevents port collisions when running in docker containers too, like I saw with supervisor and using localhost:9001 in host mode
     - HTTP basic auth
         - https://godoc.org/github.com/gin-gonic/gin#BasicAuth
             - don't store username and password directly
@@ -523,7 +545,6 @@ http://talks.golang.org/2012/10things.slide#8
     - also adds it with super high priority so it is picked up fast
     - like this: https://github.com/celery/celery/issues/2275#issuecomment-56828471
 - allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
-- godeps to lock in dependencies and avoid weird changes
 - monitoring
     - https://github.com/shirou/gopsutil
     - total CPU and memory usage of everything
@@ -539,7 +560,8 @@ http://talks.golang.org/2012/10things.slide#8
     - should be able to combile for centos, ubuntu, windows, mac in 32bit/64bit versions all at once
     - http://dave.cheney.net/2015/08/22/cross-compilation-with-go-1-5
 - command line completion
-    - cobra has this built in, but will probably have to work with build system / makfile to get this right
+    - cobra has this built in, but will probably have to work with build system / makefile to get this right
+    - package this up into RPM/Deb
 - include weights for fair queuing
 - use stacked bars to show the amt of tasks of each type that have failed, are in progress, or succeeded
     - http://getbootstrap.com/components/#progress-stacked
@@ -558,12 +580,6 @@ http://talks.golang.org/2012/10things.slide#8
     - list interval in config
     - when starting up, check if newest backup is too old, if so snapshot immediately
     - schedule next snapshot immediately after running first one
-- plugin system
-    - https://github.com/natefinch/pie
-    - this system allows plugins in any languages with only serialization overhead
-    - maybe using zippy (or other fast compression lib) to compress would be good?
-        - can be optional
-    - also messagepack to make going between languages easier
 - pluggable queue / datastore
     - use amazon RDS (as queue and datastore) to start to make distributed large deployments easy
         - RDS would maintain information about instances connected, workers available
