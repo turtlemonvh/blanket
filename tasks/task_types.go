@@ -223,7 +223,6 @@ func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 		TypeDigest:    "",
 		ResultDir:     path.Join(viper.GetString("tasks.resultsPath"), taskId.Hex()),
 		State:         "WAITING",
-		WorkerId:      "",
 		Progress:      0,
 		ExecEnv:       mixedEnv,
 		Tags:          t.Config.GetStringSlice("tags"),

@@ -68,7 +68,7 @@ func (Q *BlanketBoltQueue) ListTasks(tags []string, limit int) ([]tasks.Task, in
 func (Q *BlanketBoltQueue) CleanupUnclaimedTasks() error {
 	// FIXME: Implement me
 	// Find all tasks in queue with a worker id that have a lastModifiedTs older than the TTL
-	// Set the WorkerId of those tasks back to "" to allow them to get processed
+	// Set the WorkerId of those tasks back to ObjectId{} to allow them to get processed
 	return nil
 }
 
@@ -119,7 +119,7 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 
 		// Modify
 		task.LastUpdatedTs = time.Now().Unix()
-		task.WorkerId = worker.Id.Hex()
+		task.WorkerId = worker.Id
 
 		// Serilalize and save
 		bts, err := json.Marshal(task)
@@ -154,7 +154,7 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 
 			// Modify
 			task.LastUpdatedTs = time.Now().Unix()
-			task.WorkerId = ""
+			task.WorkerId = *new(bson.ObjectId)
 
 			// Serilalize and save
 			bts, err := json.Marshal(task)

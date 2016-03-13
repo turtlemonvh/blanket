@@ -189,7 +189,7 @@ func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *TaskSearchConf) ([]ta
 			json.Unmarshal(v, &t)
 
 			// Filter results
-			if tc.JustUnclaimed && t.WorkerId != "" {
+			if tc.JustUnclaimed && t.WorkerId.Valid() {
 				continue
 			}
 

@@ -169,7 +169,7 @@ func claimTask(c *gin.Context) {
 	t.Progress = 0
 	t.LastUpdatedTs = time.Now().Unix()
 	t.StartedTs = time.Now().Unix()
-	t.WorkerId = workerId.Hex()
+	t.WorkerId = workerId
 	// Just nil values for these
 	// Will be set when transitioning to state RUN
 	t.TypeDigest = ""

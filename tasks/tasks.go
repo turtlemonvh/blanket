@@ -30,7 +30,7 @@ type Task struct {
 	TypeDigest    string            `json:"typeDigest"`    // version hash of config file
 	Timeout       int64             `json:"timeout"`       // The max time the task is allowed to run
 	State         string            `json:"state"`         // See ValidTaskStates
-	WorkerId      string            `json:"workerId"`      // Id of the worker that processed this task; set when CLAIMED
+	WorkerId      bson.ObjectId     `json:"workerId"`      // Id of the worker that processed this task; set when CLAIMED
 	Progress      int               `json:"progress"`      // 0-100
 	ExecEnv       map[string]string `json:"defaultEnv"`    // Combined with default env
 	Tags          []string          `json:"tags"`          // tags for capabilities of workers
