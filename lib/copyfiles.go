@@ -14,6 +14,7 @@ type FileCopier struct {
 	BasePath string
 }
 
+// FIXME: Use this instead: https://github.com/mitchellh/go-homedir
 // FIXME: Path expansion this way is wrong; '~' is different in '~/' and '/~a/' and '/ta~en/'
 // https://github.com/python/cpython/blob/1fe0fd9feb6a4472a9a1b186502eb9c0b2366326/Lib/posixpath.py#L221
 // https://github.com/python/cpython/blob/1fe0fd9feb6a4472a9a1b186502eb9c0b2366326/Lib/ntpath.py#L304

@@ -60,21 +60,7 @@ Running tests
     go test ./...
 
 
-## Running the web UI
-
-> This is going to be extracted into a plugin.
-
-    cd html
-
-    # Install dependencies
-    npm install
-    bower install
-
-    # Run test server
-    gulp
-
-
-## API
+## Command line API
 
 ```
 blanket
@@ -120,8 +106,6 @@ blanket rm
 
 > Also see: https://trello.com/b/bOWTSxbO/blanket-dev
 
-
-- use objectid for workerId field on task objects
 - list queued and non-queued tasks separately in ps and in html UI
 
 - add tests for boltdb backend
@@ -139,15 +123,21 @@ blanket rm
 - discard first log line because might be partial
 
 - run sync + redirect
+    - sync = hold open request until task is done
+    - redirect = redirect to a given file produced as part of the task when finished
 
 - allow multi-requests
     - delete multiple
     - archive multiple
 
+- custom error types for 404s
+    - http://blog.golang.org/error-handling-and-go
+    - https://gobyexample.com/errors
+
 - move all REST API endpoints to
-    - /api/v1
+    - `/api/v1`
     - allows UI to sit at base
-    - base url '/' is just a list of the endpoints where UI plugins are installed
+    - base url `/` is just a list of the endpoints where UI plugins are installed
         - unless content type is json, in which case it is the configuration of the server
 
 - allow user to add task types over HTTP instead of just reading from disk
@@ -217,30 +207,12 @@ blanket rm
 - allow filling in files as templates
     - have glob patterns to match templates (relative to where they will be copied into)
 
-- package HTML into a single binary
-    - make this a plugin, like
-        - https://www.elastic.co/guide/en/elasticsearch/plugins/2.2/index.html
-        - https://www.elastic.co/guide/en/elasticsearch/plugins/2.2/management.html
-    - plugins that implement a UI report
-        - what URLs map to them
-            - e.g. "_plugin/ui"
-        - have all http requests at that path forwarded to them
-    - UI gets packaged into a separate single binary
-        - https://github.com/jteeuwen/go-bindata
-        - https://github.com/elazarl/go-bindata-assetfs
-        - need to add instructions
-            - build js (gulp build)
-            - run bindata-assets command
-            - then build
-    - use protocol buffers for communication over stdin/stdout
-        - https://github.com/hashicorp/go-plugin
-    - https://github.com/hashicorp/go-getter
-        - for fetching plugins
-
 - make some good examples
 - put api calls into sub directories
 - add ability to archive tasks and load from archive
     - archive is basically results directory + a `.blanket-task` file that defines the JSON for that task
+    - archive utils
+        - https://github.com/packer-community/winrmcp
 
 - handle undo
     - deleting just archives
@@ -255,11 +227,6 @@ blanket rm
     - so we can use this:
         go build -race .
     - so users can build static files easily
-
-
-### Bugs
-
-- fix auto-refresh closing "add new" forms
 
 
 ### Larger Efforts
@@ -277,7 +244,8 @@ blanket rm
 - keep in the database in a "killed" state
     - keeps a log of its pid, location of logfiles, start and end time, etc.
     - allows the user to see the worker logs for the worker that ran that task
-
+- check that the process with that pid is actually a worker started when you thought it was before you kill it
+    - https://github.com/mitchellh/go-ps
 
 #### Data migrations
 
@@ -341,8 +309,14 @@ https://www.youtube.com/watch?v=ndmB0bj7eyw
 - http tests
 - testing process behavior
 
+https://github.com/matryer/silk
+- http tests driven by documentation
+
 http://talks.golang.org/2012/10things.slide#8
 - testing fs
+
+https://peter.bourgon.org/go-in-production/#testing-and-validation
+- soundcloud uses build tags, flags, and a integration_test.go file to do integration tests
 
 - https://www.golang-book.com/books/intro/12
 - https://golang.org/pkg/net/http/httptest/
@@ -426,9 +400,21 @@ http://talks.golang.org/2012/10things.slide#8
     - include expvar in core
     - make prometheus a plugin
         - /api/ext/prometheus
+        - scrapes expvar metrics
+            - https://godoc.org/github.com/prometheus/client_golang/prometheus#ExpvarCollector
+    - alt
+        - https://github.com/codahale/metrics
+        - https://github.com/rcrowley/go-metrics
+        - https://github.com/armon/go-metrics
+- Add pprof metrics
+    - see influxdb as an example
+        - https://github.com/influxdata/influxdb/blob/master/services/httpd/handler.go#L173
+    - https://github.com/DeanThompson/ginpprof
 - Add-in for check_mk local checks
     - listens for status information and writes to a file
     - may want to just use python stuff that I already made
+    - do this as a separate thing
+        - just scrapes stats off monitoring endpoint like we with elasticsearch
 
 #### Task Discovery
 
@@ -438,13 +424,6 @@ http://talks.golang.org/2012/10things.slide#8
     - that could be a good place for configuration
     - need to define something that makes sense on lots of OSes, even ones where people have limited access
 
-#### Design
-
-- use card bordered areas to give everything a cleaner more organized look
-- like Ionic, use divs with a slight shadow that separates them from other content
-- make it flannel colors (dark, grays) instead of so bright
-    - like a blanket
-    - solarized dark would be good
 
 ## Specs
 
@@ -482,6 +461,7 @@ http://talks.golang.org/2012/10things.slide#8
         - remove items
 - godeps to lock in dependencies and avoid weird changes
     - https://github.com/sparrc/gdm
+    - https://github.com/Masterminds/glide
 - emails
     - send emails to a given account with information about a task
     - would be a good plugin
@@ -515,7 +495,13 @@ http://talks.golang.org/2012/10things.slide#8
             - would be pretty easy to do a version of this that stores users in bolt and uses bcrypt for lookup
         - https://github.com/mholt/caddy/blob/master/middleware/basicauth/basicauth.go
             - example middleware
+    - CSRF
+        - https://github.com/codahale/charlie
+    - secure cookies
+        - https://github.com/codahale/safecookie
     - could keep session cookies in RAM
+        - https://github.com/bpowers/seshcookie
+            - or use something like this so app can stay stateless
         - flush to a blob in the configuration bucket every minute if any changes
         - also flush on shutdown
         - this way we can easily keep list of sessions up to date but still be resilient to restarts
@@ -526,36 +512,24 @@ http://talks.golang.org/2012/10things.slide#8
         - https://golang.org/pkg/syscall/#SysProcAttr
         - https://golang.org/pkg/syscall/#Credential
         - yeah, you can set userid and group id
-- other UI
-    - user should be able to upload files to include in a task run
-    - add ability to shut down / restart main server from web ui
-    - allow user to view and edit server configuration on UI
-        - may need to allow them to trigger a restart
-    - allow user to back up database from UI
-    - add primitive main dashboard with recent activity
-    - add ability to add new task types
-    - allow editing task types on HTTP interface
-    - add confirmations for delete / stop commands
-    - bulk delete
-    - a way to show messages for things we have done (toast messages)
-    - re-run a task that has run, or is stalled
-    - fix memory leak (was >500 mb when running for a while)
+    - rate limiting
+        - https://github.com/ulule/limiter
+    - authentication through providers
+        - https://github.com/markbates/goth
+    - user accounts, http auth login, account types
+        - https://github.com/xyproto/permissionbolt
+            - uses boltdb for simple security
+        - https://github.com/tonnerre/go-ldap
+            - LDAP
 - Option to leave task creation request open until task completes
     - would make testing easier
     - also adds it with super high priority so it is picked up fast
     - like this: https://github.com/celery/celery/issues/2275#issuecomment-56828471
 - allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
-- monitoring
+- general monitoring
     - https://github.com/shirou/gopsutil
     - total CPU and memory usage of everything
     - total disk space of all results
-- better browsing interface for files
-    - instead of just a list, include modified time, size, etc.
-- user accounts, http auth login, account types
-    - https://github.com/xyproto/permissionbolt
-        - uses boltdb for simple security
-    - https://github.com/tonnerre/go-ldap
-        - LDAP
 - cross compiling
     - should be able to combile for centos, ubuntu, windows, mac in 32bit/64bit versions all at once
     - http://dave.cheney.net/2015/08/22/cross-compilation-with-go-1-5
@@ -574,6 +548,7 @@ http://talks.golang.org/2012/10things.slide#8
     - https://github.com/lestrrat/go-xslate
     - https://github.com/benbjohnson/ego
     - https://github.com/sipin/gorazor
+    - https://github.com/hashicorp/hil
     - ** this is an ideal candidate for plugin design
 - autoscheduling of backups
     - https://github.com/boltdb/bolt#database-backups
@@ -608,8 +583,6 @@ http://talks.golang.org/2012/10things.slide#8
 - allow TOML file inheritance, starting with a different base task type
     - https://github.com/spf13/viper/blob/master/viper.go#L938
     - to start, everything is bash
-- pagination of results on html UI
-    - http://getbootstrap.com/components/#pagination
 - moving tasks in different states to different buckets
     - would make scanning to find new tasks faster if all ERROR/SUCCESS tasks weren't in the same place
 - recommended tool for making your thing available
@@ -639,7 +612,20 @@ http://talks.golang.org/2012/10things.slide#8
     - menubar application
         - https://github.com/maxogden/menubar
         - could package this into distributions on windows and mac
-
+    - terminal ui
+        - https://github.com/gizak/termui
+    - websockets in addition to sse
+        - https://github.com/joewalnes/websocketd
+    - live updating config
+        - https://github.com/kelseyhightower/confd
+    - progress bars when downloading plugins
+        - https://github.com/gosuri/uiprogress
+    - interactive set up script
+        - https://github.com/segmentio/go-prompt
+    - use unix domain sockets, named pipes if possible
+        - if it doesn't need to be exposed, we shouldn't expose it
+    - allow users to express dependencies as a dag
+        - https://github.com/hashicorp/terraform/tree/master/dag
 
 ## Similar Projects
 
@@ -668,4 +654,54 @@ http://talks.golang.org/2012/10things.slide#8
 - https://github.com/hammerlab/ketrew
     - workflow engine able to run arbitrary tasks
     - plus UI
+- https://github.com/victorcoder/dkron
+    - distributed task scheduling system
+    - http://dkron.io/
+    - checks in all its js components
+    - uses serf for membership
+    - uses tags to allocate jobs
+    - has configurable backend for storage
+        - etcd, zookeeper, consul
+    - notifications through email are built in
+        - maybe not so configurable/pluggable
+        - can use webhooks for notifications
+- https://github.com/kandoo/beehive/tree/master/examples/taskq
+    - example distributed task queue
+- https://queue.acm.org/detail.cfm?id=2745840
+    - article descibing the design of Google's cron system
+    - mentions anacron, for running jobs that *would* have run if the system had not been down
+    - some tasks are safe to re-run, some are safe to skip, some are neither
+    - they recommend job owners monitoring job state, and having cron itself be simpler
+    - determining a failed job or machine (via health checks) takes time, and can change the time at which tasks run
+    - cron jobs should specify their resource needs, and be limited to those resources when running
+        - can kill jobs that go over resource limits
+    - 2 options for tracking state
+        - 1: use existing data store
+        - 2: store data in cron itself
+        - they say 2 is better bc ditributed file systems are bad for small writes and cron should have few dependencies
+            - I am not super sold on this
+    - in their implementation, failure of master is detected in seconds
+        - master election protocol is specific to cron service
+    - master must stop scheduling actions as soon as it is no longer master
+        - as soon as it can't heartbeat and confirm success of heartbeat, it needs to stop
+        - can't assume it is master
+    - master and slaves must all have a consistent view on list of tasks and schedule
+    - having deterministic ids for tasks makes it easy to check the state of a specific instance of a task from anywhere
+        - though it you store in something more complex than a k/v store, getting this is not too tough...
+    - keeps a finite amt of state
+    - permits "?" in cron tab, indicating any (single) value is permissable
+        - e.g. needs to run every 24 hours, but I don't care exactly when
+        - they just hash the job config over the time range to pick a value
+    - IDEAS
+        - add "checkpoints" people can define, when before the check point no cleanup has to be done
+        - checkpoints can also trigger a upload of state to distributed file system
+        - add "cleanup" for partial tasks
+        - default behavior on failure should be to not retry
+        - re-schedule jobs every time configuration loads
+        - keep a limited amt of history, configured per job
+            - archive anything older
+        - handling heartbeats with 1000s of servers may be tough
+            - 1000 servers all checking every 5 seconds = 200 writes per second JUST FOR HEARTBEAT
+        - allow scheduling for every machine in the cluster
+            - this schedules N jobs, each with a tag for a specific machine
 
