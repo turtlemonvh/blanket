@@ -52,6 +52,7 @@ func MetricsHandler(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
+// FIXME: Pass in all configuration so decoupled from viper
 func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	// FIXME: Better variable names
 	DB = pDB
