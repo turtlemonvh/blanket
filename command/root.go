@@ -12,6 +12,8 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib/database"
+	"github.com/turtlemonvh/blanket/lib/queue"
 	"github.com/turtlemonvh/blanket/server"
 	"os"
 )
@@ -91,7 +93,15 @@ var RootCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		InitializeConfig()
 		InitializeLogging()
-		server.Serve()
+
+		// Connect to database
+		boltdb := database.OpenBoltDatabase()
+		defer boltdb.Close()
+
+		// DB and Q initializers are fatal if they don't succeed
+		// Serve gracefully
+		s := server.Serve(database.NewBlanketBoltDB(boltdb), queue.NewBlanketBoltQueue(boltdb))
+		s.ListenAndServe()
 	},
 }
 

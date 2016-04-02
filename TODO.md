@@ -221,13 +221,7 @@
 
 #### Testing
 
-- need an in-memory version of boltdb for tests
-- need to set this up when tests start
-
-- https://medium.com/@benbjohnson/structuring-tests-in-go-46ddee7a25c#.61798xf42
-    - using a temporary file for the database
-- need to be able to pass DB into functions to test them
-
+- factor out common test utilities to a set of shared utilities
 
 Set up automated tests
 - https://travis-ci.org/

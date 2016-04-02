@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/boltdb/bolt"
+	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 	"gopkg.in/mgo.v2/bson"
@@ -21,6 +22,14 @@ const (
 // Concrete functions
 type BlanketBoltDB struct {
 	db *bolt.DB
+}
+
+func OpenBoltDatabase() *bolt.DB {
+	db, err := bolt.Open(viper.GetString("database"), 0666, &bolt.Options{Timeout: 1 * time.Second})
+	if err != nil {
+		log.Fatal(err)
+	}
+	return db
 }
 
 func NewBlanketBoltDB(db *bolt.DB) BlanketDB {

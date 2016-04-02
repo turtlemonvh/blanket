@@ -19,7 +19,6 @@ import (
 	"expvar"
 	"fmt"
 	log "github.com/Sirupsen/logrus"
-	"github.com/boltdb/bolt"
 	"github.com/gin-gonic/contrib/ginrus"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
@@ -34,15 +33,6 @@ import (
 
 var DB database.BlanketDB
 var Q queue.BlanketQueue
-
-// FIXME: Move somewhere else to get rid of bolt specific stuff
-func openDatabase() *bolt.DB {
-	db, err := bolt.Open(viper.GetString("database"), 0666, &bolt.Options{Timeout: 1 * time.Second})
-	if err != nil {
-		log.Fatal(err)
-	}
-	return db
-}
 
 // Output metrics for this server
 // From: https://golang.org/src/expvar/expvar.go
@@ -62,14 +52,10 @@ func MetricsHandler(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
-func Serve() {
-	// Connect to database
-	boltdb := openDatabase()
-	defer boltdb.Close()
-
-	// These are fatal if they don't succeed
-	DB = database.NewBlanketBoltDB(boltdb)
-	Q = queue.NewBlanketBoltQueue(boltdb)
+func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
+	// FIXME: Better variable names
+	DB = pDB
+	Q = pQ
 
 	// https://godoc.org/github.com/rs/cors
 	c := cors.New(cors.Options{
@@ -149,7 +135,7 @@ func Serve() {
 	// - cleaning workers
 
 	// Graceful shutdown, leaving up to 2 seconds for requests to complete
-	srv := &graceful.Server{
+	return &graceful.Server{
 		Timeout: 2 * time.Second,
 		Server: &http.Server{
 			Addr:    fmt.Sprintf(":%d", viper.GetInt("port")),
@@ -165,5 +151,4 @@ func Serve() {
 			log.Warn("Called ShutdownInitiated")
 		},
 	}
-	srv.ListenAndServe()
 }
