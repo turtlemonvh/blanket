@@ -2,6 +2,7 @@ package tailed_file
 
 import (
 	log "github.com/Sirupsen/logrus"
+	"github.com/codahale/metrics"
 	"github.com/hpcloud/tail"
 	"math/rand"
 	"os"
@@ -16,7 +17,9 @@ const (
 )
 
 var (
-	defaultTfc *TailedFileCollection
+	defaultTfc             *TailedFileCollection
+	nTailedFiles           = metrics.Gauge("nTailedFiles")
+	nTailedFileSubscribers = metrics.Gauge("nTailedFiles")
 )
 
 type TailedFileCollection struct {
@@ -47,11 +50,35 @@ func init() {
 	defaultTfc = &TailedFileCollection{
 		fileList: make(map[string]*TailedFile),
 	}
+
+	// Track number of open files
+	ticker := time.NewTicker(5 * time.Second)
+	quit := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				// Update gauges
+				nTailedFiles.Set(int64(len(defaultTfc.fileList)))
+				nTailedFiles.Set(defaultTfc.GetSubscriberCount())
+			case <-quit:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
 }
 
 /*
  * Functions operating on a TailedFiles object
  */
+func (tfc *TailedFileCollection) GetSubscriberCount() int64 {
+	ntotal := 0
+	for _, tf := range tfc.fileList {
+		ntotal += len(tf.Subscribers)
+	}
+	return int64(ntotal)
+}
 
 func (tfc *TailedFileCollection) GetTailedFile(p string) (*TailedFile, error) {
 	tfc.Lock()

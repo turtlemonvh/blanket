@@ -16,6 +16,7 @@ Launch blanket server
 package server
 
 import (
+	"expvar"
 	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/boltdb/bolt"
@@ -77,6 +78,24 @@ func setUpDatabase() error {
 	return err
 }
 
+// Output metrics for this server
+// From: https://golang.org/src/expvar/expvar.go
+func MetricsHandler(c *gin.Context) {
+	w := c.Writer
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	fmt.Fprintf(w, "{\n")
+	first := true
+	expvar.Do(func(kv expvar.KeyValue) {
+		if !first {
+			fmt.Fprintf(w, ",\n")
+		}
+		first = false
+		fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)
+	})
+	fmt.Fprintf(w, "\n}\n")
+	c.Status(http.StatusOK)
+}
+
 func Serve() {
 	// Connect to database
 	if err := setUpDatabase(); err != nil {
@@ -126,6 +145,7 @@ func Serve() {
 		})
 	})
 
+	r.GET("/ops/status/", MetricsHandler)
 	r.GET("/config/", getConfigProcessed)
 
 	r.GET("/task_type/", getTaskTypes)
