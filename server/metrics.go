@@ -6,12 +6,6 @@ import (
 	"time"
 )
 
-/*
-Metrics to track:
-- request duration
-
-*/
-
 var (
 	// Updated periodically
 	nGoRoutines = metrics.Gauge("nGoRoutines")
@@ -19,7 +13,7 @@ var (
 )
 
 func init() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	quit := make(chan struct{})
 	go func() {
 		for {

@@ -52,7 +52,7 @@ func init() {
 	}
 
 	// Track number of open files
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	quit := make(chan struct{})
 	go func() {
 		for {
