@@ -2,30 +2,15 @@ package lib
 
 import (
 	"fmt"
+	"github.com/mitchellh/go-homedir"
 	"io"
 	"os"
-	"os/user"
 	"path"
 	"path/filepath"
-	"strings"
 )
 
 type FileCopier struct {
 	BasePath string
-}
-
-// FIXME: Use this instead: https://github.com/mitchellh/go-homedir
-// FIXME: Path expansion this way is wrong; '~' is different in '~/' and '/~a/' and '/ta~en/'
-// https://github.com/python/cpython/blob/1fe0fd9feb6a4472a9a1b186502eb9c0b2366326/Lib/posixpath.py#L221
-// https://github.com/python/cpython/blob/1fe0fd9feb6a4472a9a1b186502eb9c0b2366326/Lib/ntpath.py#L304
-// https://github.com/python/cpython/blob/4d78113ef4b14bf779bfd3b11a10f2cdb08d6297/Lib/pathlib.py#L1411
-// FIXME: May want to do this a different way by calling to the shell and running `cd <path>; pwd -P`
-func expandUser(p string) (string, error) {
-	usr, err := user.Current()
-	if err != nil {
-		return p, err
-	}
-	return strings.Replace(p, "~", usr.HomeDir, 1), nil
 }
 
 // Find all files matching a pattern recursively
@@ -34,7 +19,7 @@ func (c *FileCopier) GetMatchingFiles(src string) ([]string, error) {
 	var err error
 
 	// Clean up source path
-	src, err = expandUser(src)
+	src, err = homedir.Expand(src)
 	if err != nil {
 		return filesToCopy, err
 	}
