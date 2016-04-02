@@ -8,7 +8,14 @@ import (
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 	"gopkg.in/mgo.v2/bson"
+	"log"
 	"time"
+)
+
+const (
+	BOLTDB_WORKER_BUCKET = "workers"
+	BOLTDB_TASK_BUCKET   = "tasks"
+	FAR_FUTURE_SECONDS   = int64(60 * 60 * 24 * 365 * 100)
 )
 
 // Concrete functions
@@ -17,14 +24,30 @@ type BlanketBoltDB struct {
 }
 
 func NewBlanketBoltDB(db *bolt.DB) BlanketDB {
+	// Ensure required buckets exist
+	db.Update(func(tx *bolt.Tx) error {
+		var err error
+
+		requiredBuckets := []string{
+			BOLTDB_WORKER_BUCKET,
+			BOLTDB_TASK_BUCKET,
+		}
+
+		for _, bucketName := range requiredBuckets {
+			b := tx.Bucket([]byte(bucketName))
+			if b == nil {
+				b, err = tx.CreateBucket([]byte(bucketName))
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+		}
+
+		return nil
+	})
+
 	return &BlanketBoltDB{db}
 }
-
-const (
-	BOLTDB_WORKER_BUCKET = "workers"
-	BOLTDB_TASK_BUCKET   = "tasks"
-	FAR_FUTURE_SECONDS   = int64(60 * 60 * 24 * 365 * 100)
-)
 
 // WORKERS
 
@@ -133,6 +156,7 @@ func (DB *BlanketBoltDB) GetTask(taskId bson.ObjectId) (tasks.Task, error) {
 	return task, err
 }
 
+// Returns a list of tasks, the number found, and any error
 // FIXME: Move FindTasksInBoltDB and ModifyTaskInBoltTransaction to their own helper library
 // FIXME: Return task objects in a slice instead of a string; may actually want to send on a channel for streaming
 func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *TaskSearchConf) ([]tasks.Task, int, error) {

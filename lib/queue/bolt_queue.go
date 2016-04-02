@@ -8,6 +8,7 @@ import (
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 	"gopkg.in/mgo.v2/bson"
+	"log"
 	"time"
 )
 
@@ -17,6 +18,27 @@ type BlanketBoltQueue struct {
 }
 
 func NewBlanketBoltQueue(db *bolt.DB) BlanketQueue {
+	// Ensure required buckets exist
+	db.Update(func(tx *bolt.Tx) error {
+		var err error
+
+		requiredBuckets := []string{
+			BOLTDB_TASK_QUEUE_BUCKET,
+		}
+
+		for _, bucketName := range requiredBuckets {
+			b := tx.Bucket([]byte(bucketName))
+			if b == nil {
+				b, err = tx.CreateBucket([]byte(bucketName))
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+		}
+
+		return nil
+	})
+
 	return &BlanketBoltQueue{db}
 }
 

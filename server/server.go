@@ -35,47 +35,13 @@ import (
 var DB database.BlanketDB
 var Q queue.BlanketQueue
 
+// FIXME: Move somewhere else to get rid of bolt specific stuff
 func openDatabase() *bolt.DB {
 	db, err := bolt.Open(viper.GetString("database"), 0666, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
 		log.Fatal(err)
 	}
 	return db
-}
-
-// Initialize the bolt database to be used as both a queue and a database
-// FIXME:
-// - may want to move initialization into a separate init command; this is what django does
-// - then just check for valid initialization in startup
-// - may the handling of separate or combined connections to a queue or database simpler (e.g. mongo, postgres will prob do both in same connection)
-func setUpDatabase() error {
-	db := openDatabase()
-	defer db.Close()
-
-	// Set up base task types
-	err := db.Update(func(tx *bolt.Tx) error {
-		var err error
-
-		requiredBuckets := []string{
-			database.BOLTDB_WORKER_BUCKET,
-			database.BOLTDB_TASK_BUCKET,
-			queue.BOLTDB_TASK_QUEUE_BUCKET,
-		}
-
-		for _, bucketName := range requiredBuckets {
-			b := tx.Bucket([]byte(bucketName))
-			if b == nil {
-				b, err = tx.CreateBucket([]byte(bucketName))
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-		}
-
-		return nil
-	})
-
-	return err
 }
 
 // Output metrics for this server
@@ -98,14 +64,12 @@ func MetricsHandler(c *gin.Context) {
 
 func Serve() {
 	// Connect to database
-	if err := setUpDatabase(); err != nil {
-		log.Fatal(err)
-	}
-
 	boltdb := openDatabase()
+	defer boltdb.Close()
+
+	// These are fatal if they don't succeed
 	DB = database.NewBlanketBoltDB(boltdb)
 	Q = queue.NewBlanketBoltQueue(boltdb)
-	defer boltdb.Close()
 
 	// https://godoc.org/github.com/rs/cors
 	c := cors.New(cors.Options{
