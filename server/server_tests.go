@@ -1,15 +1,6 @@
 package server
 
-/*
-
-- create Q and DB objects to pass in
-- Start server
-- tear down server with Stop() function
-
-*/
-
 import (
-	_ "fmt"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/lib/database"
@@ -20,6 +11,8 @@ import (
 	"testing"
 	"time"
 )
+
+const TEST_SERVER_PORT = 6777
 
 // Returns a server that can be run and killed
 // Uses boltdb for backend
@@ -48,11 +41,10 @@ func assertEmptyListResponse(t *testing.T, req *http.Request) {
 }
 
 func TestGetTasks(t *testing.T) {
-	// FIXME: Run on random unused port
-	// Run server on port 6777
+	// Run server
 	S, closefn := NewTestServer()
 	defer closefn()
-	viper.Set("port", 6777)
+	viper.Set("port", TEST_SERVER_PORT)
 	go S.ListenAndServe()
 	defer S.Stop(time.Millisecond * 100)
 

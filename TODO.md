@@ -222,9 +222,10 @@
 #### Testing
 
 - factor out common test utilities to a set of shared utilities
-- put these in their own package so they are only included in the binary during test runs, not during build
+    - put these in their own package so they are only included in the binary during test runs, not during build
 - check coverage
     - https://talks.golang.org/2014/testing.slide#9
+- run server on random unused port
 
 Set up automated tests
 - https://travis-ci.org/
