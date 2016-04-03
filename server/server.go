@@ -16,7 +16,6 @@ Launch blanket server
 package server
 
 import (
-	"expvar"
 	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/gin-gonic/contrib/ginrus"
@@ -33,24 +32,6 @@ import (
 
 var DB database.BlanketDB
 var Q queue.BlanketQueue
-
-// Output metrics for this server
-// From: https://golang.org/src/expvar/expvar.go
-func MetricsHandler(c *gin.Context) {
-	w := c.Writer
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	fmt.Fprintf(w, "{\n")
-	first := true
-	expvar.Do(func(kv expvar.KeyValue) {
-		if !first {
-			fmt.Fprintf(w, ",\n")
-		}
-		first = false
-		fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)
-	})
-	fmt.Fprintf(w, "\n}\n")
-	c.Status(http.StatusOK)
-}
 
 // FIXME: Pass in all configuration so decoupled from viper
 func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {

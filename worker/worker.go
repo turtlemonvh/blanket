@@ -12,7 +12,6 @@ import (
 	"github.com/turtlemonvh/blanket/tasks"
 	"gopkg.in/mgo.v2/bson"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -254,7 +253,7 @@ func (c *WorkerConf) Stop() error {
 // Send a DELETE request to /worker/<id>/ to make sure db is cleared
 // Logs that request was succesful and is shutting down
 func (c *WorkerConf) Shutdown() {
-	log.Error("Shutting worker down cleanly")
+	log.Info("Shutting worker down cleanly")
 
 	reqURL := fmt.Sprintf("http://localhost:%d/worker/%s", viper.GetInt("port"), c.Id.Hex())
 	req, err := http.NewRequest("DELETE", reqURL, nil)
@@ -290,7 +289,7 @@ func (c *WorkerConf) ProcessTasks() {
 		}
 
 		// FIXME: Handle task not found differently than a 500, 401, etc
-		t, err = c.MarkTaskAsClaimed()
+		t, err = tasks.MarkAsClaimed(c.Id)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
@@ -323,7 +322,6 @@ func (c *WorkerConf) ProcessTasks() {
 	c.Shutdown()
 }
 
-// FIXME: Flush logfiles, close logfiles
 func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	// FIXME: Copy template into result directory
 	// Do this BEFORE reading to make sure we're reading the version we save
@@ -352,7 +350,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("problems starting task execution")
-		terr := c.MarkTaskAsFinished(t, "ERROR")
+		terr := tasks.MarkAsFinished(t, "ERROR")
 		if terr != nil {
 			log.WithFields(log.Fields{
 				"err":    terr.Error(),
@@ -364,7 +362,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	}
 
 	// FIXME: Move more fields here
-	err = c.MarkTaskAsRunning(t, map[string]string{
+	err = tasks.MarkAsRunning(t, map[string]string{
 		"timeout":    tt.Config.GetString("timeout"),
 		"pid":        cast.ToString(cmd.Process.Pid),
 		"typeDigest": tt.ConfigVersionHash,
@@ -405,7 +403,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			// Check that we're not over time
 			checkTime := time.Now().Unix()
 			if checkTime > maxTime {
-				err = c.MarkTaskAsFinished(t, "TIMEDOUT")
+				err = tasks.MarkAsFinished(t, "TIMEDOUT")
 				if err != nil {
 					log.WithFields(log.Fields{
 						"err":    err.Error(),
@@ -454,7 +452,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("problems finishing task execution")
-		terr := c.MarkTaskAsFinished(t, "ERROR")
+		terr := tasks.MarkAsFinished(t, "ERROR")
 		if terr != nil {
 			log.WithFields(log.Fields{
 				"err":    terr.Error(),
@@ -465,7 +463,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		return err
 	}
 
-	err = c.MarkTaskAsFinished(t, "SUCCESS")
+	err = tasks.MarkAsFinished(t, "SUCCESS")
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err":    err.Error(),
@@ -543,75 +541,4 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 	}
 
 	return err, fileCloser
-}
-
-func (c *WorkerConf) MarkTaskAsRunning(t *tasks.Task, extraVars map[string]string) error {
-	urlParams := url.Values{}
-	urlParams.Set("state", "RUNNING")
-	for k, v := range extraVars {
-		urlParams.Set(k, v)
-	}
-	paramsString := urlParams.Encode()
-	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/run", viper.GetInt("port"), t.Id.Hex()) + "?" + paramsString
-	req, err := http.NewRequest("PUT", reqURL, nil)
-	if err != nil {
-		return err
-	}
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	return nil
-}
-
-// Set task to one of the following states: ERROR/SUCCESS/TIMEDOUT/STOPPED
-func (c *WorkerConf) MarkTaskAsFinished(t *tasks.Task, state string) error {
-	urlParams := url.Values{}
-	urlParams.Set("state", state)
-	paramsString := urlParams.Encode()
-	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/finish", viper.GetInt("port"), t.Id.Hex()) + "?" + paramsString
-	req, err := http.NewRequest("PUT", reqURL, nil)
-	if err != nil {
-		return err
-	}
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	return nil
-}
-
-// Find the oldest task we are eligible to run
-func (c *WorkerConf) MarkTaskAsClaimed() (tasks.Task, error) {
-	// Call the REST api and get a task with the required tags
-	// The worker needs to make sure it has all the tags of whatever task it requests
-	reqURL := fmt.Sprintf("http://localhost:%d/task/claim/%s", viper.GetInt("port"), c.Id.Hex())
-	res, err := http.Post(reqURL, "application/json", nil)
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	defer res.Body.Close()
-	dec := json.NewDecoder(res.Body)
-
-	if res.StatusCode != 200 {
-		// FIXME: Get the error content from the JSON response
-		errMsg := make(map[string]interface{})
-		dec.Decode(&errMsg)
-		log.WithFields(log.Fields{
-			"resp": errMsg["error"],
-		}).Error("Problem claiming task")
-		return tasks.Task{}, fmt.Errorf("Problem claiming task; status code :: %s", res.Status)
-	}
-
-	// Try to marshall this into a task object
-
-	var t tasks.Task
-	err = dec.Decode(&t)
-	if err != nil {
-		return tasks.Task{}, fmt.Errorf("Error decoding claimed task; possible data corruption or server/worker version mismatch :: %s", err.Error())
-	}
-
-	return t, nil
 }

@@ -2,12 +2,9 @@ package tasks
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	log "github.com/Sirupsen/logrus"
-	"github.com/spf13/viper"
 	"gopkg.in/mgo.v2/bson"
-	"net/http"
 	"os"
 	"os/exec"
 	"text/template"
@@ -81,16 +78,4 @@ func (t *Task) GetCmd(tt *TaskType) (*exec.Cmd, error) {
 
 func (t *Task) GetTaskType() (*TaskType, error) {
 	return FetchTaskType(t.TypeId)
-}
-
-// Refresh information about this task by pulling from the blanket server
-func (t *Task) Refresh() error {
-	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/", viper.GetInt("port"), t.Id.Hex())
-	res, err := http.Get(reqURL)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	dec := json.NewDecoder(res.Body)
-	return dec.Decode(t)
 }

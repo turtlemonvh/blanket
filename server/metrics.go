@@ -1,7 +1,11 @@
 package server
 
 import (
+	"expvar"
+	"fmt"
 	"github.com/codahale/metrics"
+	"github.com/gin-gonic/gin"
+	"net/http"
 	"runtime"
 	"time"
 )
@@ -28,4 +32,22 @@ func init() {
 			}
 		}
 	}()
+}
+
+// Output expvar metrics as json
+// From: https://golang.org/src/expvar/expvar.go
+func MetricsHandler(c *gin.Context) {
+	w := c.Writer
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	fmt.Fprintf(w, "{\n")
+	first := true
+	expvar.Do(func(kv expvar.KeyValue) {
+		if !first {
+			fmt.Fprintf(w, ",\n")
+		}
+		first = false
+		fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)
+	})
+	fmt.Fprintf(w, "\n}\n")
+	c.Status(http.StatusOK)
 }
