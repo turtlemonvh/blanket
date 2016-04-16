@@ -5,7 +5,6 @@ import (
 	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/gin-gonic/gin"
-	"github.com/manucorporat/sse"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/database"
@@ -17,7 +16,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -468,6 +466,7 @@ func removeTask(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
 }
 
+// FIXME: Abstract into something that can serve for worker logs, stdout/stderr logs too
 func streamTaskLog(c *gin.Context) {
 	var err error
 	var taskId bson.ObjectId
@@ -480,7 +479,7 @@ func streamTaskLog(c *gin.Context) {
 	var task tasks.Task
 	task, err = DB.GetTask(taskId)
 	if err != nil {
-		c.String(http.StatusInternalServerError, "Error opening logfile stream")
+		c.String(http.StatusInternalServerError, "Error fetching information about task while preparing to open logfile stream")
 		return
 	}
 
@@ -492,52 +491,28 @@ func streamTaskLog(c *gin.Context) {
 	}
 	defer sub.Stop()
 
-	loglineChannelIsEmpty := false
-	lineno := 1
-	c.Stream(func(w io.Writer) bool {
-		// This function returns a boolean indicating whether the stream should stay open
-		// Every time this is called, also checks if client has left
-
-		// Wait up to 5 seconds for a new value
-		select {
-		case logline := <-sub.NewLines:
-			// Send event with message content
-			c.Render(-1, sse.Event{
-				Id:    strconv.Itoa(lineno),
-				Event: "message",
-				Data:  logline,
-			})
-			lineno++
-			loglineChannelIsEmpty = false
-		case <-time.After(5 * time.Second):
-			loglineChannelIsEmpty = true
-		}
-
-		// If we have emptied the channel, decide whether to stop sending data
-		if loglineChannelIsEmpty {
-			// Check whether the process is complete
-			// If so, return false so we quit streaming
-			task, err = DB.GetTask(taskId)
-			if err != nil {
+	isComplete := func() bool {
+		task, err = DB.GetTask(taskId)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"taskId":         taskId,
+				"subscriptionId": sub.Id,
+				"tailedFile":     sub.TailedFile.Filepath,
+			}).Error("error refreshing worker state while processing logstreaming request")
+			return true
+		} else {
+			if task.State != "RUNNING" {
 				log.WithFields(log.Fields{
 					"taskId":         taskId,
+					"taskState":      task.State,
 					"subscriptionId": sub.Id,
 					"tailedFile":     sub.TailedFile.Filepath,
-				}).Error("error refreshing worker state while processing logstreaming request")
-			} else {
-				if task.State != "RUNNING" {
-					log.WithFields(log.Fields{
-						"taskId":         taskId,
-						"taskState":      task.State,
-						"subscriptionId": sub.Id,
-						"tailedFile":     sub.TailedFile.Filepath,
-					}).Info("stopping logstreaming request because task is no longer running")
-					return false
-				}
+				}).Info("stopping logstreaming request because task is no longer running")
+				return true
 			}
 		}
-
 		return true
-	})
+	}
+	streamLog(c, sub, isComplete)
 
 }

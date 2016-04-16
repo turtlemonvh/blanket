@@ -14,6 +14,7 @@ import (
 
 const TEST_SERVER_PORT = 6777
 
+// FIXME: Make this a re-usable test utility for use in worker tests
 // Returns a server that can be run and killed
 // Uses boltdb for backend
 func NewTestServer() (*graceful.Server, func()) {

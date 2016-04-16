@@ -61,6 +61,7 @@ func (c *WorkerConf) Run() error {
 	if c.CheckInterval < 0.5 {
 		c.CheckInterval = 0.5
 	}
+	c.CheckInterval = c.CheckInterval * viper.GetFloat64("timeMultiplier")
 	c.StartedTs = time.Now().Unix()
 
 	if c.Daemon {

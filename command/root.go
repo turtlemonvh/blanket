@@ -47,6 +47,9 @@ func InitializeConfig() {
 	viper.SetDefault("tasks.resultsPath", []string{"results"})
 	viper.SetDefault("workers.logfileNameTemplate", "worker.{{.Id.Hex}}.log")
 
+	// Time multiplier can be used in tests to speed up tests
+	viper.SetDefault("timeMultipler", "1.0")
+
 	viper.SetConfigName("blanket")
 	viper.AddConfigPath("/etc/blanket/")
 	viper.AddConfigPath("$HOME/.blanket")
