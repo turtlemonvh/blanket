@@ -44,6 +44,7 @@ func InitializeConfig() {
 	viper.SetDefault("port", 8773)
 	viper.SetDefault("database", "blanket.db")
 	viper.SetDefault("tasks.typesPath", "types")
+	// FIXME: Why is this a slice? It makes sending a target result dir to a client pretty tough.
 	viper.SetDefault("tasks.resultsPath", []string{"results"})
 	viper.SetDefault("workers.logfileNameTemplate", "worker.{{.Id.Hex}}.log")
 

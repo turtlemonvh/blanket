@@ -362,6 +362,18 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	var cmd *exec.Cmd
 	cmd, err = t.GetCmd(tt)
 
+	// Add extra environment variables common for all tasks
+	extraEnv := map[string]string{
+		"BLANKET_APP_TASK_ID":                t.Id.Hex(),
+		"BLANKET_APP_RESULTS_DIRECTORY":      viper.GetString("tasks.resultsPath"),
+		"BLANKET_APP_TASK_RESULTS_DIRECTORY": path.Join(viper.GetString("tasks.resultsPath"), t.Id.Hex()),
+		"BLANKET_APP_WORKER_PID":             cast.ToString(c.Pid),
+		"BLANKET_APP_SERVER_PORT":            viper.GetString("port"),
+	}
+	for k, v := range extraEnv {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	}
+
 	var fileCloser func()
 	err, fileCloser = c.SetupExecutionDirectory(t, tt, cmd)
 	if err != nil {

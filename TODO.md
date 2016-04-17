@@ -113,13 +113,6 @@
     - can also define "base" executor and an array of arguments
         - like for docker
 
-- set environment variables in task to make working within blanket easier
-    - BLANKET_APP_TASK_ID
-    - BLANKET_APP_RESULTS_DIRECTORY
-    - BLANKET_APP_TASK_RESULTS_DIRECTORY
-    - BLANKET_APP_WORKER_PID
-    - BLANKET_APP_SERVER_PORT
-
 - allow filling in files as templates
     - have glob patterns to match templates (relative to where they will be copied into)
 
@@ -140,8 +133,7 @@
     - basically the same as gmail's UI
 
 - use Docker containers for builds
-    - so we can use this:
-        go build -race .
+    - so we can use: `go build -race .`
     - so users can build static files easily
 
 - background tasks
@@ -154,27 +146,25 @@
 - add TOC to README
     - ex: https://github.com/ory-am/hydra
 
+- ensure blanket can run without a configuration file, using just default values
+    - it currently can run that way just fine
+    - make sure these defaults are obvious and well documented
+
+
 ### Larger Efforts
 
 #### Worker cleanup
 
 - view structured worker log
 - worker detail page
-- allow stopping, restarting
-    - keep in database after stopping
 - track heartbeat
-- assign a unique id to make tracking logfiles for past workers easier
-- name logfile based on time of day
-- allow pausing
 - view worker status via ps / ls
     - keep list of workers in database so have reference to pids
 - send worker logs to stdout addition to sending to a file
     - logrus makes this pretty simple: https://github.com/Sirupsen/logrus
 - add ability to stop task and not just delete
-- keep in the database in a "killed" state
-    - keeps a log of its pid, location of logfiles, start and end time, etc.
-    - should track by bson id, not pid, but still track pid in log files
-    - allows the user to see the worker logs for the worker that ran that task
+- record the worker pid of the worker that runs a task
+    - the task id is in the worker logs, but that's tough to query
 - check that the process with that pid is actually a worker started when you thought it was before you kill it
     - https://github.com/mitchellh/go-ps
 - use ctx to clean up canceling of requests
@@ -283,12 +273,6 @@ https://www.youtube.com/watch?v=ndmB0bj7eyw
 - http tests
 - testing process behavior
 
-https://github.com/matryer/silk
-- http tests driven by documentation
-
-http://talks.golang.org/2012/10things.slide#8
-- testing fs
-
 https://peter.bourgon.org/go-in-production/#testing-and-validation
 - soundcloud uses build tags, flags, and a integration_test.go file to do integration tests
 - https://golang.org/pkg/go/build/
@@ -317,11 +301,6 @@ https://peter.bourgon.org/go-in-production/#testing-and-validation
 - packages
     - https://github.com/onsi/ginkgo
     - https://github.com/stretchr/testify
-
-- ensure it can run without a configuration file
-    - it currently can run that way just fine
-
-
 
 #### Documentation
 
