@@ -4,7 +4,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/worker"
 	"gopkg.in/mgo.v2/bson"
-	"strings"
 	"testing"
 	"time"
 )
@@ -24,7 +23,7 @@ func TestWorkers(t *testing.T) {
 	// Usually workers interact over http, that is done in the worker tests
 	w1 := &worker.WorkerConf{
 		Id:            bson.NewObjectId(),
-		Stopping:      false,
+		Stopped:       false,
 		Pid:           1,
 		Tags:          []string{"bash", "unix"},
 		StartedTs:     time.Now().Unix(),
@@ -37,7 +36,7 @@ func TestWorkers(t *testing.T) {
 
 	w2 := &worker.WorkerConf{
 		Id:            bson.NewObjectId(),
-		Stopping:      false,
+		Stopped:       false,
 		Pid:           1,
 		Tags:          []string{"python", "python27"},
 		StartedTs:     time.Now().Unix(),

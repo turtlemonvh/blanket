@@ -25,13 +25,17 @@ var workerCmd = &cobra.Command{
 
 		workerConf.Tags = strings.Split(workerRawTags, ",")
 		if workerId != "" {
-			// FIXME: Handle with error instead of panic
+			if !bson.IsObjectIdHex(workerId) {
+				log.WithFields(log.Fields{
+					"id": workerId,
+				}).Fatal("The id passed for a worker must be a valid mongo id")
+			}
 			workerConf.Id = bson.ObjectIdHex(workerId)
 		}
 
 		log.WithFields(log.Fields{
 			"workerConf": workerConf,
-		}).Info("About to start worker")
+		}).Debug("About to start worker")
 
 		err := workerConf.Run()
 		if err != nil {

@@ -6,10 +6,6 @@
 
 - list queued and non-queued tasks separately in ps and in html UI
 
-- replace timeouts and sleeps in go routines with timers
-    - https://mmcgrana.github.io/2012/09/go-by-example-timers-and-tickers.html
-    - can cancel
-
 - add tests for boltdb backend
     - https://godoc.org/github.com/gin-gonic/gin#CreateTestContext
     - add task, list in queue
@@ -23,8 +19,6 @@
     - can run worker interactions in a separate go routine
 
 - discard first log line because might be partial
-
-- view structured worker log
 
 - follow some of the advice here
     - https://www.youtube.com/watch?v=29LLRKIL_TI
@@ -59,7 +53,8 @@
     - base url `/` is just a list of the endpoints where UI plugins are installed
         - unless content type is json, in which case it is the configuration of the server
     - use gin api grouping for this
-
+- look into compatibility with this
+    - http://jsonapi.org/
 
 - allow user to add task types over HTTP instead of just reading from disk
     - add API endpoint to rescan from disk
@@ -163,6 +158,11 @@
 
 #### Worker cleanup
 
+- view structured worker log
+- worker detail page
+- allow stopping, restarting
+    - keep in database after stopping
+- track heartbeat
 - assign a unique id to make tracking logfiles for past workers easier
 - name logfile based on time of day
 - allow pausing
@@ -173,6 +173,7 @@
 - add ability to stop task and not just delete
 - keep in the database in a "killed" state
     - keeps a log of its pid, location of logfiles, start and end time, etc.
+    - should track by bson id, not pid, but still track pid in log files
     - allows the user to see the worker logs for the worker that ran that task
 - check that the process with that pid is actually a worker started when you thought it was before you kill it
     - https://github.com/mitchellh/go-ps
@@ -221,11 +222,33 @@
 
 #### Testing
 
+- time multipliers for all time loops
 - factor out common test utilities to a set of shared utilities
     - put these in their own package so they are only included in the binary during test runs, not during build
 - check coverage
     - https://talks.golang.org/2014/testing.slide#9
 - run server on random unused port
+    - https://github.com/phayes/freeport/blob/master/freeport.go
+    - http://grokbase.com/t/gg/golang-nuts/135e77hnst/go-nuts-is-there-api-for-get-a-free-tcp-port-as-web-server-testing-process
+    - using port 0 means the os will give you a port number automatically
+- process for testing worker
+    - integration test
+        - create a temp directory; used for:
+            - results
+            - worker log files
+            - server log files
+            - database file / queue file
+        - run server
+        - add example task types
+            - use fixtures for this
+        - run worker in a subprocess
+            - can send it signals or set value over http and make sure it responds correctly
+        - make sure it can process tasks of each type
+    - unit tests
+        - create a task and walk it through stages
+- use this to track code quality
+    - https://github.com/alecthomas/gometalinter
+
 
 Set up automated tests
 - https://travis-ci.org/
@@ -242,8 +265,12 @@ Set up automated tests
 - add docker container for running tests so users can test in isolated installation
 
 https://divan.github.io/posts/integration_testing/
+- example of using ServeHTTP method of gin server to serve a single request and record response with response recorder
 https://github.com/ory-am/dockertest
 - integration tests with docker and go, with gin
+
+https://splice.com/blog/lesser-known-features-go-test/
+- use cpus flag with `-race` for race detection
 
 - fs abstraction
     - https://github.com/spf13/afero#using-afero-for-testing
@@ -264,6 +291,10 @@ http://talks.golang.org/2012/10things.slide#8
 
 https://peter.bourgon.org/go-in-production/#testing-and-validation
 - soundcloud uses build tags, flags, and a integration_test.go file to do integration tests
+- https://golang.org/pkg/go/build/
+    - see how build tags are used to specify when files are included
+    - call `go test -tags=integration` to include these files
+    - use this for long, complex test that may include docker containers
 
 - https://www.golang-book.com/books/intro/12
 - https://golang.org/pkg/net/http/httptest/
@@ -290,6 +321,8 @@ https://peter.bourgon.org/go-in-production/#testing-and-validation
 - ensure it can run without a configuration file
     - it currently can run that way just fine
 
+
+
 #### Documentation
 
 - set up hugo to generate api docs
@@ -303,6 +336,17 @@ https://peter.bourgon.org/go-in-production/#testing-and-validation
 
 - or maybe just a wiki
     - https://github.com/Netflix/zuul/wiki
+
+- add section on what it is and is not good for
+    - good
+        - long running
+        - flexibility
+        - triggering
+        - simplicity
+    - not so good
+        - high performance
+        - low latency
+
 
 #### Log cleanup
 
@@ -371,6 +415,17 @@ https://peter.bourgon.org/go-in-production/#testing-and-validation
     - that could be a good place for configuration
     - need to define something that makes sense on lots of OSes, even ones where people have limited access
 
+#### Command line completion
+
+http://virtualenvwrapper.readthedocs.org/en/latest/install.html#shell-startup-file
+- instructs users to add lines to bashrc
+- docker does the same thing
+  - https://docs.docker.com/compose/completion/
+  - https://github.com/docker/docker/blob/master/contrib/completion/bash/docker
+
+https://github.com/spf13/cobra/blob/master/bash_completions.md
+- for go
+
 
 ## Backlog
 
@@ -380,12 +435,12 @@ https://peter.bourgon.org/go-in-production/#testing-and-validation
     - operate on: id, range of ids, whole bucket
         - dump everything as json; stream out 1 per line
         - remove items
+    - tools for cleaning up queue
+        - celery with rabbitmq will often have stuck messages in queue
+        - we see this a lot in airflow
 - godeps to lock in dependencies and avoid weird changes
     - https://github.com/sparrc/gdm
     - https://github.com/Masterminds/glide
-- emails
-    - send emails to a given account with information about a task
-    - would be a good plugin
 - clean up About page
     - link to docs
     - link to twitter, github
@@ -452,6 +507,7 @@ https://peter.bourgon.org/go-in-production/#testing-and-validation
 - allow progress by writing to a .progress file (a single integer followed by an arbitrary string) in addition to curl
 - general monitoring
     - https://github.com/shirou/gopsutil
+        - may want to use this esp. for plugins
     - total CPU and memory usage of everything
     - total disk space of all results
 - cross compiling
@@ -461,6 +517,10 @@ https://peter.bourgon.org/go-in-production/#testing-and-validation
     - cobra has this built in, but will probably have to work with build system / makefile to get this right
     - package this up into RPM/Deb
 - include weights for fair queuing
+    - calculate virtual finishing time (arrival + estimated time to completion)
+    - sort by that within the queue
+    - this is how routers do fair queuing too
+    - we can include weights to give flexibility
 - use stacked bars to show the amt of tasks of each type that have failed, are in progress, or succeeded
     - http://getbootstrap.com/components/#progress-stacked
 - include template extensions
@@ -509,8 +569,9 @@ https://peter.bourgon.org/go-in-production/#testing-and-validation
     - to start, everything is bash
 - moving tasks in different states to different buckets
     - would make scanning to find new tasks faster if all ERROR/SUCCESS tasks weren't in the same place
-- recommended tool for making your thing available
+- recommended tools for making your thing available / tunneling
     - https://ngrok.com/
+    - https://pagekite.net/
 - Cookie cutter / quickstart
     - generates an example project for people to get started developing wrapper in various languages with docs included
 - distributed:
@@ -529,8 +590,6 @@ https://peter.bourgon.org/go-in-production/#testing-and-validation
         - can lock server, database contents out over HTTP, switch the master to the new node, and start back up
         - if a node is not the master, all it does it forward requests onto the master node
 - very cool
-    - notifications on OSX
-        - https://github.com/deckarep/gosx-notifier
     - chat support for OSS
         - https://gitter.im/
     - workflow support for github tickets
@@ -544,12 +603,24 @@ https://peter.bourgon.org/go-in-production/#testing-and-validation
         - https://github.com/joewalnes/websocketd
     - live updating config
         - https://github.com/kelseyhightower/confd
-    - progress bars when downloading plugins
+    - progress bars when performing complex actions (e.g. backups)
         - https://github.com/gosuri/uiprogress
     - interactive set up script
         - https://github.com/segmentio/go-prompt
     - use unix domain sockets, named pipes if possible
         - if it doesn't need to be exposed, we shouldn't expose it
-    - allow users to express dependencies as a dag
-        - https://github.com/hashicorp/terraform/tree/master/dag
+    - kick off jobs from a Google spreadsheet
+        - plugin would have to provide UI and daemon process
+        - on UI, name sheet and range that specifies tasks
+            - define poll interval
+            - define column that specifies that task is ready to run, or how long line has to exist before running (e.g. to make sure its not being edited)
+        - this allows you to connect applications together using Google spreadsheets
+    - export as CSV
+        - would make it easy to get a subset of tasks into Excel
+    - deployment help
+        - packer script for generating VMs with stuff installed
+        - AMIs
+        - fabric scripts for working with it
+        - ansible module for installing and configuring, esp. with a custom config
+        - Docker container
 

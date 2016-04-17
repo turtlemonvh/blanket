@@ -11,7 +11,6 @@ import (
 	"github.com/turtlemonvh/blanket/lib"
 	"github.com/turtlemonvh/blanket/tasks"
 	"gopkg.in/mgo.v2/bson"
-	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,21 +31,17 @@ const (
 // CLean up id and parsed tags' parse these in cli
 
 type WorkerConf struct {
-	Id            bson.ObjectId  `json:"id"`
-	Tags          []string       `json:"tags"`
-	Logfile       string         `json:"logfile"`
-	Daemon        bool           `json:"daemon"`
-	Pid           int            `json:"pid"`
-	Stopped       bool           `json:"stopped"`
-	CheckInterval float64        `json:"checkInterval"` // seconds
-	StartedTs     int64          `json:"startedTs"`
-	fileCopier    lib.FileCopier // FIXME: This does not need to be here at all
+	Id            bson.ObjectId `json:"id"`
+	Tags          []string      `json:"tags"`
+	Logfile       string        `json:"logfile"`
+	Daemon        bool          `json:"daemon"`
+	Pid           int           `json:"pid"`
+	Stopped       bool          `json:"stopped"`
+	CheckInterval float64       `json:"checkInterval"` // seconds
+	StartedTs     int64         `json:"startedTs"`
 }
 
 // FIXME: Ensure this works ok on windows: https://golang.org/pkg/os/#Signal
-// FIXME: Handle Ctrl-C; should try to deregister
-// FIXME: Handle SIGHUP by updating information on dashboard (report, refresh config)
-// FIXME: Modify global log object
 // FIXME: Make sure logging works fine with sighup for logrotate
 // https://en.wikipedia.org/wiki/Unix_signal#POSIX_signals
 func (c *WorkerConf) Run() error {
@@ -120,24 +115,26 @@ func (c *WorkerConf) Run() error {
 		signal.Notify(shutdownChan, syscall.SIGTERM)
 		go func() {
 			<-shutdownChan
-			// Send a request to /worker/<id>/shutdown?nosignal to make sure db is updated with state
-			// If the shutdown request initiated from the outside this won't update anything
+			// Register the worker as stopped
 			maxShutdownRetries := 10
 			nShutdownRetries := 0
-			log.Warn("Received shutdown signal; attempting to put worker in stopping state")
+			log.Warn("Received shutdown signal; attempting to set worker to 'stopped'")
 			err = c.Stop()
 			for err != nil && nShutdownRetries < maxShutdownRetries {
 				log.WithFields(log.Fields{
-					"err": err.Error(),
-				}).Fatal("problem updating worker to the 'stopped' state")
-				log.Info("Retrying again in 1 second")
+					"err":        err.Error(),
+					"nattempts":  nShutdownRetries,
+					"retryDelay": c.CheckIntervalMs(),
+				}).Error("Problem updating worker to the 'stopped' state")
 				time.Sleep(c.CheckIntervalMs())
 			}
 			if nShutdownRetries < maxShutdownRetries {
 				log.Info("Successfully registered worker as 'stopped'.")
 			} else {
 				// Worker will exit when it checks its 'stopped' setting
-				log.Infof("Failed to register worker as 'stopped' after %d attempts. Exiting anyway.", nShutdownRetries)
+				log.WithFields(log.Fields{
+					"nattempts": nShutdownRetries,
+				}).Info("Failed to register worker as 'stopped'. Will exit anyway.")
 			}
 		}()
 
@@ -147,7 +144,7 @@ func (c *WorkerConf) Run() error {
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
-			}).Fatal("problem getting logfile name")
+			}).Fatal("Failed to set logfile name")
 		}
 
 		// Setup logfile; closes when process exits
@@ -280,16 +277,14 @@ func (c *WorkerConf) CheckIntervalMs() time.Duration {
 	return time.Duration(c.CheckInterval*1000*viper.GetFloat64("timeMultiplier")) * time.Millisecond
 }
 
-// FIXME: Remove Stop / Shutdown
-
-// FIXME: Once working on a task, send logs of errors into its logfiles
+// FIXME: Once working on a task, send some logs of errors into that task's logfiles
 func (c *WorkerConf) ProcessTasks() {
 	var err error
 	var t tasks.Task
 
 	for !c.Stopped {
 		if err != nil {
-			// Only pause when we had a problem
+			// Only pause if we didn't just successfully run a task
 			time.Sleep(c.CheckIntervalMs())
 		}
 
@@ -297,6 +292,7 @@ func (c *WorkerConf) ProcessTasks() {
 		err = c.Refetch()
 		if err != nil {
 			log.WithFields(log.Fields{
+				"id":    c.Id,
 				"error": err.Error(),
 			}).Error("error refreshing worker state")
 		} else {
@@ -309,12 +305,14 @@ func (c *WorkerConf) ProcessTasks() {
 		t, err = tasks.MarkAsClaimed(c.Id)
 		if err != nil {
 			log.WithFields(log.Fields{
-				"err": err.Error(),
-			}).Errorf("could not find task; trying again in %d milliseconds", c.CheckIntervalMs())
+				"err":        err.Error(),
+				"retryDelay": c.CheckIntervalMs(),
+			}).Errorf("error finding task for this worker")
 			continue
 		} else if !t.Id.Valid() {
-			// FIXME: Make sure this works; should work because will initialize with empty string
-			log.Debugf("found no matching tasks; trying again in %d milliseconds", c.CheckIntervalMs())
+			log.WithFields(log.Fields{
+				"retryDelay": c.CheckIntervalMs(),
+			}).Debug("found no matching tasks")
 			continue
 		}
 
@@ -330,8 +328,9 @@ func (c *WorkerConf) ProcessTasks() {
 			}).Infof("processed task successfully")
 		} else {
 			log.WithFields(log.Fields{
-				"err": err.Error(),
-			}).Errorf("error processing task; trying again in %d milliseconds", c.CheckIntervalMs())
+				"err":        err.Error(),
+				"retryDelay": c.CheckIntervalMs(),
+			}).Errorf("error processing task")
 		}
 	}
 
@@ -340,6 +339,7 @@ func (c *WorkerConf) ProcessTasks() {
 		"pid":     c.Pid,
 		"id":      c.Id.Hex(),
 	}).Info("Finished final task, shutting down")
+
 	if err != nil {
 		os.Exit(1)
 	} else {
@@ -374,13 +374,13 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		log.WithFields(log.Fields{
 			"err":    err.Error(),
 			"taskId": t.Id,
-		}).Error("problems starting task execution")
+		}).Error("Error starting task execution")
 		terr := tasks.MarkAsFinished(t, "ERROR")
 		if terr != nil {
 			log.WithFields(log.Fields{
 				"err":    terr.Error(),
 				"taskId": t.Id,
-			}).Error("after failing to start task execution, failed to transition task to state ERROR")
+			}).Error("After failing to start task execution, failed to transition task to state ERROR")
 			return terr
 		}
 		return err
@@ -401,10 +401,10 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	}
 	t.Refresh()
 
-	taskDone := make(chan struct{})
+	taskDone := make(chan struct{}, 1)
 	maxTime := t.StartedTs + t.Timeout
+	taskTimeout := time.NewTimer(time.Duration(float64(maxTime-time.Now().Unix())*1000*viper.GetFloat64("timeMultiplier")) * time.Millisecond)
 	go func() {
-		// FIXME: Seems to behave strange when parent function has exited
 		for true {
 			log.WithFields(log.Fields{
 				"taskId":       t.Id,
@@ -412,11 +412,18 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 				"processState": cmd.ProcessState,
 			}).Debug("looping in task process monitoring thread")
 
-			// Check if started
-			if cmd.Process == nil {
-				// Either wait a bit for the command to start or exit
+			// Wait for process to start to guard against race conditions
+			nchecks := 0
+			for cmd.Process == nil {
+				// Log out every 10 checks
+				if nchecks%10 == 0 {
+					log.WithFields(log.Fields{
+						"process": cmd.Process,
+						"nchecks": nchecks,
+					}).Info("waiting for process to start")
+				}
 				select {
-				case <-time.After(time.Duration(2*viper.GetFloat64("timeMultiplier")) * time.Second):
+				case <-time.After(time.Duration(100*viper.GetFloat64("timeMultiplier")) * time.Millisecond):
 					continue
 				case <-taskDone:
 					return
@@ -429,28 +436,6 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 					"taskId": t.Id,
 				}).Info("returning from task process monitoring thread because task has exited")
 				return
-			}
-
-			// Check that we're not over time
-			checkTime := time.Now().Unix()
-			if checkTime > maxTime {
-				err = tasks.MarkAsFinished(t, "TIMEDOUT")
-				if err != nil {
-					log.WithFields(log.Fields{
-						"err":    err.Error(),
-						"taskId": t.Id,
-					}).Error("failed to transition task to state TIMEDOUT")
-				} else {
-					log.WithFields(log.Fields{
-						"taskId":    t.Id,
-						"maxTime":   maxTime,
-						"checkTime": checkTime,
-					}).Error("killing task because over max time allowed for execution")
-					if cmd.Process != nil {
-						cmd.Process.Kill()
-						return
-					}
-				}
 			}
 
 			// Check that we haven't stopped this task from another process
@@ -474,14 +459,42 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			}).Debug("Flushing logfiles for task")
 
 			// Either wait for next loop or exit
-			// FIXME: Clean up with 2 timers
+			loopTimeout := time.NewTimer(time.Duration(c.CheckInterval*1000*viper.GetFloat64("timeMultiplier")) * time.Millisecond)
 			select {
-			case <-time.After(time.Duration(math.Min(float64(maxTime-checkTime), c.CheckInterval)*1000*viper.GetFloat64("timeMultiplier")) * time.Millisecond):
+			case killTime := <-taskTimeout.C:
+				// Ran out of time
+				// Kill process and return with error
+				loopTimeout.Stop()
+				err = tasks.MarkAsFinished(t, "TIMEDOUT")
+				if err != nil {
+					log.WithFields(log.Fields{
+						"err":    err.Error(),
+						"taskId": t.Id,
+					}).Error("failed to transition task to state TIMEDOUT")
+				} else {
+					log.WithFields(log.Fields{
+						"taskId":   t.Id,
+						"maxTime":  maxTime,
+						"killTime": killTime,
+					}).Error("killing task because over max time allowed for execution")
+					if cmd.Process != nil {
+						cmd.Process.Kill()
+						return
+					}
+				}
+			case <-loopTimeout.C:
+				// Loop again
 				continue
 			case <-taskDone:
+				loopTimeout.Stop()
+				taskTimeout.Stop()
 				return
 			}
 		}
+	}()
+	defer func() {
+		// Ensure monitoring goroutine exits when the parent exits
+		taskDone <- struct{}{}
 	}()
 
 	err = cmd.Wait()
@@ -490,7 +503,6 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("problems finishing task execution")
-		close(taskDone)
 		terr := tasks.MarkAsFinished(t, "ERROR")
 		if terr != nil {
 			log.WithFields(log.Fields{
@@ -508,7 +520,6 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("failed to transition task to state SUCCESS")
-		close(taskDone)
 	}
 
 	return err
@@ -561,12 +572,12 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 
 	// The copier should use the location of the task type as its starting point
 	// for relative path searches for files
-	c.fileCopier = lib.FileCopier{
+	fileCopier := lib.FileCopier{
 		BasePath: path.Dir(tt.ConfigFile),
 	}
 
 	filesToInclude := lib.ToSliceStringSlice(tt.Config.Get("files_to_include"))
-	err = c.fileCopier.CopyFiles(filesToInclude, t.ResultDir)
+	err = fileCopier.CopyFiles(filesToInclude, t.ResultDir)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err":    err.Error(),

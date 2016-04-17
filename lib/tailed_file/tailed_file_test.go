@@ -45,7 +45,7 @@ func TestStreamLogSingleSub(t *testing.T) {
 		<-c
 		// FIXME: Kind of brittle, but gives file tailer time to flush
 		log.Printf("Closing tailed file after 500 milliseconds")
-		time.Sleep(time.Millisecond * 500)
+		time.Sleep(time.Millisecond * 1000)
 		// Must be closed to shop reads on sub.NewLines channel
 		log.Printf("Closing tailed file")
 		assert.Equal(t, testTfc.GetSubscriberCount(), int64(1))
