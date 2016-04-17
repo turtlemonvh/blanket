@@ -98,13 +98,15 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	r.PUT("/task/:id/finish", finishTask)           // update state
 	r.PUT("/task/:id/progress", updateTaskProgress) // update progress
 
+	// FIXME: Pause worker
 	r.GET("/worker/:id", getWorker)
 	r.GET("/worker/", getWorkers)
-	r.POST("/worker/", launchWorker)              // called from front end, doesn't actually hit database
-	r.PUT("/worker/:id", updateWorker)            // used for initial creation + status updates
-	r.PUT("/worker/:id/shutdown", shutDownWorker) // not called by worker itself
-	r.DELETE("/worker/:id", deleteWorker)         // remove from database; called by worker itself
-	r.GET("/worker/:id/logs", getWorkerLogfile)   // server sent events
+	r.POST("/worker/", launchNewWorker)         // called from front end, doesn't actually hit database
+	r.PUT("/worker/:id/stop", stopWorker)       // stop/pause worker; will stop after current task stops
+	r.PUT("/worker/:id/restart", restartWorker) // re-start an existing worker
+	r.PUT("/worker/:id", updateWorker)          // used for initial creation + status updates
+	r.DELETE("/worker/:id", deleteWorker)       // remove from database; can only be called on a stopped worker
+	r.GET("/worker/:id/logs", getWorkerLogfile) // server sent events
 
 	// Start server
 	log.WithFields(log.Fields{

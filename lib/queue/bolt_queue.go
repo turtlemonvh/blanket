@@ -110,7 +110,7 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 	tc := &database.TaskSearchConf{
 		Limit:         1,
 		ReverseSort:   true,
-		MaxTags:       worker.ParsedTags,
+		MaxTags:       worker.Tags,
 		JustUnclaimed: true,
 		SmallestId:    bson.NewObjectIdWithTime(time.Unix(0, 0)),
 		LargestId:     bson.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),

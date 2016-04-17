@@ -5,6 +5,10 @@ import (
 	"gopkg.in/mgo.v2/bson"
 )
 
+const (
+	MAX_REQUEST_TIME_SECONDS = 5
+)
+
 // Utility functions
 
 func MakeErrorString(errmsg string) string {
@@ -28,3 +32,5 @@ func SafeObjectId(workerIdStr string) (bson.ObjectId, error) {
 	}
 	return bson.ObjectIdHex(workerIdStr), nil
 }
+
+// Error types

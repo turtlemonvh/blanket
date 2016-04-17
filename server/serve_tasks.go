@@ -466,7 +466,7 @@ func removeTask(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
 }
 
-// FIXME: Abstract into something that can serve for worker logs, stdout/stderr logs too
+// Stream out task log
 func streamTaskLog(c *gin.Context) {
 	var err error
 	var taskId bson.ObjectId
@@ -491,6 +491,7 @@ func streamTaskLog(c *gin.Context) {
 	}
 	defer sub.Stop()
 
+	// Task is stopped when it is in a terminal state or we get an error fetching its information
 	isComplete := func() bool {
 		task, err = DB.GetTask(taskId)
 		if err != nil {

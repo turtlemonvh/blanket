@@ -4,6 +4,8 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/turtlemonvh/blanket/worker"
+	"gopkg.in/mgo.v2/bson"
+	"strings"
 )
 
 /*
@@ -11,6 +13,8 @@ Run as a daemon
 https://github.com/takama/daemon
 */
 
+var workerId string
+var workerRawTags string
 var workerConf worker.WorkerConf
 var workerCmd = &cobra.Command{
 	Use:   "worker",
@@ -18,6 +22,17 @@ var workerCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		InitializeConfig()
 		InitializeLogging()
+
+		workerConf.Tags = strings.Split(workerRawTags, ",")
+		if workerId != "" {
+			// FIXME: Handle with error instead of panic
+			workerConf.Id = bson.ObjectIdHex(workerId)
+		}
+
+		log.WithFields(log.Fields{
+			"workerConf": workerConf,
+		}).Info("About to start worker")
+
 		err := workerConf.Run()
 		if err != nil {
 			log.WithFields(log.Fields{
@@ -28,7 +43,8 @@ var workerCmd = &cobra.Command{
 }
 
 func init() {
-	workerCmd.Flags().StringVarP(&workerConf.Tags, "tags", "t", "", "Tags defining capabilities of this worker")
+	workerCmd.Flags().StringVarP(&workerRawTags, "tags", "t", "", "Tags defining capabilities of this worker")
+	workerCmd.Flags().StringVar(&workerId, "id", "", "Id of this worker")
 	workerCmd.Flags().StringVar(&workerConf.Logfile, "logfile", "", "Logfile to use")
 	workerCmd.Flags().Float64Var(&workerConf.CheckInterval, "checkinterval", 0, "Check interval in seconds")
 	workerCmd.Flags().BoolVarP(&workerConf.Daemon, "daemon", "d", false, "Run as a daemon")

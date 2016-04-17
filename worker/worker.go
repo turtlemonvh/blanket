@@ -11,6 +11,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib"
 	"github.com/turtlemonvh/blanket/tasks"
 	"gopkg.in/mgo.v2/bson"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -22,30 +23,24 @@ import (
 	"time"
 )
 
-// Utility
-
-func toSliceStringSlice(i interface{}) [][]string {
-	s := cast.ToSlice(i)
-	var r [][]string
-	for _, v := range s {
-		r = append(r, cast.ToStringSlice(v))
-	}
-	return r
-}
+const (
+	DEFAULT_CHECK_INTERVAL_SECONDS = 2
+)
 
 // Worker
 
+// CLean up id and parsed tags' parse these in cli
+
 type WorkerConf struct {
-	Id            bson.ObjectId `json:"id"`
-	Tags          string        `json:"rawTags"`
-	ParsedTags    []string      `json:"tags"`
-	Logfile       string        `json:"logfile"`
-	Daemon        bool          `json:"daemon"`
-	Pid           int           `json:"pid"`
-	Stopping      bool          `json:"stopping"`
-	CheckInterval float64       `json:"checkInterval"`
-	StartedTs     int64         `json:"startedTs"`
-	fileCopier    lib.FileCopier
+	Id            bson.ObjectId  `json:"id"`
+	Tags          []string       `json:"tags"`
+	Logfile       string         `json:"logfile"`
+	Daemon        bool           `json:"daemon"`
+	Pid           int            `json:"pid"`
+	Stopped       bool           `json:"stopped"`
+	CheckInterval float64        `json:"checkInterval"` // seconds
+	StartedTs     int64          `json:"startedTs"`
+	fileCopier    lib.FileCopier // FIXME: This does not need to be here at all
 }
 
 // FIXME: Ensure this works ok on windows: https://golang.org/pkg/os/#Signal
@@ -58,11 +53,11 @@ func (c *WorkerConf) Run() error {
 	var err error
 
 	// Initialize
-	if c.CheckInterval < 0.5 {
-		c.CheckInterval = 0.5
-	}
-	c.CheckInterval = c.CheckInterval * viper.GetFloat64("timeMultiplier")
 	c.StartedTs = time.Now().Unix()
+	if c.Id == "" {
+		// Allow users to pass in existing ids to re-use old worker configs
+		c.Id = bson.NewObjectId()
+	}
 
 	if c.Daemon {
 		path, err := osext.Executable()
@@ -78,9 +73,13 @@ func (c *WorkerConf) Run() error {
 		}).Debug("Path to current executable is")
 
 		cmd := exec.Command(path, "worker")
-		if c.Tags != "" {
+		if len(c.Tags) != 0 {
 			cmd.Args = append(cmd.Args, "--tags")
-			cmd.Args = append(cmd.Args, c.Tags)
+			cmd.Args = append(cmd.Args, strings.Join(c.Tags, ","))
+		}
+		if c.Id != "" {
+			cmd.Args = append(cmd.Args, "--id")
+			cmd.Args = append(cmd.Args, c.Id.Hex())
 		}
 		if c.Logfile != "" {
 			cmd.Args = append(cmd.Args, "--logfile")
@@ -110,6 +109,11 @@ func (c *WorkerConf) Run() error {
 		}).Info("Starting daemonized executable")
 
 	} else {
+		// Calculate adjusted check time, in seconds
+		if c.CheckInterval < 0.5 {
+			c.CheckInterval = 0.5
+		}
+
 		// Handle clean shutdown
 		shutdownChan := make(chan os.Signal, 1)
 		signal.Notify(shutdownChan, os.Interrupt)
@@ -118,24 +122,26 @@ func (c *WorkerConf) Run() error {
 			<-shutdownChan
 			// Send a request to /worker/<id>/shutdown?nosignal to make sure db is updated with state
 			// If the shutdown request initiated from the outside this won't update anything
-			log.Warn("Received shutdown signal; stopping after current task completes")
-
-			// FIXME: Update lastHeardTs too
-			c.Stopping = true
-			err = c.UpdateInDatabase()
-			if err != nil {
+			maxShutdownRetries := 10
+			nShutdownRetries := 0
+			log.Warn("Received shutdown signal; attempting to put worker in stopping state")
+			err = c.Stop()
+			for err != nil && nShutdownRetries < maxShutdownRetries {
 				log.WithFields(log.Fields{
 					"err": err.Error(),
-				}).Fatal("problem updating worker to the 'stopping' state")
-				log.Info("Continuing shutdown anyway")
+				}).Fatal("problem updating worker to the 'stopped' state")
+				log.Info("Retrying again in 1 second")
+				time.Sleep(c.CheckIntervalMs())
+			}
+			if nShutdownRetries < maxShutdownRetries {
+				log.Info("Successfully registered worker as 'stopped'.")
 			} else {
-				log.Info("Successfully registered worker as stopping")
+				// Worker will exit when it checks its 'stopped' setting
+				log.Infof("Failed to register worker as 'stopped' after %d attempts. Exiting anyway.", nShutdownRetries)
 			}
 		}()
 
-		c.Id = bson.NewObjectId()
 		c.Pid = os.Getpid()
-		c.ParsedTags = strings.Split(c.Tags, ",")
 
 		err = c.SetLogfileName()
 		if err != nil {
@@ -148,9 +154,10 @@ func (c *WorkerConf) Run() error {
 		var f *os.File
 		f, err = os.Create(c.Logfile)
 		if err != nil {
-			fmt.Println("logfile", c.Logfile)
-			fmt.Println("workerConf", c)
-			panic(err)
+			log.WithFields(log.Fields{
+				"logfile": c.Logfile,
+				"error":   err.Error(),
+			}).Fatal("Failed to create worker logfile")
 		}
 		defer f.Close()
 
@@ -160,7 +167,7 @@ func (c *WorkerConf) Run() error {
 		log.SetOutput(f)
 
 		log.WithFields(log.Fields{
-			"tags":          c.ParsedTags,
+			"tags":          c.Tags,
 			"pid":           c.Pid,
 			"id":            c.Id.Hex(),
 			"checkInterval": c.CheckInterval,
@@ -206,7 +213,7 @@ func (c *WorkerConf) SetLogfileName() error {
 // Must be ok or it will exit immediately (Fatal log)
 // Also register with time running
 func (c *WorkerConf) MustRegister() {
-	c.Stopping = false
+	c.Stopped = false
 
 	err := c.UpdateInDatabase()
 	if err != nil {
@@ -214,6 +221,24 @@ func (c *WorkerConf) MustRegister() {
 			"err": err.Error(),
 		}).Fatal("problem updating worker status in database")
 	}
+}
+
+func (c *WorkerConf) Stop() error {
+	var err error
+
+	reqURL := fmt.Sprintf("http://localhost:%d/worker/%s/stop", viper.GetInt("port"), c.Id.Hex())
+	req, err := http.NewRequest("PUT", reqURL, nil)
+	if err != nil {
+		return err
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	return err
 }
 
 func (c *WorkerConf) UpdateInDatabase() error {
@@ -240,53 +265,44 @@ func (c *WorkerConf) UpdateInDatabase() error {
 	return err
 }
 
-// Called from another process
-// Sends sigterm
-func (c *WorkerConf) Stop() error {
-	p, err := os.FindProcess(c.Pid)
+func (c *WorkerConf) Refetch() error {
+	reqURL := fmt.Sprintf("http://localhost:%d/worker/%s", viper.GetInt("port"), c.Id.Hex())
+	res, err := http.Get(reqURL)
 	if err != nil {
 		return err
 	}
-	return p.Signal(syscall.SIGTERM)
-}
-
-// Deregisters itself
-// Send a DELETE request to /worker/<id>/ to make sure db is cleared
-// Logs that request was succesful and is shutting down
-func (c *WorkerConf) Shutdown() {
-	log.Info("Shutting worker down cleanly")
-
-	reqURL := fmt.Sprintf("http://localhost:%d/worker/%s", viper.GetInt("port"), c.Id.Hex())
-	req, err := http.NewRequest("DELETE", reqURL, nil)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"err": err.Error(),
-		}).Fatal("problem creating http request to clear worker from database")
-	}
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"err": err.Error(),
-		}).Fatal("problem clearing worker from database")
-		log.Info("Continuing shutdown anyway")
-	} else {
-		log.Info("Successfully cleared worker from database")
-	}
 	defer res.Body.Close()
-
-	os.Exit(1)
+	dec := json.NewDecoder(res.Body)
+	return dec.Decode(c)
 }
+
+func (c *WorkerConf) CheckIntervalMs() time.Duration {
+	return time.Duration(c.CheckInterval*1000*viper.GetFloat64("timeMultiplier")) * time.Millisecond
+}
+
+// FIXME: Remove Stop / Shutdown
 
 // FIXME: Once working on a task, send logs of errors into its logfiles
 func (c *WorkerConf) ProcessTasks() {
 	var err error
 	var t tasks.Task
 
-	for !c.Stopping {
+	for !c.Stopped {
 		if err != nil {
 			// Only pause when we had a problem
-			time.Sleep(time.Duration(c.CheckInterval*1000) * time.Millisecond)
+			time.Sleep(c.CheckIntervalMs())
+		}
+
+		// Update the worker config
+		err = c.Refetch()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"error": err.Error(),
+			}).Error("error refreshing worker state")
+		} else {
+			log.WithFields(log.Fields{
+				"id": c.Id,
+			}).Info("successfully refreshed worker state")
 		}
 
 		// FIXME: Handle task not found differently than a 500, 401, etc
@@ -294,11 +310,11 @@ func (c *WorkerConf) ProcessTasks() {
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
-			}).Errorf("could not find task; trying again in %f seconds", c.CheckInterval)
+			}).Errorf("could not find task; trying again in %d milliseconds", c.CheckIntervalMs())
 			continue
 		} else if !t.Id.Valid() {
 			// FIXME: Make sure this works; should work because will initialize with empty string
-			log.Debugf("found no matching tasks; trying again in %f seconds", c.CheckInterval)
+			log.Debugf("found no matching tasks; trying again in %d milliseconds", c.CheckIntervalMs())
 			continue
 		}
 
@@ -315,12 +331,20 @@ func (c *WorkerConf) ProcessTasks() {
 		} else {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
-			}).Errorf("error processing task; trying again in %f seconds", c.CheckInterval)
+			}).Errorf("error processing task; trying again in %d milliseconds", c.CheckIntervalMs())
 		}
 	}
 
-	log.Info("Finished final task, shutting down")
-	c.Shutdown()
+	log.WithFields(log.Fields{
+		"stopped": c.Stopped,
+		"pid":     c.Pid,
+		"id":      c.Id.Hex(),
+	}).Info("Finished final task, shutting down")
+	if err != nil {
+		os.Exit(1)
+	} else {
+		os.Exit(0)
+	}
 }
 
 func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
@@ -377,6 +401,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	}
 	t.Refresh()
 
+	taskDone := make(chan struct{})
 	maxTime := t.StartedTs + t.Timeout
 	go func() {
 		// FIXME: Seems to behave strange when parent function has exited
@@ -389,8 +414,13 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 
 			// Check if started
 			if cmd.Process == nil {
-				time.Sleep(2 * time.Second)
-				continue
+				// Either wait a bit for the command to start or exit
+				select {
+				case <-time.After(time.Duration(2*viper.GetFloat64("timeMultiplier")) * time.Second):
+					continue
+				case <-taskDone:
+					return
+				}
 			}
 
 			// Check if still running
@@ -443,7 +473,14 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 				"taskId": t.Id,
 			}).Debug("Flushing logfiles for task")
 
-			time.Sleep(time.Duration(c.CheckInterval*1000) * time.Millisecond)
+			// Either wait for next loop or exit
+			// FIXME: Clean up with 2 timers
+			select {
+			case <-time.After(time.Duration(math.Min(float64(maxTime-checkTime), c.CheckInterval)*1000*viper.GetFloat64("timeMultiplier")) * time.Millisecond):
+				continue
+			case <-taskDone:
+				return
+			}
 		}
 	}()
 
@@ -453,6 +490,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("problems finishing task execution")
+		close(taskDone)
 		terr := tasks.MarkAsFinished(t, "ERROR")
 		if terr != nil {
 			log.WithFields(log.Fields{
@@ -470,6 +508,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("failed to transition task to state SUCCESS")
+		close(taskDone)
 	}
 
 	return err
@@ -526,7 +565,7 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 		BasePath: path.Dir(tt.ConfigFile),
 	}
 
-	filesToInclude := toSliceStringSlice(tt.Config.Get("files_to_include"))
+	filesToInclude := lib.ToSliceStringSlice(tt.Config.Get("files_to_include"))
 	err = c.fileCopier.CopyFiles(filesToInclude, t.ResultDir)
 	if err != nil {
 		log.WithFields(log.Fields{

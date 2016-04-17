@@ -26,12 +26,11 @@ func TestWorkers(t *testing.T) {
 		Id:            bson.NewObjectId(),
 		Stopping:      false,
 		Pid:           1,
-		Tags:          "bash,unix",
+		Tags:          []string{"bash", "unix"},
 		StartedTs:     time.Now().Unix(),
 		CheckInterval: 0.5,
 		Daemon:        false,
 	}
-	w1.ParsedTags = strings.Split(w1.Tags, ",")
 	w1.SetLogfileName()
 	err = DB.UpdateWorker(w1)
 	assert.Equal(t, err, nil)
@@ -40,12 +39,11 @@ func TestWorkers(t *testing.T) {
 		Id:            bson.NewObjectId(),
 		Stopping:      false,
 		Pid:           1,
-		Tags:          "python,python27",
+		Tags:          []string{"python", "python27"},
 		StartedTs:     time.Now().Unix(),
 		CheckInterval: 0.5,
 		Daemon:        false,
 	}
-	w2.ParsedTags = strings.Split(w2.Tags, ",")
 	w2.SetLogfileName()
 	err = DB.UpdateWorker(w2)
 	assert.Equal(t, err, nil)

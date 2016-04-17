@@ -2,9 +2,14 @@ package server
 
 import (
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/worker"
+	"gopkg.in/mgo.v2/bson"
 	"net/http"
+	"time"
 )
 
 // Search in the database for all items
@@ -69,11 +74,11 @@ func updateWorker(c *gin.Context) {
 	c.String(http.StatusOK, "{}")
 }
 
-// Send SigTerm to the worker's pid
-// Allow the user to pass an option to not signal; this would be used if the process is already exiting
-// If the worker is already down but didn't remove itself from the database, calling this
-// function will remove the worker entry from the database too.
-func shutDownWorker(c *gin.Context) {
+// Put the worker in the "stopped" state
+// The worker will poll for this state
+// FIXME: Update lastHeardTs too
+// FIXME: Allow force option that sends signals (on platforms That support that)
+func stopWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	workerId, err := SafeObjectId(c.Param("id"))
@@ -88,20 +93,34 @@ func shutDownWorker(c *gin.Context) {
 		return
 	}
 
-	// FIXME: Allow the worker to poll for state instead of doing this
-	// Send SIGTERM
-	err = w.Stop()
-	if err != nil && err.Error() == "os: process already finished" {
-		err = DB.DeleteWorker(workerId)
-	}
+	w.Stopped = true
+	err = DB.UpdateWorker(&w)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
-	// FIXME: Send SIGKILL if still not finished
-
 	c.String(http.StatusOK, `{}`)
+}
+
+// Find an existing worker in the database and change its status
+// Start it on the command line
+func restartWorker(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+
+	workerId, err := SafeObjectId(c.Param("id"))
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		return
+	}
+
+	w, err := DB.GetWorker(workerId)
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		return
+	}
+
+	launchWorker(c, &w)
 }
 
 // Remove the worker's record from the db if it exists
@@ -113,6 +132,14 @@ func deleteWorker(c *gin.Context) {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
+
+	// FIXME: Check that worker is stopped
+	w := worker.WorkerConf{}
+	err = c.BindJSON(&w)
+	if err == nil && w.Stopped != true {
+		c.String(http.StatusBadRequest, `{"error": "Cannot delete a worker that has not been stopped"}`)
+	}
+
 	err = DB.DeleteWorker(workerId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
@@ -121,22 +148,26 @@ func deleteWorker(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId.Hex()))
 }
 
-// FIXME: Wait until worker registers itself in the database to return, up to X seconds
-func launchWorker(c *gin.Context) {
+func launchNewWorker(c *gin.Context) {
+	var err error
+	w := worker.WorkerConf{}
+	err = c.BindJSON(&w)
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+	}
+	launchWorker(c, &w)
+}
+
+// Called by other request handlers
+func launchWorker(c *gin.Context, w *worker.WorkerConf) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
 
-	w := worker.WorkerConf{}
-	err = c.BindJSON(&w)
-	if err != nil {
-		return
-	}
-
 	// Always a daemon; default check interval is 2 seconds
 	w.Daemon = true
 	if w.CheckInterval == 0 {
-		w.CheckInterval = 2
+		w.CheckInterval = worker.DEFAULT_CHECK_INTERVAL_SECONDS
 	}
 
 	err = w.Run()
@@ -145,7 +176,30 @@ func launchWorker(c *gin.Context) {
 		return
 	}
 
-	c.String(http.StatusOK, "{}")
+	// Poll database until worker is found
+	maxRequestTime := time.NewTimer(time.Duration(MAX_REQUEST_TIME_SECONDS*viper.GetFloat64("timeMultiplier")) * time.Second)
+	loopWaitTime := time.Duration(500*viper.GetFloat64("timeMultiplier")) * time.Millisecond
+	for {
+		w, _ := DB.GetWorker(w.Id)
+		if w.Pid != 0 {
+			c.JSON(http.StatusOK, w)
+			return
+		}
+
+		log.WithFields(log.Fields{
+			"workerConf": w,
+		}).Info("Looping while waiting for worker to show up in database")
+
+		select {
+		case <-maxRequestTime.C:
+			err = fmt.Errorf("Worker was not found after %d seconds", MAX_REQUEST_TIME_SECONDS)
+			c.String(http.StatusRequestTimeout, MakeErrorString(err.Error()))
+			return
+		case <-time.After(loopWaitTime):
+			continue
+		}
+	}
+	c.String(http.StatusOK, `{}`)
 }
 
 // FIXME: Stream file contents
@@ -173,4 +227,38 @@ func getWorkerLogfile(c *gin.Context) {
 	// Open file and send all contents
 	// https://godoc.org/github.com/gin-gonic/gin#Context.File
 	c.File(w.Logfile)
+}
+
+// Stream out worker log
+func streamWorkerLog(c *gin.Context) {
+	var err error
+	var workerId bson.ObjectId
+
+	workerId, err = SafeObjectId(c.Param("id"))
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		return
+	}
+
+	// FIXME: Return bytes or string?
+	w, err := DB.GetWorker(workerId)
+	if err != nil {
+		c.String(http.StatusInternalServerError, fmt.Sprintf(`Error: "%s"`, err.Error()))
+		return
+	}
+
+	stdoutPath := w.Logfile
+	sub, err := tailed_file.Follow(stdoutPath)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Error opening logfile stream")
+		return
+	}
+	defer sub.Stop()
+
+	// Worker is done if it is stopped
+	isComplete := func() bool {
+		return true
+	}
+	streamLog(c, sub, isComplete)
+
 }

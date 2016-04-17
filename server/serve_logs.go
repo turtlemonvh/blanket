@@ -17,7 +17,6 @@ const (
 
 // Function to server logfile lines from a subscription.
 // isComplete should return true if we know that the subscription is finished.
-// FIXME: Abstract into something that can serve for worker logs, stdout/stderr logs too
 // - task stopped when in terminal state
 // - worker stopped when no longer heartbeating
 func streamLog(c *gin.Context, sub *tailed_file.TailedFileSubscriber, isComplete func() bool) {

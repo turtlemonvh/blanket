@@ -62,7 +62,7 @@ func NewBlanketBoltDB(db *bolt.DB) BlanketDB {
 
 func (DB *BlanketBoltDB) GetWorkers() ([]worker.WorkerConf, error) {
 	var err error
-	var ws []worker.WorkerConf
+	ws := []worker.WorkerConf{}
 
 	err = DB.db.View(func(tx *bolt.Tx) error {
 		var err error
