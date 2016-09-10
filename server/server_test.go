@@ -33,23 +33,27 @@ func assertEmptyListResponse(t *testing.T, req *http.Request) {
 	var resp *http.Response
 
 	resp, err = c.Do(req)
-	assert.Equal(t, err, nil)
-	assert.Equal(t, resp.StatusCode, http.StatusOK)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	body, err = ioutil.ReadAll(resp.Body)
-	assert.Equal(t, err, nil)
-	assert.Equal(t, string(body), "[]")
+	assert.Equal(t, nil, err)
+	assert.Equal(t, "[]\n", string(body))
 }
 
 // Requires turning off firewall on mac
 func TestGetTasks(t *testing.T) {
 	// Run server
+	viper.Set("port", TEST_SERVER_PORT)
 	S, closefn := NewTestServer()
 	defer closefn()
-	viper.Set("port", TEST_SERVER_PORT)
 	go S.ListenAndServe()
 	defer S.Stop(time.Millisecond * 100)
 
 	var req *http.Request
+
+	// Wait a second for the server to start up
+	// FIXME: Make this more robust by checking in a loop
+	time.Sleep(time.Second)
 
 	// Tasks from all sources
 	req, _ = http.NewRequest("GET", "http://localhost:6777/task", nil)
