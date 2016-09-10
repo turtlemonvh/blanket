@@ -7,3 +7,4 @@ blanket.toml
 blanket.yml
 blanket.yaml
 worker.*.log
+.vagrant
