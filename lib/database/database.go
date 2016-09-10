@@ -57,7 +57,7 @@ var (
 )
 
 const (
-	FAR_FUTURE_SECONDS   = int64(60 * 60 * 24 * 365 * 100)
+	FAR_FUTURE_SECONDS = int64(60 * 60 * 24 * 365 * 100)
 )
 
 // FIXME: will have to capitalize all these since used outside this module
@@ -76,8 +76,9 @@ type TaskSearchConf struct {
 }
 
 type NotFoundError string
+
 func (e NotFoundError) Error() string {
-    return fmt.Sprintf("Not found: %s", string(e))
+	return fmt.Sprintf("Not found: %s", string(e))
 }
 
 // Create a search configuration object out of a request context

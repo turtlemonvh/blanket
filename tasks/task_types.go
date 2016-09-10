@@ -104,7 +104,7 @@ func ReadTaskTypeFromFilepath(filepath string) (TaskType, error) {
 	}
 	defer configFile.Close()
 
-	tt, err := readTaskType(configFile)
+	tt, err := ReadTaskType(configFile)
 	if err != nil {
 		// FIXME: Handle this more elegantly
 		return TaskType{}, err
@@ -120,7 +120,7 @@ func ReadTaskTypeFromFilepath(filepath string) (TaskType, error) {
 	return tt, nil
 }
 
-func readTaskType(configFile io.Reader) (TaskType, error) {
+func ReadTaskType(configFile io.Reader) (TaskType, error) {
 	tt := TaskType{}
 	tt.Config = viper.New()
 	tt.Config.SetConfigType("toml")
