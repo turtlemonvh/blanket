@@ -3,12 +3,15 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/lib/bolt"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/queue"
 	"github.com/turtlemonvh/blanket/tasks"
+	"github.com/turtlemonvh/blanket/worker"
+	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/tylerb/graceful.v1"
 	"io/ioutil"
 	"net/http"
@@ -100,6 +103,8 @@ func assertResponseLength(t *testing.T, req *http.Request, nitems int) {
 
 // Requires turning off firewall on mac
 func TestGetTasks(t *testing.T) {
+	var err error
+
 	// Run server
 	viper.Set("port", TEST_SERVER_PORT)
 	S, config := NewTestServer()
@@ -126,9 +131,11 @@ func TestGetTasks(t *testing.T) {
 	assert.Equal(t, nil, err)
 
 	// Add some tasks
+	//var tsks []*tasks.Task
 	for i := 0; i < 10; i++ {
 		tsk, err := tskt.NewTask(make(map[string]string))
 		assert.Equal(t, nil, err)
+		//tsks = append(tsks, &tsk)
 
 		err = config.q.AddTask(&tsk)
 		assert.Equal(t, nil, err)
@@ -141,5 +148,40 @@ func TestGetTasks(t *testing.T) {
 	assertResponseLength(t, req, 0)
 	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=WAITING", nil)
 	assertResponseLength(t, req, 10)
+
+	// Create a worker so that we can claim tasks for it
+	wconf := worker.WorkerConf{
+		Id:      bson.NewObjectId(),
+		Tags:    []string{},
+		Stopped: false,
+	}
+	err = config.db.UpdateWorker(&wconf)
+	assert.Equal(t, nil, err)
+
+	// List workers
+	req, _ = http.NewRequest("GET", "http://localhost:6777/worker", nil)
+	assertResponseLength(t, req, 1)
+
+	// Move a few tasks forward
+	claimUrl := fmt.Sprintf("http://localhost:6777/task/claim/%s", wconf.Id.Hex())
+	c := http.Client{}
+	var resp *http.Response
+	for i := 0; i < 5; i++ {
+		req, _ = http.NewRequest("POST", claimUrl, nil)
+
+		resp, err = c.Do(req)
+		assert.Equal(t, nil, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	}
+
+	// Check counts
+	req, _ = http.NewRequest("GET", "http://localhost:6777/task", nil)
+	assertResponseLength(t, req, 10)
+	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=RUNNING", nil)
+	assertResponseLength(t, req, 0)
+	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=CLAIMED", nil)
+	assertResponseLength(t, req, 5)
+	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=WAITING", nil)
+	assertResponseLength(t, req, 5)
 
 }
