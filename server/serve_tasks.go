@@ -69,8 +69,8 @@ func getTasks(c *gin.Context) {
 	// Need to decide how we want to handle the display of queued tasks
 	searchDB := true
 
-	ntt := len(tc.AllowedTaskTypes)
-	if ntt == 0 || tc.AllowedTaskTypes["WAITING"] {
+	ntt := len(tc.AllowedTaskStates)
+	if ntt == 0 || tc.AllowedTaskStates["WAITING"] {
 		var qresult []tasks.Task
 		var nfoundq int
 		searchDB = ntt == 0 || ntt > 1

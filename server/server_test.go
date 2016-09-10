@@ -95,7 +95,7 @@ func assertResponseLength(t *testing.T, req *http.Request, nitems int) {
 	assert.Equal(t, nil, err)
 
 	// Check # records
-	assert.Equal(t, len(results), nitems)
+	assert.Equal(t, nitems, len(results))
 }
 
 // Requires turning off firewall on mac
@@ -113,15 +113,11 @@ func TestGetTasks(t *testing.T) {
 	// FIXME: Make this more robust by checking in a loop
 	time.Sleep(time.Second)
 
-	// Tasks from all sources
+	// Tasks from all sources, DB, and Q
 	req, _ = http.NewRequest("GET", "http://localhost:6777/task", nil)
 	assertResponseLength(t, req, 0)
-
-	// Tasks from DB only
 	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=RUNNING", nil)
 	assertResponseLength(t, req, 0)
-
-	// Tasks from Q only
 	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=WAITING", nil)
 	assertResponseLength(t, req, 0)
 
@@ -130,7 +126,7 @@ func TestGetTasks(t *testing.T) {
 	assert.Equal(t, nil, err)
 
 	// Add some tasks
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		tsk, err := tskt.NewTask(make(map[string]string))
 		assert.Equal(t, nil, err)
 
@@ -140,10 +136,10 @@ func TestGetTasks(t *testing.T) {
 
 	// Check counts
 	req, _ = http.NewRequest("GET", "http://localhost:6777/task", nil)
-	assertResponseLength(t, req, 100)
-	//req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=RUNNING", nil)
-	//assertResponseLength(t, req, 0)
-	//req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=WAITING", nil)
-	//assertResponseLength(t, req, 100)
+	assertResponseLength(t, req, 10)
+	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=RUNNING", nil)
+	assertResponseLength(t, req, 0)
+	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=WAITING", nil)
+	assertResponseLength(t, req, 10)
 
 }
