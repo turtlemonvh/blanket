@@ -12,8 +12,7 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/turtlemonvh/blanket/lib/database"
-	"github.com/turtlemonvh/blanket/lib/queue"
+	bolt "github.com/turtlemonvh/blanket/lib/bolt"
 	"github.com/turtlemonvh/blanket/server"
 	"os"
 )
@@ -99,12 +98,12 @@ var RootCmd = &cobra.Command{
 		InitializeLogging()
 
 		// Connect to database
-		boltdb := database.OpenBoltDatabase()
-		defer boltdb.Close()
+		db := bolt.OpenBoltDatabase()
+		defer db.Close()
 
 		// DB and Q initializers are fatal if they don't succeed
 		// Serve gracefully
-		s := server.Serve(database.NewBlanketBoltDB(boltdb), queue.NewBlanketBoltQueue(boltdb))
+		s := server.Serve(bolt.NewBlanketBoltDB(db), bolt.NewBlanketBoltQueue(db))
 		s.ListenAndServe()
 	},
 }

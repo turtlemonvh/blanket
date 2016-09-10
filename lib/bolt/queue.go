@@ -1,10 +1,11 @@
-package queue
+package bolt
 
 import (
 	"encoding/json"
 	"fmt"
 	"github.com/boltdb/bolt"
 	"github.com/turtlemonvh/blanket/lib/database"
+	"github.com/turtlemonvh/blanket/lib/queue"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 	"gopkg.in/mgo.v2/bson"
@@ -17,7 +18,7 @@ type BlanketBoltQueue struct {
 	db *bolt.DB
 }
 
-func NewBlanketBoltQueue(db *bolt.DB) BlanketQueue {
+func NewBlanketBoltQueue(db *bolt.DB) queue.BlanketQueue {
 	// Ensure required buckets exist
 	db.Update(func(tx *bolt.Tx) error {
 		var err error
@@ -46,7 +47,7 @@ const (
 	BOLTDB_TASK_QUEUE_BUCKET = "task-queue"
 )
 
-func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
+func fetchTaskQueueBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
 	b = tx.Bucket([]byte(BOLTDB_TASK_QUEUE_BUCKET))
 	if b == nil {
 		err = fmt.Errorf("Database format error: Bucket '%s' does not exist.", BOLTDB_TASK_QUEUE_BUCKET)
@@ -58,7 +59,7 @@ func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
 // Searching for a string of tags may be more complex on some platforms (e.g. rabbitmq; may require scanning)
 func (Q *BlanketBoltQueue) AddTask(t *tasks.Task) error {
 	return Q.db.Update(func(tx *bolt.Tx) error {
-		b, err := fetchTaskBucket(tx)
+		b, err := fetchTaskQueueBucket(tx)
 		if b == nil {
 			return err
 		}
@@ -79,7 +80,7 @@ func (Q *BlanketBoltQueue) ListTasks(tags []string, limit int) ([]tasks.Task, in
 		SmallestId: bson.NewObjectIdWithTime(time.Unix(0, 0)),
 		LargestId:  bson.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),
 	}
-	return database.FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
+	return FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
 }
 
 // Optional function that is called by a background daemon to move tasks that were supposed to be handled by a worker
@@ -115,7 +116,7 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 		SmallestId:    bson.NewObjectIdWithTime(time.Unix(0, 0)),
 		LargestId:     bson.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),
 	}
-	ts, _, err := database.FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
+	ts, _, err := FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
 	if err != nil {
 		return task, ackCallback, nackCallback, err
 	}
@@ -131,7 +132,7 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 	// Mark task as claimed by this worker, and mark with last modified time
 	// Cleanup task will handle these markers hanging around in the database
 	err = Q.db.Update(func(tx *bolt.Tx) error {
-		b, err := fetchTaskBucket(tx)
+		b, err := fetchTaskQueueBucket(tx)
 		if b == nil {
 			return err
 		}
@@ -155,7 +156,7 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 		// A function they can call after successfully claiming a task; ack
 		// Removes item this bolt bucket
 		return Q.db.Update(func(tx *bolt.Tx) error {
-			b, err := fetchTaskBucket(tx)
+			b, err := fetchTaskQueueBucket(tx)
 			if b == nil {
 				return err
 			}
@@ -166,7 +167,7 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 		// A function to free the item back for processing in the queue; unack
 		// Resets the worker field of this task to nothing
 		return Q.db.Update(func(tx *bolt.Tx) error {
-			b, err := fetchTaskBucket(tx)
+			b, err := fetchTaskQueueBucket(tx)
 			if b == nil {
 				return err
 			}

@@ -125,10 +125,11 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 			Addr:    fmt.Sprintf(":%d", viper.GetInt("port")),
 			Handler: r,
 		},
-		BeforeShutdown: func() {
+		BeforeShutdown: func() bool {
 			// Called first
 			log.Warn("Called BeforeShutdown")
 			tailed_file.StopAll()
+			return false
 		},
 		ShutdownInitiated: func() {
 			// Called second

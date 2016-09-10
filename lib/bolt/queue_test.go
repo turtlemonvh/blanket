@@ -1,4 +1,4 @@
-package queue
+package bolt
 
 import (
 	"github.com/stretchr/testify/assert"

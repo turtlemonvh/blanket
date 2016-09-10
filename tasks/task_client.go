@@ -14,7 +14,7 @@ import (
 
 // Refresh information about this task by pulling from the blanket server
 func (t *Task) Refresh() error {
-	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/", viper.GetInt("port"), t.Id.Hex())
+	reqURL := fmt.Sprintf("http://localhost:%d/task/%s", viper.GetInt("port"), t.Id.Hex())
 	res, err := http.Get(reqURL)
 	if err != nil {
 		return err

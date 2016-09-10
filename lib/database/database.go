@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cast"
 	"github.com/turtlemonvh/blanket/lib"
@@ -55,6 +56,10 @@ var (
 	IdBytes = lib.IdBytes
 )
 
+const (
+	FAR_FUTURE_SECONDS   = int64(60 * 60 * 24 * 365 * 100)
+)
+
 // FIXME: will have to capitalize all these since used outside this module
 type TaskSearchConf struct {
 	JustCounts        bool
@@ -68,6 +73,11 @@ type TaskSearchConf struct {
 	LargestId         bson.ObjectId
 	AllowedTaskStates map[string]bool
 	AllowedTaskTypes  map[string]bool
+}
+
+type NotFoundError string
+func (e NotFoundError) Error() string {
+    return fmt.Sprintf("Not found: %s", string(e))
 }
 
 // Create a search configuration object out of a request context

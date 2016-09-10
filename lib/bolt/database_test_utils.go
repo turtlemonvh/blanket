@@ -1,14 +1,15 @@
-package database
+package bolt
 
 import (
 	"fmt"
 	"github.com/boltdb/bolt"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"io/ioutil"
 	"os"
 	"time"
 )
 
-func NewTestDB() (BlanketDB, func()) {
+func NewTestDB() (database.BlanketDB, func()) {
 	// Retrieve a temporary path.
 	f, err := ioutil.TempFile("", "")
 	if err != nil {

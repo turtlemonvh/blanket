@@ -1,4 +1,4 @@
-package database
+package bolt
 
 import (
 	"github.com/stretchr/testify/assert"

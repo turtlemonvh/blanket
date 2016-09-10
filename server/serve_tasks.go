@@ -239,12 +239,40 @@ func runTask(c *gin.Context) {
 	c.JSON(http.StatusOK, "{}")
 }
 
-// FIXME: Implement this
+// FIXME: Implement stopping when queued
 // Called for stopping
 func cancelTask(c *gin.Context) {
 	// Upsert in database, setting any item that has that Id to STOPPED state
-	// If it doesn't exist, the 'tombstone' will just have the taskId and state=STOPPED
-	c.JSON(http.StatusInternalServerError, "{}")
+	c.Header("Content-Type", "application/json")
+
+	var err error
+	var taskId bson.ObjectId
+	taskId, err = getTaskId(c)
+	if err != nil {
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
+		return
+	}
+
+	var task tasks.Task
+	task, err = DB.GetTask(taskId)
+	if err != nil {
+		c.String(http.StatusNotFound, MakeErrorString(err.Error()))
+		return
+	}
+
+	if task.State == "RUNNING" {
+		err = DB.FinishTask(taskId, "STOPPED")
+		if err != nil {
+			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+			return
+		} else {
+			c.String(http.StatusOK, `{}`)
+			return
+		}
+	} else {
+		// If it doesn't exist in the database, the 'tombstone' will just have the taskId and state=STOPPED
+		c.JSON(http.StatusNotImplemented, `{"error": "Functionality not implemented"}`)
+	}
 }
 
 // Set the task to a terminal state like: STOPPING,

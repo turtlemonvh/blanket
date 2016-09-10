@@ -3,8 +3,7 @@ package server
 import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
-	"github.com/turtlemonvh/blanket/lib/database"
-	"github.com/turtlemonvh/blanket/lib/queue"
+	"github.com/turtlemonvh/blanket/lib/bolt"
 	"gopkg.in/tylerb/graceful.v1"
 	"io/ioutil"
 	"net/http"
@@ -18,8 +17,8 @@ const TEST_SERVER_PORT = 6777
 // Returns a server that can be run and killed
 // Uses boltdb for backend
 func NewTestServer() (*graceful.Server, func()) {
-	DB, DBCloser := database.NewTestDB()
-	Q, QCloser := queue.NewTestQueue()
+	DB, DBCloser := bolt.NewTestDB()
+	Q, QCloser := bolt.NewTestQueue()
 	return Serve(DB, Q), func() {
 		defer DBCloser()
 		defer QCloser()
@@ -37,10 +36,11 @@ func assertEmptyListResponse(t *testing.T, req *http.Request) {
 	assert.Equal(t, err, nil)
 	assert.Equal(t, resp.StatusCode, http.StatusOK)
 	body, err = ioutil.ReadAll(resp.Body)
-	assert.Equal(t, string(body), "[]")
 	assert.Equal(t, err, nil)
+	assert.Equal(t, string(body), "[]")
 }
 
+// Requires turning off firewall on mac
 func TestGetTasks(t *testing.T) {
 	// Run server
 	S, closefn := NewTestServer()

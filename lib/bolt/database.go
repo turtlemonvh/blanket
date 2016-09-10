@@ -1,4 +1,4 @@
-package database
+package bolt
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"github.com/boltdb/bolt"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 	"gopkg.in/mgo.v2/bson"
@@ -17,6 +19,10 @@ const (
 	BOLTDB_WORKER_BUCKET = "workers"
 	BOLTDB_TASK_BUCKET   = "tasks"
 	FAR_FUTURE_SECONDS   = int64(60 * 60 * 24 * 365 * 100)
+)
+
+var (
+	IdBytes = lib.IdBytes
 )
 
 // Concrete functions
@@ -32,7 +38,7 @@ func OpenBoltDatabase() *bolt.DB {
 	return db
 }
 
-func NewBlanketBoltDB(db *bolt.DB) BlanketDB {
+func NewBlanketBoltDB(db *bolt.DB) database.BlanketDB {
 	// Ensure required buckets exist
 	db.Update(func(tx *bolt.Tx) error {
 		var err error
@@ -147,6 +153,10 @@ func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
 
 func fetchTaskFromBucket(taskId *bson.ObjectId, b *bolt.Bucket) (t tasks.Task, err error) {
 	result := b.Get(IdBytes(*taskId))
+	if result == nil {
+		err = database.NotFoundError(fmt.Sprintf("No item for id %v", taskId))
+		return
+	}
 	err = json.Unmarshal(result, &t)
 	return
 }
@@ -168,7 +178,7 @@ func (DB *BlanketBoltDB) GetTask(taskId bson.ObjectId) (tasks.Task, error) {
 // Returns a list of tasks, the number found, and any error
 // FIXME: Move FindTasksInBoltDB and ModifyTaskInBoltTransaction to their own helper library
 // FIXME: Return task objects in a slice instead of a string; may actually want to send on a channel for streaming
-func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *TaskSearchConf) ([]tasks.Task, int, error) {
+func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *database.TaskSearchConf) ([]tasks.Task, int, error) {
 	var err error
 
 	result := []tasks.Task{}
@@ -320,7 +330,7 @@ func ModifyTaskInBoltTransaction(db *bolt.DB, taskId *bson.ObjectId, f func(t *t
 	return err
 }
 
-func (DB *BlanketBoltDB) GetTasks(tc *TaskSearchConf) ([]tasks.Task, int, error) {
+func (DB *BlanketBoltDB) GetTasks(tc *database.TaskSearchConf) ([]tasks.Task, int, error) {
 	return FindTasksInBoltDB(DB.db, BOLTDB_TASK_BUCKET, tc)
 }
 
@@ -367,7 +377,7 @@ func (DB *BlanketBoltDB) StartTask(t *tasks.Task) error {
 }
 
 // This should be done as an upsert or within a transaction
-func (DB *BlanketBoltDB) RunTask(taskId bson.ObjectId, fields *TaskRunConfig) error {
+func (DB *BlanketBoltDB) RunTask(taskId bson.ObjectId, fields *database.TaskRunConfig) error {
 	// Set lots of fields
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
 		if t.State != "CLAIMED" {
