@@ -69,7 +69,12 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	// Make the result dir browseable
 	r.StaticFS("/results", gin.Dir(viper.GetString("tasks.resultsPath"), true))
 
-	r.GET("/", func(c *gin.Context) {
+	// FIXME: Not playing with angular js routes correctly
+	// https://godoc.org/github.com/gin-gonic/gin#RouterGroup.StaticFS
+	// https://github.com/elazarl/go-bindata-assetfs#using-assetfs-in-your-code
+	r.StaticFS("/ui", assetFS())
+
+	r.GET("/version", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"version": "0.1",
 			"name":    "blanket",
@@ -129,7 +134,7 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 			// Called first
 			log.Warn("Called BeforeShutdown")
 			tailed_file.StopAll()
-			return false
+			return true
 		},
 		ShutdownInitiated: func() {
 			// Called second
