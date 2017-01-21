@@ -1,6 +1,7 @@
 types
 results
 blanket
+blanket-*
 blanket.db
 blanket.json
 blanket.toml
