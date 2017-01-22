@@ -24,7 +24,7 @@ EOF
 ./blanket
 ```
 
-Once the server is running, you can view tasks
+Once the server is running, you can view the web ui at http://localhost:8773/.  You can also interact with tasks
 
 ```bash
 curl -s -X GET localhost:8773/task/ | jq .

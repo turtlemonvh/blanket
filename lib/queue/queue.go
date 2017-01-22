@@ -12,7 +12,6 @@ CAVEATS:
 - queues can define their own serialization for task objects; we use json strings stored as byte slices in boltdb
 
 FIXME:
-- list tasks
 - list and claim in 1 step for worker instead of claim by id
 
 */

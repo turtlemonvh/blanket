@@ -10,6 +10,7 @@ import (
 	"net/url"
 )
 
+// FIXME: Move to client package
 // Functions that work over http to transition task state
 
 // Refresh information about this task by pulling from the blanket server

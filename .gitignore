@@ -9,3 +9,5 @@ blanket.yml
 blanket.yaml
 worker.*.log
 .vagrant
+tests.xml
+

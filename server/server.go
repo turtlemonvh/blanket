@@ -87,19 +87,18 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	r.GET("/task_type/:name", getTaskType)
 
 	// Called by user
+	r.GET("/task/", getTasks)   // fixme; pull from queue or database or both
+	r.GET("/task/:id", getTask) // fetch just 1 by id
 	r.POST("/task/", postTask)            // add a new task to the queue
 	r.DELETE("/task/:id", removeTask)     // delete all information, including killing if running
 	r.GET("/task/:id/log", streamTaskLog) // stdout log
 	r.PUT("/task/:id/cancel", cancelTask) // stop execution of a task; will be moved to state STOPPED
 
-	r.GET("/task/", getTasks)   // fixme; pull from queue or database or both
-	r.GET("/task/:id", getTask) // fetch just 1 by id
-
 	// Called by worker
 	r.POST("/task/claim/:workerid", claimTask)      // claim a task; called by a worker
 	r.PUT("/task/:id/run", runTask)                 // start running a task
-	r.PUT("/task/:id/finish", finishTask)           // update state
 	r.PUT("/task/:id/progress", updateTaskProgress) // update progress
+	r.PUT("/task/:id/finish", finishTask)           // update state
 
 	// FIXME: Pause worker
 	r.GET("/worker/:id", getWorker)
