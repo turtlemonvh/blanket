@@ -18,7 +18,7 @@ Task states
 
 ## Basic Task Flow
 
-This is what the workflow looks like without any user intervention or special failure modes.
+This is what the workflow looks like without any user intervention or failures.
 
 ### 0. Preconditions / Assumptions
 
@@ -27,12 +27,12 @@ We start out with the assumptions that
 1. Blanket itself is running.
 1. Workers are running, and they can consume tasks.
 
-### 1. Task is published
+### 1. User posts task
 
 User sends `POST /task/`.  They receive back an id for their task.
 The task is put in both the database and the queue.  The write to the database is performed first.
 
-### 2. Task is claimed by a worker
+### 2. Worker claims task
 
 Workers do not claim specific tasks. They send a specification of their capabilities to the server via `POST /task/claim/:workerId`. The server responds to this by executing a series of actions.
 
@@ -40,7 +40,7 @@ Workers do not claim specific tasks. They send a specification of their capabili
 1. Insert that task into the database in the `CLAIMED` state, and ack the message from the queue.
 1. Return the task id of the claimed task to the worker.
 
-### 3. Worker prepares task execution
+### 3. Worker begins task execution
 
 Upon receipt of this task id from the server, the worker starts performing its own series of actions to advance the task state.
 
@@ -49,7 +49,11 @@ Upon receipt of this task id from the server, the worker starts performing its o
 1. Start executing the main task command.
 1. Send a `PUT /task/:id/run` back to the server to request the server advances the task state to `RUNNING`.
 
+> Note that **the task config is not locked when the task is added**, but when it is executed. If you change the input files in the time between when a task is added and when it is executed, you will execute the new version of the task. This may change in the future.
+
 During execution, the worker may send multiple requests to `PUT /task/:id/progress` to update the percent completion of the task, or adjust other task attributes.
+
+### 4. Worker completes task execution
 
 Assuming the task execution completes without any errors, timing out, or being stopped by the user, the worker will then
 

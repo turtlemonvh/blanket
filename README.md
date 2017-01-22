@@ -116,28 +116,25 @@ Use "blanket [command] --help" for more information about a command.
 
 ## Specs
 
-### Implementation Details
+See [the docs directory](https://github.com/turtlemonvh/blanket-api/tree/master/docs) for more detailed information about the design of blanket.
+
+### Design Goals
 
 > This is how we want it to work, not necessarily how it works now.
 
-* The task config is not locked when the task is added, but when it is executed
-    * if you change the input files in the time between when a task is added and when it is executed, you will execute the new version of the task
 * TOML files drive all configuration for tasks
     * We'll probably eventually have a web ui for drafting these
-    * In the short term, we'll have a lot of examples and tests
+    * In the short term, we'll have examples and tests
 * Most components should be pluggable
     * The default installation will be super simple, but we want to make it very easy to customize
     * Some customization
         * Task types, database driver, queue driver
-    * We will probably do this by defining types in msgpack files and allowing anything in any language to evaluate and pass items back and forth
-* The web UI is optional, and not included by default
-    * We include an easy to use json/rest interface
-    * We will probably include a simple curses interface too
-    * Enabling the web UI is just 1 command to grab the files, or you can place them in the required directory
-* It works well with other queuing systems
-    * You can use it to distribute tasks over a TORQUE queue or similar
+* The web UI is optional
+    * Everything can be done without it, easily
+    * The main feature is a json/rest interface
+* It should work well with other queuing systems
+    * E.g., you can use it to distribute tasks over a TORQUE queue or similar
 * It's easy to get your data out
-    * It's just a bunch of json and a few tar.gzs for the directory contents
-
+    * It's just a bunch of json
 
 
