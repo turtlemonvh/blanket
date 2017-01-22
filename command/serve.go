@@ -16,7 +16,7 @@ var RootCmd = &cobra.Command{
 		InitializeLogging()
 
 		// Connect to database
-		db := bolt.OpenBoltDatabase()
+		db := bolt.MustOpenBoltDatabase()
 		defer db.Close()
 
 		// DB and Q initializers are fatal if they don't succeed

@@ -131,7 +131,7 @@ The first draft of blanket was written in python and used celery for queuing. It
 
 This was my first major project in Go, and the code base is still recovering from some early "experiments".  It is still a bit rough around the edges, but I do use blanket almost every day at work to manage long running tasks that I'd like to keep a record of, like code deployments.  In this regard, it's a bit like a light-weight [jenkins](https://jenkins.io/).  I plan to continue working on blanket, and I expect it will become a major component of many of my future side projects.
 
-If you are interested in using blanket for a project and want to ask whether blanket may be a good match, you can either submit a github issue with your question or find me on twitter [@turtlemonvh](https://twitter.com/turtlemonvh).
+If you are interested in using blanket for a project and want to ask whether blanket may be a good match, you can either [submit a github issue with your question](https://github.com/turtlemonvh/blanket-api/issues) or find me on twitter [@turtlemonvh](https://twitter.com/turtlemonvh).
 
 ### Design Goals
 

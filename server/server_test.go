@@ -137,6 +137,9 @@ func TestGetTasks(t *testing.T) {
 		assert.Equal(t, nil, err)
 		//tsks = append(tsks, &tsk)
 
+		err = config.db.SaveTask(&tsk)
+		assert.Equal(t, nil, err)
+
 		err = config.q.AddTask(&tsk)
 		assert.Equal(t, nil, err)
 	}

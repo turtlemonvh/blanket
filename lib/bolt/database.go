@@ -30,7 +30,7 @@ type BlanketBoltDB struct {
 	db *bolt.DB
 }
 
-func OpenBoltDatabase() *bolt.DB {
+func MustOpenBoltDatabase() *bolt.DB {
 	db, err := bolt.Open(viper.GetString("database"), 0666, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
 		log.Fatal(err)
@@ -360,12 +360,13 @@ func (DB *BlanketBoltDB) UpdateTaskProgress(taskId bson.ObjectId, progress int) 
 //  - worker failed to parse worker object
 //  - worker crashed trying to run the task
 func (DB *BlanketBoltDB) CleanupStalledTasks() error {
+	// FIXME: Implement me
 	return nil
 }
 
 // This will be called on a task pulled out of the queue
 // Any task that, for any reason, happens to exist with the same id should be overwritten
-func (DB *BlanketBoltDB) StartTask(t *tasks.Task) error {
+func (DB *BlanketBoltDB) SaveTask(t *tasks.Task) error {
 	// Just save in database
 	return DB.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := fetchTaskBucket(tx)
@@ -399,7 +400,7 @@ func (DB *BlanketBoltDB) RunTask(taskId bson.ObjectId, fields *database.TaskRunC
 func (DB *BlanketBoltDB) FinishTask(taskId bson.ObjectId, newState string) error {
 	// Set lots of fields
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
-		if t.State != "RUNNING" {
+		if t.State != "RUNNING" && t.State != "WAITING" {
 			return fmt.Errorf("Task found in unexpected state; found '%s', expected 'RUNNING'", t.State)
 		}
 		t.State = newState

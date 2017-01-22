@@ -45,11 +45,12 @@ func getTaskId(c *gin.Context) (bson.ObjectId, error) {
  * Request handlers
  */
 
+// Get all tasks
+// Only looks in the database
 func getTasks(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	tc := database.TaskSearchConfFromContext(c)
-
 	log.WithFields(log.Fields{
 		"requiredTaskTags": tc.RequiredTags,
 		"maxTaskTags":      tc.MaxTags,
@@ -61,42 +62,14 @@ func getTasks(c *gin.Context) {
 		"justCounts":       tc.JustCounts,
 	}).Debug("Task request params")
 
-	result := []tasks.Task{}
-	nfound := 0
-	var err error
-
-	// FIXME: Cleanup, parallelize, merge
-	// Need to decide how we want to handle the display of queued tasks
-	searchDB := true
-
-	ntt := len(tc.AllowedTaskStates)
-	if ntt == 0 || tc.AllowedTaskStates["WAITING"] {
-		var qresult []tasks.Task
-		var nfoundq int
-		searchDB = ntt == 0 || ntt > 1
-		qresult, nfoundq, err = Q.ListTasks(tc.RequiredTags, tc.Limit)
-		if err != nil {
-			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
-			return
-		}
-		result = append(result, qresult...)
-		nfound += nfoundq
-	}
-
-	if searchDB {
-		var dbresult []tasks.Task
-		var nfounddb int
-		dbresult, nfounddb, err = DB.GetTasks(tc)
-		if err != nil {
-			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
-			return
-		}
-		result = append(result, dbresult...)
-		nfound += nfounddb
+	result, nfounddb, err := DB.GetTasks(tc)
+	if err != nil {
+		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		return
 	}
 
 	if tc.JustCounts {
-		c.String(http.StatusOK, cast.ToString(nfound))
+		c.String(http.StatusOK, cast.ToString(nfounddb))
 	} else {
 		c.JSON(http.StatusOK, result)
 	}
@@ -162,6 +135,30 @@ func claimTask(c *gin.Context) {
 		return
 	}
 
+	// Fetch from database to make sure it wasn't STOPPED
+	dbt, err := DB.GetTask(t.Id)
+	if err != nil {
+		// FIXME: Need to distibguish between not found and database error
+		// If not found, should: ack message, return message saying task was probably deleted from db
+		errMsg = fmt.Sprintf("Could not fetch task from database to ensure it was not stopped :: %s", err.Error())
+		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
+		return
+	}
+
+	// Handle tasks that have been canceled when queued
+	if dbt.State == "STOPPED" {
+		// Need to grab a new one
+		errMsg = fmt.Sprintf("Task was stopped")
+		if err = ackCb(); err != nil {
+			errMsg = fmt.Sprintf("Encountered another error while handling stopped task :: %s", err.Error())
+		}
+		// FIXME: Maybe return a status code that indicates the worker should try again immediately?
+		// Or can actually just fetch again
+		// For now we just return a 404 - the worker will try again
+		c.String(http.StatusNotFound, MakeErrorString(errMsg))
+		return
+	}
+
 	// Add fields
 	t.State = "CLAIMED"
 	t.Progress = 0
@@ -174,15 +171,8 @@ func claimTask(c *gin.Context) {
 	t.Pid = 0
 	t.Timeout = 0
 
-	// FIXME: Check if task has been canceled
-	// http://stackoverflow.com/questions/3758576/how-to-retract-a-message-in-rabbitmq
-	// There will be a tombstone in the database marking that task as canceled
-	// We will just want to merge details in the database, because all we'll have when canceling is a taskId
-	// - we want to do this in the db inside a transaction
-	// - we do not want to nack the task if this happens, so we need to distinguish between a error to save and a 'stopped' error
-
 	// Save to database
-	err = DB.StartTask(&t)
+	err = DB.SaveTask(&t)
 	if err != nil {
 		errMsg = fmt.Sprintf("Error saving to database :: %s", err.Error())
 		err = nackCb()
@@ -207,7 +197,7 @@ func claimTask(c *gin.Context) {
 // FIXME: Should we set ExecEnv and Tags here?
 // - tags should already be set at creation time
 // - execEnv should be more dynamic than it is now
-func runTask(c *gin.Context) {
+func markTaskAsRunning(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
@@ -239,7 +229,6 @@ func runTask(c *gin.Context) {
 	c.JSON(http.StatusOK, "{}")
 }
 
-// FIXME: Implement stopping when queued
 // Called for stopping
 func cancelTask(c *gin.Context) {
 	// Upsert in database, setting any item that has that Id to STOPPED state
@@ -256,11 +245,12 @@ func cancelTask(c *gin.Context) {
 	var task tasks.Task
 	task, err = DB.GetTask(taskId)
 	if err != nil {
+		// Should already be there since we will write to db first before adding to queue
 		c.String(http.StatusNotFound, MakeErrorString(err.Error()))
 		return
 	}
 
-	if task.State == "RUNNING" {
+	if task.State == "RUNNING" || task.State == "WAITING" {
 		err = DB.FinishTask(taskId, "STOPPED")
 		if err != nil {
 			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
@@ -276,7 +266,7 @@ func cancelTask(c *gin.Context) {
 }
 
 // Set the task to a terminal state like: STOPPING,
-func finishTask(c *gin.Context) {
+func markTaskAsFinished(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
@@ -363,6 +353,7 @@ func postTask(c *gin.Context) {
 		}
 	}
 
+	// FIXME: Decode directly to object instead of to map[string]interface{}
 	decoder := json.NewDecoder(taskData)
 	err = decoder.Decode(&req)
 	if err != nil {
@@ -450,6 +441,13 @@ func postTask(c *gin.Context) {
 			defer writtenUploadedFile.Close()
 			io.Copy(writtenUploadedFile, uploadedFile)
 		}
+	}
+
+	// Add to database
+	err = DB.SaveTask(&t)
+	if err != nil {
+		errMsg := fmt.Sprintf("Error saving to database :: %s", err.Error())
+		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
 	}
 
 	// Add to queue
@@ -543,5 +541,4 @@ func streamTaskLog(c *gin.Context) {
 		return true
 	}
 	streamLog(c, sub, isComplete)
-
 }

@@ -71,18 +71,6 @@ func (Q *BlanketBoltQueue) AddTask(t *tasks.Task) error {
 	})
 }
 
-func (Q *BlanketBoltQueue) ListTasks(tags []string, limit int) ([]tasks.Task, int, error) {
-	tc := &database.TaskSearchConf{
-		Limit:        limit,
-		ReverseSort:  true,
-		RequiredTags: tags,
-		//JustUnclaimed: true,
-		SmallestId: bson.NewObjectIdWithTime(time.Unix(0, 0)),
-		LargestId:  bson.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),
-	}
-	return FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
-}
-
 // Optional function that is called by a background daemon to move tasks that were supposed to be handled by a worker
 // but also are still in the queue (i.e. ack or nack function never got called)
 // - In rabbitmq and other queues this is handled for you with a configurable ttl on ack requests

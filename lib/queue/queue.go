@@ -18,7 +18,6 @@ FIXME:
 
 type BlanketQueue interface {
 	AddTask(task *tasks.Task) error
-	ListTasks(tags []string, limit int) ([]tasks.Task, int, error)
 	ClaimTask(worker *worker.WorkerConf) (tasks.Task, func() error, func() error, error)
 	CleanupUnclaimedTasks() error
 }
