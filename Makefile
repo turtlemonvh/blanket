@@ -27,8 +27,8 @@ setup-bindata:
 	go get github.com/elazarl/go-bindata-assetfs/...
 
 update-bindata:
-	# go-bindata-assetfs -pkg=server .
-	cd ${BLANKET_UI_PATH}/html && go-bindata-assetfs -pkg=server public/...
+	# Change 'public' to 'dev' for un-minified code
+	cd ${BLANKET_UI_PATH}/html && go-bindata-assetfs -pkg=server dev/...
 	mv ${BLANKET_UI_PATH}/html/bindata_assetfs.go server
 
 linux: 
