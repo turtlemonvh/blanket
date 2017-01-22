@@ -7,6 +7,7 @@ VET_REPORT = vet.report
 TEST_REPORT = tests.xml
 GOARCH = amd64
 
+# Path to blanket UI: https://github.com/turtlemonvh/blanket-ui
 BLANKET_UI_PATH=/Users/timothy/Projects/blanket-ui
 
 COMMIT=$(shell git rev-parse HEAD)
@@ -28,8 +29,8 @@ setup-bindata:
 
 update-bindata:
 	# Change 'public' to 'dev' for un-minified code
-	cd ${BLANKET_UI_PATH}/html && go-bindata-assetfs -pkg=server dev/...
-	mv ${BLANKET_UI_PATH}/html/bindata_assetfs.go server
+	cd ${BLANKET_UI_PATH} && go-bindata-assetfs -pkg=server dev/...
+	mv ${BLANKET_UI_PATH}/bindata_assetfs.go server
 
 linux: 
 	GOOS=linux GOARCH=${GOARCH} go build ${LDFLAGS} -o ${BINARY}-linux-${GOARCH} .
