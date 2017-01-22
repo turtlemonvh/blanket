@@ -50,7 +50,7 @@ const (
 func fetchTaskQueueBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
 	b = tx.Bucket([]byte(BOLTDB_TASK_QUEUE_BUCKET))
 	if b == nil {
-		err = fmt.Errorf("Database format error: Bucket '%s' does not exist.", BOLTDB_TASK_QUEUE_BUCKET)
+		err = MakeBucketDNEError(BOLTDB_TASK_QUEUE_BUCKET)
 	}
 	return
 }

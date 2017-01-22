@@ -13,11 +13,9 @@ import (
 	"time"
 )
 
-var (
-	BucketDNEError error
-)
+type BucketDNEError error
 
-func MakeBucketDNEError(bucketName string) error {
+func MakeBucketDNEError(bucketName string) BucketDNEError {
 	return fmt.Errorf("Database format error: Bucket '%s' does not exist.", bucketName)
 }
 
@@ -43,7 +41,7 @@ func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
 func fetchTaskFromBucket(taskId *bson.ObjectId, b *bolt.Bucket) (t tasks.Task, err error) {
 	result := b.Get(IdBytes(*taskId))
 	if result == nil {
-		err = database.NotFoundError(fmt.Sprintf("No item for id %v", taskId))
+		err = database.ItemNotFoundError(fmt.Sprintf("No item for id %v", taskId))
 		return
 	}
 	err = json.Unmarshal(result, &t)

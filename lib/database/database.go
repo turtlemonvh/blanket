@@ -75,10 +75,10 @@ type TaskSearchConf struct {
 	AllowedTaskTypes  map[string]bool
 }
 
-type NotFoundError string
+type ItemNotFoundError string
 
-func (e NotFoundError) Error() string {
-	return fmt.Sprintf("Not found: %s", string(e))
+func (e ItemNotFoundError) Error() string {
+	return fmt.Sprintf("Item not found: %s", string(e))
 }
 
 // Create a search configuration object out of a request context
