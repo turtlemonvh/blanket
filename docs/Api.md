@@ -1,5 +1,7 @@
 # API
 
+> This page is a stub.  More information will be added describing the expected request and response formats of each endpoint in the future.  For now, please look to the code itself for details.
+
 ## Tasks
 
 Called by users. Used to manage task flow.
