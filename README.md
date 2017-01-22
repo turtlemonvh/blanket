@@ -1,6 +1,6 @@
 # Blanket
 
-A RESTy wrapper for services.
+Blanket is a RESTy wrapper for long running tasks.
 
 ## Quick Start
 
@@ -24,7 +24,7 @@ EOF
 ./blanket
 ```
 
-Once the server is running, you can view the web ui at http://localhost:8773/.  You can also interact with tasks
+Once the server is running, you can view the web ui at [http://localhost:8773/](http://localhost:8773/).  You can also interact with blanket via curl and the command line.  For example, you can list tasks
 
 ```bash
 curl -s -X GET localhost:8773/task/ | jq .
@@ -118,23 +118,37 @@ Use "blanket [command] --help" for more information about a command.
 
 See [the docs directory](https://github.com/turtlemonvh/blanket-api/tree/master/docs) for more detailed information about the design of blanket.
 
+### Origin
+
+Blanket was designed because of problems I saw on several projects in [GTRI's ELSYS branch](https://www.gtri.gatech.edu/elsys) where we wanted to be able to integrate a piece of software with a less than awesome API into another tool.  Whether that software was a long running simulation, a CAD renderer, or some other strange beast, we kept seeing people try to wrap HTTP servers around these utilities.  This seemed unnecessary and wasteful.
+
+The starting concept of blanket was simple: If we can wrap anything with a command line call (which is possible with tools like [sikuli](http://www.sikuli.org/)), and we could make it easy to expose any command line script as a web endpoint, then we can provide a nice consistent way to expose cool software with a possibly bad API to a larger class of users.
+
+The first draft of blanket was written in python and used celery for queuing. It worked fine, but was a bit heavy weight, and was hard for some Windows users to install. Go was chosen for the rewrite since
+
+* It compiles to a single binary, so deployment is easy
+* It cross compiles to many platforms, so getting it to behave on windows shouldn't be too painful
+
+This was my first major project in Go, and the code base is still recovering from some early "experiments".  It is still a bit rough around the edges, but I do use blanket almost every day at work to manage long running tasks that I'd like to keep a record of, like code deployments.  In this regard, it's a bit like a light-weight [jenkins](https://jenkins.io/).  I plan to continue working on blanket, and I expect it will become a major component of many of my future side projects.
+
+If you are interested in using blanket for a project and want to ask whether blanket may be a good match, you can either submit a github issue with your question or find me on twitter [@turtlemonvh](https://twitter.com/turtlemonvh).
+
 ### Design Goals
 
 > This is how we want it to work, not necessarily how it works now.
 
+* Speed is not a high priority at the moment. Instead, we favor 
+    * simplicity: API is easy to work with, and tasks are hard to lose
+    * pluggability: It is easy to change storage and queue backends while maintaining the same API.
+    * traceable: It's easy to understand what's going on.
+    * open: It's easy to get data in and out.
+    * low resourse usage: Like [xinetd](https://en.wikipedia.org/wiki/Xinetd), it can be present and usable without you thinking about it.
+* Blanket is designed for long running tasks, not high speed messaging. We assume
+    * Tasks will be running for a long time (several seconds or more).
+    * Contention between workers will be fairly low.
 * TOML files drive all configuration for tasks
-    * We'll probably eventually have a web ui for drafting these
-    * In the short term, we'll have examples and tests
-* Most components should be pluggable
-    * The default installation will be super simple, but we want to make it very easy to customize
-    * Some customization
-        * Task types, database driver, queue driver
 * The web UI is optional
     * Everything can be done without it, easily
     * The main feature is a json/rest interface
-* It should work well with other queuing systems
-    * E.g., you can use it to distribute tasks over a TORQUE queue or similar
-* It's easy to get your data out
-    * It's just a bunch of json
 
 
