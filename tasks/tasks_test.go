@@ -28,7 +28,7 @@ executor="bash"
     name = "DEFAULT_COMMAND"
     description = "The bash command to run. E.g. 'echo $(date)'"
 `
-	tt, err := readTaskType(strings.NewReader(tt_config))
+	tt, err := ReadTaskType(strings.NewReader(tt_config))
 	tt.Config.Set("name", "bash_task")
 	assert.Equal(t, err, nil)
 	assert.Equal(t, tt.ConfigFile, "")

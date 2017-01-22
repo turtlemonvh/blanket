@@ -19,7 +19,7 @@ GITHUB_USERNAME=turtlemonvh
 LDFLAGS = -ldflags "-X main.COMMIT=${COMMIT} -X main.BRANCH=${BRANCH}"
 
 # Build the project
-all: clean test vet linux darwin windows
+all: clean test-xunit vet linux darwin windows
 
 # Setup for bindata
 setup-bindata:
@@ -41,11 +41,18 @@ windows:
 	GOOS=windows GOARCH=${GOARCH} go build ${LDFLAGS} -o ${BINARY}-windows-${GOARCH}.exe .
 
 test:
+	# To test just a module:
+	# go test ./tasks
+	go test -v ./...
+
+test-xunit:
+	# To test just a module:
+	# go test ./tasks
 	if ! hash go2xunit 2>/dev/null; then go install github.com/tebeka/go2xunit; fi
-	godep go test -v ./... 2>&1 | go2xunit -output ${TEST_REPORT}
+	go test -v ./... 2>&1 | go2xunit -output ${TEST_REPORT}
 
 vet:
-	godep go vet ./... > ${VET_REPORT} 2>&1
+	go vet ./... > ${VET_REPORT} 2>&1
 
 fmt:
 	go fmt $$(go list ./... | grep -v /vendor/)
@@ -55,4 +62,4 @@ clean:
 	-rm -f ${VET_REPORT}
 	-rm -f ${BINARY}-*
 
-.PHONY: linux darwin windows test vet fmt clean update-bindata
+.PHONY: linux darwin windows test test-xunit vet fmt clean update-bindata
