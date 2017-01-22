@@ -8,12 +8,9 @@ Directs to relevant command line option
 */
 
 import (
-	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	bolt "github.com/turtlemonvh/blanket/lib/bolt"
-	"github.com/turtlemonvh/blanket/server"
 	"os"
 )
 
@@ -84,35 +81,4 @@ func InitializeLogging() {
 			"level": level,
 		}).Info("setting loglevel from config")
 	}
-}
-
-var RootCmd = &cobra.Command{
-	Use:   "blanket",
-	Short: "Blanket is a RESTy wrapper for other programs",
-	Long: `A fast and easy way to wrap applications and make 
-           them available via nice clean REST interfaces with 
-           built in UI, command line tools, and queuing, all 
-           in a single binary!`,
-	Run: func(cmd *cobra.Command, args []string) {
-		InitializeConfig()
-		InitializeLogging()
-
-		// Connect to database
-		db := bolt.OpenBoltDatabase()
-		defer db.Close()
-
-		// DB and Q initializers are fatal if they don't succeed
-		// Serve gracefully
-		s := server.Serve(bolt.NewBlanketBoltDB(db), bolt.NewBlanketBoltQueue(db))
-		s.ListenAndServe()
-	},
-}
-
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print the version number of blanket",
-	Long:  `All software has versions. This is blanket's`,
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("blanket v0.1")
-	},
 }

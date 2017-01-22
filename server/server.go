@@ -5,12 +5,8 @@ Launch blanket server
 - Serves on a local port
 - May change over to use unix sockets later
 
-
 - some things may want access to task structs but are not going to be able to query the database directly
 - define routes here, but write actual functions in other sub folders
-
-- expvar usage in docker
-    - https://github.com/docker/docker/blob/master/api/server/profiler.go
 */
 
 package server
@@ -72,6 +68,10 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	// Serve from bindata
 	r.StaticFS("/ui", assetFS())
 
+	// Redirect to ui
+	r.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/ui")
+	})
 	r.GET("/version", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"version": "0.1",
