@@ -6,13 +6,11 @@ import (
 	"github.com/turtlemonvh/blanket/server"
 )
 
+var serverLongDesc string = `A fast and easy way to wrap applications and make them available via nice clean REST interfaces with built in UI, command line tools, and queuing, all in a single binary!`
 var RootCmd = &cobra.Command{
 	Use:   "blanket",
 	Short: "Blanket is a RESTy wrapper for other programs",
-	Long: `A fast and easy way to wrap applications and make 
-           them available via nice clean REST interfaces with 
-           built in UI, command line tools, and queuing, all 
-           in a single binary!`,
+	Long:  serverLongDesc,
 	Run: func(cmd *cobra.Command, args []string) {
 		InitializeConfig()
 		InitializeLogging()

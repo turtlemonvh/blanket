@@ -8,6 +8,7 @@ Directs to relevant command line option
 */
 
 import (
+	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -18,7 +19,17 @@ var blanketCmdV *cobra.Command
 var (
 	CfgFile  string
 	LogLevel string
+	Version  string
 )
+
+func Run(VERSION string, BRANCH string, COMMIT string) {
+	if VERSION != "" {
+		Version = fmt.Sprintf("Blanket v%s", VERSION)
+	} else {
+		Version = fmt.Sprintf("Blanket v? (branch=%s, commit=%s)", BRANCH, COMMIT)
+	}
+	RootCmd.Execute()
+}
 
 func init() {
 	//cobra.OnInitialize(initConfig)
