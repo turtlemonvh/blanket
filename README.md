@@ -26,61 +26,73 @@ EOF
 
 Once the server is running, you can view tasks
 
-    curl -s -X GET localhost:8773/task/ | jq .
-    # OR
-    ./blanket ps
+```bash
+curl -s -X GET localhost:8773/task/ | jq .
+# OR
+./blanket ps
+```
 
 Add a new task
 
-    # Add 3 different tasks with different params
-    curl -s -X POST localhost:8773/task/ -d'{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2}}'
-    curl -X POST localhost:8773/task/ -d'{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2, "DEFAULT_COMMAND": "cd ~ && ls -lah"}}'
-    curl -X POST localhost:8773/task/ -d'{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}'
+```bash
+# Add 3 different tasks with different params
+curl -s -X POST localhost:8773/task/ -d'{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2}}'
+curl -X POST localhost:8773/task/ -d'{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2, "DEFAULT_COMMAND": "cd ~ && ls -lah"}}'
+curl -X POST localhost:8773/task/ -d'{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}'
+```
 
 Add a task and upload some data files with it. Files will be placed at the root of the directory where the task runs.
 
-    # Send task as a form field named data with multiple files
-    curl -X POST localhost:8773/task/ -F data='{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}' -F blanket.json=@blanket.json
+```bash
+# Send task as a form field named data with multiple files
+curl -X POST localhost:8773/task/ -F data='{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}' -F blanket.json=@blanket.json
 
-    # Send task data as another file named "data"
-    cat > data.json << EOF
-    {
-        "type": "python_hello", 
-        "environment": {
-            "frogs": 5, 
-            "CATS": 2
-        }
+# Send task data as another file named "data"
+cat > data.json << EOF
+{
+    "type": "python_hello", 
+    "environment": {
+        "frogs": 5, 
+        "CATS": 2
     }
-    EOF
-    curl -X POST localhost:8773/task/ -F data=@data.json -F blanket.json=@blanket.json
+}
+EOF
+curl -X POST localhost:8773/task/ -F data=@data.json -F blanket.json=@blanket.json
+```
 
 Add lots of tasks
 
-    while true; do 
-        curl -X POST localhost:8773/task/ \
-            -F data=@data.json \
-            -F blanket.json=@blanket.json; 
-        echo "$(date)"; 
-        sleep 5; 
-    done
+```bash
+while true; do 
+    curl -X POST localhost:8773/task/ \
+        -F data=@data.json \
+        -F blanket.json=@blanket.json; 
+    echo "$(date)"; 
+    sleep 5; 
+done
+```
 
 Delete a task
 
-    curl -s -X DELETE localhost:8773/task/b200f6de-0453-46c9-9c70-5dad63db3ebb | jq . 
-    # OR
-    ./blanket ps -q | tail -n1 | xargs ./blanket rm
+```bash
+curl -s -X DELETE localhost:8773/task/b200f6de-0453-46c9-9c70-5dad63db3ebb | jq . 
+# OR
+./blanket ps -q | tail -n1 | xargs ./blanket rm
 
-    # Remove all tasks
-    ./blanket ps -q | xargs -I {} ./blanket rm {}
+# Remove all tasks
+./blanket ps -q | xargs -I {} ./blanket rm {}
+```
 
 Run worker with certain capabilities
 
-    # You can also launch from the web UI or via an api call
-    ./blanket worker -t unix,bash,python,python2,python27
+```bash
+# You can also launch from the web UI or via an api call
+./blanket worker -t unix,bash,python,python2,python27
+```
 
 ## Command line API
 
-```
+```bash
 $ ./blanket-darwin-amd64 -h
 A fast and easy way to wrap applications and make them available via nice clean REST interfaces with built in UI, command line tools, and queuing, all in a single binary!
 
