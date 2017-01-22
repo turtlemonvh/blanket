@@ -28,6 +28,22 @@ func MustOpenBoltDatabase() *bolt.DB {
 	return db
 }
 
+// WORKERS
+
+// Get a single worler in a transaction
+func fetchWorkerBytes(workerId bson.ObjectId, tx *bolt.Tx) ([]byte, error) {
+	var result []byte
+	b := tx.Bucket([]byte(BOLTDB_WORKER_BUCKET))
+	if b == nil {
+		return result, MakeBucketDNEError(BOLTDB_WORKER_BUCKET)
+	}
+	result = b.Get(IdBytes(workerId))
+	if result == nil {
+		return result, database.ItemNotFoundError(fmt.Sprintf("No item for id %v", workerId))
+	}
+	return result, nil
+}
+
 // TASKS
 
 func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {

@@ -65,7 +65,7 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	// Make the result dir browseable
 	r.StaticFS("/results", gin.Dir(viper.GetString("tasks.resultsPath"), true))
 
-	// Serve from bindata
+	// Serve ui from bindata
 	r.StaticFS("/ui", assetFS())
 
 	// Redirect to ui
@@ -87,20 +87,19 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	r.GET("/task_type/:name", getTaskType)
 
 	// Called by user
-	r.GET("/task/", getTasks)             // fixme; pull from queue or database or both
+	r.GET("/task/", getTasks)             // list tasks in db
 	r.GET("/task/:id", getTask)           // fetch just 1 by id
 	r.POST("/task/", postTask)            // add a new task to the queue
-	r.DELETE("/task/:id", removeTask)     // delete all information, including killing if running
-	r.GET("/task/:id/log", streamTaskLog) // stdout log
+	r.DELETE("/task/:id", removeTask)     // delete all information from db, including killing if running
+	r.GET("/task/:id/log", streamTaskLog) // stream stdout log
 	r.PUT("/task/:id/cancel", cancelTask) // stop execution of a task; will be moved to state STOPPED
 
 	// Called by worker
-	r.POST("/task/claim/:workerid", claimTask)      // claim a task; called by a worker
+	r.POST("/task/claim/:workerid", claimTask)      // claim a task
 	r.PUT("/task/:id/run", markTaskAsRunning)       // mark a task as running
 	r.PUT("/task/:id/progress", updateTaskProgress) // update progress
 	r.PUT("/task/:id/finish", markTaskAsFinished)   // update state
 
-	// FIXME: Pause worker
 	r.GET("/worker/:id", getWorker)
 	r.GET("/worker/", getWorkers)
 	r.POST("/worker/", launchNewWorker)         // called from front end, doesn't actually hit database

@@ -56,6 +56,7 @@ func NewBlanketBoltDB(db *bolt.DB) database.BlanketDB {
 
 // WORKERS
 
+// Get all workers
 func (DB *BlanketBoltDB) GetWorkers() ([]worker.WorkerConf, error) {
 	var err error
 	ws := []worker.WorkerConf{}
@@ -86,11 +87,11 @@ func (DB *BlanketBoltDB) GetWorkers() ([]worker.WorkerConf, error) {
 func (DB *BlanketBoltDB) GetWorker(workerId bson.ObjectId) (worker.WorkerConf, error) {
 	w := worker.WorkerConf{}
 	err := DB.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(BOLTDB_WORKER_BUCKET))
-		if b == nil {
-			return MakeBucketDNEError(BOLTDB_WORKER_BUCKET)
+		result, err := fetchWorkerBytes(workerId, tx)
+		if err != nil {
+			return err
 		}
-		return json.Unmarshal(b.Get(IdBytes(workerId)), &w)
+		return json.Unmarshal(result, &w)
 	})
 	return w, err
 }

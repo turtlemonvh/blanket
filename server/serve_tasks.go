@@ -109,7 +109,6 @@ func claimTask(c *gin.Context) {
 	}
 
 	// Fetch worker config from DB
-	// Problem: worker id is a pid now
 	w, err := DB.GetWorker(workerId)
 	if err != nil {
 		errMsg = "Error fetching worker config from database; possible registration error or corrupt worker configuration"
@@ -117,7 +116,7 @@ func claimTask(c *gin.Context) {
 			"err":      err.Error(),
 			"workerId": workerId,
 		}).Debug(errMsg)
-		errMsg = MakeErrorString(errMsg + fmt.Sprintf(":: %s", err.Error()))
+		errMsg = MakeErrorString(fmt.Sprintf("%s :: %s", errMsg, err.Error()))
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
@@ -138,8 +137,17 @@ func claimTask(c *gin.Context) {
 	// Fetch from database to make sure it wasn't STOPPED
 	dbt, err := DB.GetTask(t.Id)
 	if err != nil {
-		// FIXME: Need to distibguish between not found and database error
-		// If not found, should: ack message, return message saying task was probably deleted from db
+		if _, ok := err.(database.ItemNotFoundError); ok {
+			// Not found: ack task, return message saying task was probably deleted from db
+			status := http.StatusNotFound
+			errMsg = fmt.Sprintf("Could not find task in database, it was likely stopped and deleted")
+			if err = ackCb(); err != nil {
+				errMsg = fmt.Sprintf("%s: Encountered error while trying to ack task :: %s")
+				status = http.StatusInternalServerError
+			}
+			c.String(status, MakeErrorString(errMsg))
+		}
+
 		errMsg = fmt.Sprintf("Could not fetch task from database to ensure it was not stopped :: %s", err.Error())
 		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
 		return
