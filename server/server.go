@@ -69,9 +69,7 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	// Make the result dir browseable
 	r.StaticFS("/results", gin.Dir(viper.GetString("tasks.resultsPath"), true))
 
-	// FIXME: Not playing with angular js routes correctly
-	// https://godoc.org/github.com/gin-gonic/gin#RouterGroup.StaticFS
-	// https://github.com/elazarl/go-bindata-assetfs#using-assetfs-in-your-code
+	// Serve from bindata
 	r.StaticFS("/ui", assetFS())
 
 	r.GET("/version", func(c *gin.Context) {
