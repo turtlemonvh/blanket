@@ -26,15 +26,14 @@ import (
 	"time"
 )
 
-var DB database.BlanketDB
-var Q queue.BlanketQueue
+type ServerConfig struct {
+	DB          database.BlanketDB
+	Q           queue.BlanketQueue
+	ResultsPath string
+	Port        int
+}
 
-// FIXME: Pass in all configuration so decoupled from viper
-func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
-	// FIXME: Better variable names
-	DB = pDB
-	Q = pQ
-
+func (s *ServerConfig) GetRouter() *gin.Engine {
 	// https://godoc.org/github.com/rs/cors
 	c := cors.New(cors.Options{
 		AllowedOrigins:     []string{"*"},
@@ -63,7 +62,7 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	r.Use(gin.WrapF(makeCorsHandler(c)))
 
 	// Make the result dir browseable
-	r.StaticFS("/results", gin.Dir(viper.GetString("tasks.resultsPath"), true))
+	r.StaticFS("/results", gin.Dir(s.ResultsPath, true))
 
 	// Serve ui from bindata
 	r.StaticFS("/ui", assetFS())
@@ -81,38 +80,42 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	})
 
 	r.GET("/ops/status/", MetricsHandler)
-	r.GET("/config/", getConfigProcessed)
+	r.GET("/config/", s.getConfigProcessed)
 
-	r.GET("/task_type/", getTaskTypes)
-	r.GET("/task_type/:name", getTaskType)
+	r.GET("/task_type/", s.getTaskTypes)
+	r.GET("/task_type/:name", s.getTaskType)
 
 	// Called by user
-	r.GET("/task/", getTasks)             // list tasks in db
-	r.GET("/task/:id", getTask)           // fetch just 1 by id
-	r.POST("/task/", postTask)            // add a new task to the queue
-	r.DELETE("/task/:id", removeTask)     // delete all information from db, including killing if running
-	r.GET("/task/:id/log", streamTaskLog) // stream stdout log
-	r.PUT("/task/:id/cancel", cancelTask) // stop execution of a task; will be moved to state STOPPED
+	r.GET("/task/", s.getTasks)             // list tasks in db
+	r.GET("/task/:id", s.getTask)           // fetch just 1 by id
+	r.POST("/task/", s.postTask)            // add a new task to the queue
+	r.DELETE("/task/:id", s.removeTask)     // delete all information from db, including killing if running
+	r.GET("/task/:id/log", s.streamTaskLog) // stream stdout log
+	r.PUT("/task/:id/cancel", s.cancelTask) // stop execution of a task; will be moved to state STOPPED
 
 	// Called by worker
-	r.POST("/task/claim/:workerid", claimTask)      // claim a task
-	r.PUT("/task/:id/run", markTaskAsRunning)       // mark a task as running
-	r.PUT("/task/:id/progress", updateTaskProgress) // update progress
-	r.PUT("/task/:id/finish", markTaskAsFinished)   // update state
+	r.POST("/task/claim/:workerid", s.claimTask)      // claim a task
+	r.PUT("/task/:id/run", s.markTaskAsRunning)       // mark a task as running
+	r.PUT("/task/:id/progress", s.updateTaskProgress) // update progress
+	r.PUT("/task/:id/finish", s.markTaskAsFinished)   // update state
 
-	r.GET("/worker/:id", getWorker)
-	r.GET("/worker/", getWorkers)
-	r.POST("/worker/", launchNewWorker)         // called from front end, doesn't actually hit database
-	r.PUT("/worker/:id/stop", stopWorker)       // stop/pause worker; will stop after current task stops
-	r.PUT("/worker/:id/restart", restartWorker) // re-start an existing worker
-	r.PUT("/worker/:id", updateWorker)          // used for initial creation + status updates
-	r.DELETE("/worker/:id", deleteWorker)       // remove from database; can only be called on a stopped worker
-	r.GET("/worker/:id/logs", getWorkerLogfile) // server sent events
+	r.GET("/worker/:id", s.getWorker)
+	r.GET("/worker/", s.getWorkers)
+	r.POST("/worker/", s.launchNewWorker)         // called from front end, doesn't actually hit database
+	r.PUT("/worker/:id/stop", s.stopWorker)       // stop/pause worker; will stop after current task stops
+	r.PUT("/worker/:id/restart", s.restartWorker) // re-start an existing worker
+	r.PUT("/worker/:id", s.updateWorker)          // used for initial creation + status updates
+	r.DELETE("/worker/:id", s.deleteWorker)       // remove from database; can only be called on a stopped worker
+	r.GET("/worker/:id/logs", s.getWorkerLogfile) // server sent events
 
+	return r
+}
+
+func (s *ServerConfig) Serve() *graceful.Server {
 	// Start server
 	log.WithFields(log.Fields{
 		"port": viper.GetInt("port"),
-	}).Warn("Main server started")
+	}).Info("Starting main server")
 
 	// FIXME: Launch background process for automatically
 	// - cleaning queue
@@ -123,8 +126,8 @@ func Serve(pDB database.BlanketDB, pQ queue.BlanketQueue) *graceful.Server {
 	return &graceful.Server{
 		Timeout: 2 * time.Second,
 		Server: &http.Server{
-			Addr:    fmt.Sprintf(":%d", viper.GetInt("port")),
-			Handler: r,
+			Addr:    fmt.Sprintf(":%d", s.Port),
+			Handler: s.GetRouter(),
 		},
 		BeforeShutdown: func() bool {
 			// Called first

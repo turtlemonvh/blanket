@@ -14,9 +14,9 @@ import (
 
 // Search in the database for all items
 // For each item in the db, check that a process exists that has the right name
-func getWorkers(c *gin.Context) {
+func (s *ServerConfig) getWorkers(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
-	ws, err := DB.GetWorkers()
+	ws, err := s.DB.GetWorkers()
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -25,7 +25,7 @@ func getWorkers(c *gin.Context) {
 }
 
 // Get just the configuration for this worker as json
-func getWorker(c *gin.Context) {
+func (s *ServerConfig) getWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 	workerId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
@@ -33,7 +33,7 @@ func getWorker(c *gin.Context) {
 		return
 	}
 
-	worker, err := DB.GetWorker(workerId)
+	worker, err := s.DB.GetWorker(workerId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -43,7 +43,7 @@ func getWorker(c *gin.Context) {
 
 // Register with Id
 // Continue to write to old log via append
-func updateWorker(c *gin.Context) {
+func (s *ServerConfig) updateWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	workerId, err := SafeObjectId(c.Param("id"))
@@ -66,7 +66,7 @@ func updateWorker(c *gin.Context) {
 		return
 	}
 
-	err = DB.UpdateWorker(&w)
+	err = s.DB.UpdateWorker(&w)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -76,9 +76,10 @@ func updateWorker(c *gin.Context) {
 
 // Put the worker in the "stopped" state
 // The worker will poll for this state
+// FIXME: Make this worker update atomic
 // FIXME: Update lastHeardTs too
 // FIXME: Allow force option that sends signals (on platforms That support that)
-func stopWorker(c *gin.Context) {
+func (s *ServerConfig) stopWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	workerId, err := SafeObjectId(c.Param("id"))
@@ -87,14 +88,14 @@ func stopWorker(c *gin.Context) {
 		return
 	}
 
-	w, err := DB.GetWorker(workerId)
+	w, err := s.DB.GetWorker(workerId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
 	w.Stopped = true
-	err = DB.UpdateWorker(&w)
+	err = s.DB.UpdateWorker(&w)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -105,7 +106,7 @@ func stopWorker(c *gin.Context) {
 
 // Find an existing worker in the database and change its status
 // Start it on the command line
-func restartWorker(c *gin.Context) {
+func (s *ServerConfig) restartWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	workerId, err := SafeObjectId(c.Param("id"))
@@ -114,18 +115,18 @@ func restartWorker(c *gin.Context) {
 		return
 	}
 
-	w, err := DB.GetWorker(workerId)
+	w, err := s.DB.GetWorker(workerId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
-	launchWorker(c, &w)
+	s.launchWorker(c, &w)
 }
 
 // Remove the worker's record from the db if it exists
 // Should only be called by the worker itself as it is shutting down
-func deleteWorker(c *gin.Context) {
+func (s *ServerConfig) deleteWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 	workerId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
@@ -140,7 +141,7 @@ func deleteWorker(c *gin.Context) {
 		c.String(http.StatusBadRequest, `{"error": "Cannot delete a worker that has not been stopped"}`)
 	}
 
-	err = DB.DeleteWorker(workerId)
+	err = s.DB.DeleteWorker(workerId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -148,18 +149,18 @@ func deleteWorker(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId.Hex()))
 }
 
-func launchNewWorker(c *gin.Context) {
+func (s *ServerConfig) launchNewWorker(c *gin.Context) {
 	var err error
 	w := worker.WorkerConf{}
 	err = c.BindJSON(&w)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 	}
-	launchWorker(c, &w)
+	s.launchWorker(c, &w)
 }
 
 // Called by other request handlers
-func launchWorker(c *gin.Context, w *worker.WorkerConf) {
+func (s *ServerConfig) launchWorker(c *gin.Context, w *worker.WorkerConf) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
@@ -180,7 +181,7 @@ func launchWorker(c *gin.Context, w *worker.WorkerConf) {
 	maxRequestTime := time.NewTimer(time.Duration(MAX_REQUEST_TIME_SECONDS*viper.GetFloat64("timeMultiplier")) * time.Second)
 	loopWaitTime := time.Duration(500*viper.GetFloat64("timeMultiplier")) * time.Millisecond
 	for {
-		w, _ := DB.GetWorker(w.Id)
+		w, _ := s.DB.GetWorker(w.Id)
 		if w.Pid != 0 {
 			c.JSON(http.StatusOK, w)
 			return
@@ -203,7 +204,7 @@ func launchWorker(c *gin.Context, w *worker.WorkerConf) {
 }
 
 // FIXME: Stream file contents
-func getWorkerLogfile(c *gin.Context) {
+func (s *ServerConfig) getWorkerLogfile(c *gin.Context) {
 	c.Header("Content-Type", "text/plain")
 
 	workerId, err := SafeObjectId(c.Param("id"))
@@ -213,7 +214,7 @@ func getWorkerLogfile(c *gin.Context) {
 	}
 
 	// FIXME: Return bytes or string?
-	w, err := DB.GetWorker(workerId)
+	w, err := s.DB.GetWorker(workerId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, fmt.Sprintf(`Error: "%s"`, err.Error()))
 		return
@@ -230,7 +231,7 @@ func getWorkerLogfile(c *gin.Context) {
 }
 
 // Stream out worker log
-func streamWorkerLog(c *gin.Context) {
+func (s *ServerConfig) streamWorkerLog(c *gin.Context) {
 	var err error
 	var workerId bson.ObjectId
 
@@ -241,7 +242,7 @@ func streamWorkerLog(c *gin.Context) {
 	}
 
 	// FIXME: Return bytes or string?
-	w, err := DB.GetWorker(workerId)
+	w, err := s.DB.GetWorker(workerId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, fmt.Sprintf(`Error: "%s"`, err.Error()))
 		return
@@ -259,6 +260,5 @@ func streamWorkerLog(c *gin.Context) {
 	isComplete := func() bool {
 		return true
 	}
-	streamLog(c, sub, isComplete)
-
+	s.streamLog(c, sub, isComplete)
 }

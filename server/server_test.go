@@ -4,28 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/spf13/viper"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/lib/bolt"
-	"github.com/turtlemonvh/blanket/lib/database"
-	"github.com/turtlemonvh/blanket/lib/queue"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 	"gopkg.in/mgo.v2/bson"
-	"gopkg.in/tylerb/graceful.v1"
 	"io/ioutil"
 	"net/http"
+	"net/http/httptest"
 	"testing"
-	"time"
 )
-
-const TEST_SERVER_PORT = 6777
-
-type SystemTestConfig struct {
-	db     database.BlanketDB
-	q      queue.BlanketQueue
-	closer func()
-}
 
 const testConfig = `
 # https://npf.io/2014/08/intro-to-toml/
@@ -64,32 +53,30 @@ executor="bash"
 // FIXME: Make this a re-usable test utility for use in worker tests
 // Returns a server that can be run and killed, and a config for working with the system
 // Uses boltdb for backend
-func NewTestServer() (*graceful.Server, SystemTestConfig) {
+func NewTestServer() (*ServerConfig, func()) {
 	DB, DBCloser := bolt.NewTestDB()
 	Q, QCloser := bolt.NewTestQueue()
 
-	return Serve(DB, Q), SystemTestConfig{
-		db: DB,
-		q:  Q,
-		closer: func() {
+	return &ServerConfig{
+			DB:          DB,
+			Q:           Q,
+			ResultsPath: "/tmp/x", // FIMXE: Replace with temp dir and cleanup
+		}, func() {
 			defer DBCloser()
 			defer QCloser()
-		},
-	}
+		}
 }
 
 // Assert that the request object passed generated an empty list json response
-func assertResponseLength(t *testing.T, req *http.Request, nitems int) {
-	c := http.Client{}
+func assertResponseLength(t *testing.T, r *gin.Engine, req *http.Request, nitems int) {
 	var body []byte
 	var err error
-	var resp *http.Response
+	w := httptest.NewRecorder()
 
-	resp, err = c.Do(req)
-	assert.Equal(t, nil, err)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
 
-	body, err = ioutil.ReadAll(resp.Body)
+	body, err = ioutil.ReadAll(w.Body)
 	assert.Equal(t, nil, err)
 
 	// Read in body as json
@@ -106,25 +93,19 @@ func TestGetTasks(t *testing.T) {
 	var err error
 
 	// Run server
-	viper.Set("port", TEST_SERVER_PORT)
-	S, config := NewTestServer()
-	defer config.closer()
-	go S.ListenAndServe()
-	defer S.Stop(time.Millisecond * 100)
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
 
 	var req *http.Request
 
-	// Wait a second for the server to start up
-	// FIXME: Make this more robust by checking in a loop
-	time.Sleep(time.Second)
-
 	// Tasks from all sources, DB, and Q
-	req, _ = http.NewRequest("GET", "http://localhost:6777/task", nil)
-	assertResponseLength(t, req, 0)
-	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=RUNNING", nil)
-	assertResponseLength(t, req, 0)
-	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=WAITING", nil)
-	assertResponseLength(t, req, 0)
+	req, _ = http.NewRequest("GET", "/task/", nil)
+	assertResponseLength(t, r, req, 0)
+	req, _ = http.NewRequest("GET", "/task/?states=RUNNING", nil)
+	assertResponseLength(t, r, req, 0)
+	req, _ = http.NewRequest("GET", "/task/?states=WAITING", nil)
+	assertResponseLength(t, r, req, 0)
 
 	// Create a task type to the database
 	tskt, err := tasks.ReadTaskType(bytes.NewReader([]byte(testConfig)))
@@ -137,20 +118,20 @@ func TestGetTasks(t *testing.T) {
 		assert.Equal(t, nil, err)
 		//tsks = append(tsks, &tsk)
 
-		err = config.db.SaveTask(&tsk)
+		err = s.DB.SaveTask(&tsk)
 		assert.Equal(t, nil, err)
 
-		err = config.q.AddTask(&tsk)
+		err = s.Q.AddTask(&tsk)
 		assert.Equal(t, nil, err)
 	}
 
 	// Check counts
-	req, _ = http.NewRequest("GET", "http://localhost:6777/task", nil)
-	assertResponseLength(t, req, 10)
-	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=RUNNING", nil)
-	assertResponseLength(t, req, 0)
-	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=WAITING", nil)
-	assertResponseLength(t, req, 10)
+	req, _ = http.NewRequest("GET", "/task/", nil)
+	assertResponseLength(t, r, req, 10)
+	req, _ = http.NewRequest("GET", "/task/?states=RUNNING", nil)
+	assertResponseLength(t, r, req, 0)
+	req, _ = http.NewRequest("GET", "/task/?states=WAITING", nil)
+	assertResponseLength(t, r, req, 10)
 
 	// Create a worker so that we can claim tasks for it
 	wconf := worker.WorkerConf{
@@ -158,33 +139,30 @@ func TestGetTasks(t *testing.T) {
 		Tags:    []string{},
 		Stopped: false,
 	}
-	err = config.db.UpdateWorker(&wconf)
+	err = s.DB.UpdateWorker(&wconf)
 	assert.Equal(t, nil, err)
 
 	// List workers
-	req, _ = http.NewRequest("GET", "http://localhost:6777/worker", nil)
-	assertResponseLength(t, req, 1)
+	req, _ = http.NewRequest("GET", "/worker/", nil)
+	assertResponseLength(t, r, req, 1)
 
 	// Move a few tasks forward
-	claimUrl := fmt.Sprintf("http://localhost:6777/task/claim/%s", wconf.Id.Hex())
-	c := http.Client{}
-	var resp *http.Response
+	claimUrl := fmt.Sprintf("/task/claim/%s", wconf.Id.Hex())
 	for i := 0; i < 5; i++ {
+		w := httptest.NewRecorder()
 		req, _ = http.NewRequest("POST", claimUrl, nil)
-
-		resp, err = c.Do(req)
-		assert.Equal(t, nil, err)
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
 	}
 
 	// Check counts
-	req, _ = http.NewRequest("GET", "http://localhost:6777/task", nil)
-	assertResponseLength(t, req, 10)
-	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=RUNNING", nil)
-	assertResponseLength(t, req, 0)
-	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=CLAIMED", nil)
-	assertResponseLength(t, req, 5)
-	req, _ = http.NewRequest("GET", "http://localhost:6777/task?states=WAITING", nil)
-	assertResponseLength(t, req, 5)
+	req, _ = http.NewRequest("GET", "/task/", nil)
+	assertResponseLength(t, r, req, 10)
+	req, _ = http.NewRequest("GET", "/task/?states=RUNNING", nil)
+	assertResponseLength(t, r, req, 0)
+	req, _ = http.NewRequest("GET", "/task/?states=CLAIMED", nil)
+	assertResponseLength(t, r, req, 5)
+	req, _ = http.NewRequest("GET", "/task/?states=WAITING", nil)
+	assertResponseLength(t, r, req, 5)
 
 }

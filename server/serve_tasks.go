@@ -6,7 +6,6 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cast"
-	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/tasks"
@@ -26,7 +25,7 @@ import (
 
 // Either gets the task id from a context object or returns an error
 // Will also set the response for the request if there was a problem
-func getTaskId(c *gin.Context) (bson.ObjectId, error) {
+func (s *ServerConfig) getTaskId(c *gin.Context) (bson.ObjectId, error) {
 	var err error
 	var tid bson.ObjectId
 
@@ -47,7 +46,7 @@ func getTaskId(c *gin.Context) (bson.ObjectId, error) {
 
 // Get all tasks
 // Only looks in the database
-func getTasks(c *gin.Context) {
+func (s *ServerConfig) getTasks(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	tc := database.TaskSearchConfFromContext(c)
@@ -62,7 +61,7 @@ func getTasks(c *gin.Context) {
 		"justCounts":       tc.JustCounts,
 	}).Debug("Task request params")
 
-	result, nfounddb, err := DB.GetTasks(tc)
+	result, nfounddb, err := s.DB.GetTasks(tc)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -75,19 +74,19 @@ func getTasks(c *gin.Context) {
 	}
 }
 
-func getTask(c *gin.Context) {
+func (s *ServerConfig) getTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
 	var taskId bson.ObjectId
 
-	taskId, err = getTaskId(c)
+	taskId, err = s.getTaskId(c)
 	if err != nil {
 		return
 	}
 
 	var task tasks.Task
-	task, err = DB.GetTask(taskId)
+	task, err = s.DB.GetTask(taskId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -98,7 +97,7 @@ func getTask(c *gin.Context) {
 
 // Fetch from queue, moves to database, sets fields
 // FIXME: Add logging
-func claimTask(c *gin.Context) {
+func (s *ServerConfig) claimTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 	errMsg := ""
 
@@ -109,7 +108,7 @@ func claimTask(c *gin.Context) {
 	}
 
 	// Fetch worker config from DB
-	w, err := DB.GetWorker(workerId)
+	w, err := s.DB.GetWorker(workerId)
 	if err != nil {
 		errMsg = "Error fetching worker config from database; possible registration error or corrupt worker configuration"
 		log.WithFields(log.Fields{
@@ -125,7 +124,7 @@ func claimTask(c *gin.Context) {
 	var t tasks.Task
 	var ackCb func() error
 	var nackCb func() error
-	t, ackCb, nackCb, err = Q.ClaimTask(&w)
+	t, ackCb, nackCb, err = s.Q.ClaimTask(&w)
 	if err != nil {
 		// FIXME: Return 404 if a not found error, 400 for other errors
 		// Task could not be found, probably
@@ -135,7 +134,7 @@ func claimTask(c *gin.Context) {
 	}
 
 	// Fetch from database to make sure it wasn't STOPPED
-	dbt, err := DB.GetTask(t.Id)
+	dbt, err := s.DB.GetTask(t.Id)
 	if err != nil {
 		if _, ok := err.(database.ItemNotFoundError); ok {
 			// Not found: ack task, return message saying task was probably deleted from db
@@ -180,7 +179,7 @@ func claimTask(c *gin.Context) {
 	t.Timeout = 0
 
 	// Save to database
-	err = DB.SaveTask(&t)
+	err = s.DB.SaveTask(&t)
 	if err != nil {
 		errMsg = fmt.Sprintf("Error saving to database :: %s", err.Error())
 		err = nackCb()
@@ -205,12 +204,12 @@ func claimTask(c *gin.Context) {
 // FIXME: Should we set ExecEnv and Tags here?
 // - tags should already be set at creation time
 // - execEnv should be more dynamic than it is now
-func markTaskAsRunning(c *gin.Context) {
+func (s *ServerConfig) markTaskAsRunning(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
 	var taskId bson.ObjectId
-	taskId, err = getTaskId(c)
+	taskId, err = s.getTaskId(c)
 	if err != nil {
 		return
 	}
@@ -228,7 +227,7 @@ func markTaskAsRunning(c *gin.Context) {
 		Pid:           cast.ToInt(c.Query("pid")),
 		TypeDigest:    c.Query("typeDigest"),
 	}
-	err = DB.RunTask(taskId, tc)
+	err = s.DB.RunTask(taskId, tc)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -238,20 +237,20 @@ func markTaskAsRunning(c *gin.Context) {
 }
 
 // Called for stopping
-func cancelTask(c *gin.Context) {
+func (s *ServerConfig) cancelTask(c *gin.Context) {
 	// Upsert in database, setting any item that has that Id to STOPPED state
 	c.Header("Content-Type", "application/json")
 
 	var err error
 	var taskId bson.ObjectId
-	taskId, err = getTaskId(c)
+	taskId, err = s.getTaskId(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
 	var task tasks.Task
-	task, err = DB.GetTask(taskId)
+	task, err = s.DB.GetTask(taskId)
 	if err != nil {
 		// Should already be there since we will write to db first before adding to queue
 		c.String(http.StatusNotFound, MakeErrorString(err.Error()))
@@ -259,7 +258,7 @@ func cancelTask(c *gin.Context) {
 	}
 
 	if task.State == "RUNNING" || task.State == "WAITING" {
-		err = DB.FinishTask(taskId, "STOPPED")
+		err = s.DB.FinishTask(taskId, "STOPPED")
 		if err != nil {
 			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 			return
@@ -274,12 +273,12 @@ func cancelTask(c *gin.Context) {
 }
 
 // Set the task to a terminal state like: STOPPING,
-func markTaskAsFinished(c *gin.Context) {
+func (s *ServerConfig) markTaskAsFinished(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
 	var taskId bson.ObjectId
-	taskId, err = getTaskId(c)
+	taskId, err = s.getTaskId(c)
 	if err != nil {
 		return
 	}
@@ -299,7 +298,7 @@ func markTaskAsFinished(c *gin.Context) {
 		return
 	}
 
-	err = DB.FinishTask(taskId, newState)
+	err = s.DB.FinishTask(taskId, newState)
 	if err != nil {
 		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
@@ -308,12 +307,12 @@ func markTaskAsFinished(c *gin.Context) {
 	c.JSON(http.StatusOK, "{}")
 }
 
-func updateTaskProgress(c *gin.Context) {
+func (s *ServerConfig) updateTaskProgress(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
 	var taskId bson.ObjectId
-	taskId, err = getTaskId(c)
+	taskId, err = s.getTaskId(c)
 	if err != nil {
 		return
 	}
@@ -326,7 +325,7 @@ func updateTaskProgress(c *gin.Context) {
 		return
 	}
 
-	err = DB.UpdateTaskProgress(taskId, progress)
+	err = s.DB.UpdateTaskProgress(taskId, progress)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -336,7 +335,7 @@ func updateTaskProgress(c *gin.Context) {
 
 // TESTME
 // FIXME: Also grab extra tags, e.g. machine specific tag
-func postTask(c *gin.Context) {
+func (s *ServerConfig) postTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var req map[string]interface{}
@@ -452,14 +451,14 @@ func postTask(c *gin.Context) {
 	}
 
 	// Add to database
-	err = DB.SaveTask(&t)
+	err = s.DB.SaveTask(&t)
 	if err != nil {
 		errMsg := fmt.Sprintf("Error saving to database :: %s", err.Error())
 		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
 	}
 
 	// Add to queue
-	err = Q.AddTask(&t)
+	err = s.Q.AddTask(&t)
 	if err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
@@ -470,18 +469,18 @@ func postTask(c *gin.Context) {
 
 // Always returns 200, even if item doesn't exist
 // FIXME: Don't remove task if currently running unless ?force=True
-func removeTask(c *gin.Context) {
+func (s *ServerConfig) removeTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
 	var taskId bson.ObjectId
 
-	taskId, err = getTaskId(c)
+	taskId, err = s.getTaskId(c)
 	if err != nil {
 		return
 	}
 
-	err = DB.DeleteTask(taskId)
+	err = s.DB.DeleteTask(taskId)
 	if err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
@@ -490,7 +489,7 @@ func removeTask(c *gin.Context) {
 
 	// Remove result directory
 	// FIXME: Grab from json instead
-	err = os.RemoveAll(path.Join(viper.GetString("tasks.resultsPath"), taskId.Hex()))
+	err = os.RemoveAll(path.Join(s.ResultsPath, taskId.Hex()))
 	if err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
@@ -501,17 +500,17 @@ func removeTask(c *gin.Context) {
 }
 
 // Stream out task log
-func streamTaskLog(c *gin.Context) {
+func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 	var err error
 	var taskId bson.ObjectId
 
-	taskId, err = getTaskId(c)
+	taskId, err = s.getTaskId(c)
 	if err != nil {
 		return
 	}
 
 	var task tasks.Task
-	task, err = DB.GetTask(taskId)
+	task, err = s.DB.GetTask(taskId)
 	if err != nil {
 		c.String(http.StatusInternalServerError, "Error fetching information about task while preparing to open logfile stream")
 		return
@@ -527,7 +526,7 @@ func streamTaskLog(c *gin.Context) {
 
 	// Task is stopped when it is in a terminal state or we get an error fetching its information
 	isComplete := func() bool {
-		task, err = DB.GetTask(taskId)
+		task, err = s.DB.GetTask(taskId)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"taskId":         taskId,
@@ -548,5 +547,5 @@ func streamTaskLog(c *gin.Context) {
 		}
 		return true
 	}
-	streamLog(c, sub, isComplete)
+	s.streamLog(c, sub, isComplete)
 }

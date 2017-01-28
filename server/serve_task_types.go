@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-func getTaskTypes(c *gin.Context) {
+func (s *ServerConfig) getTaskTypes(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	// Read from disk
@@ -22,7 +22,7 @@ func getTaskTypes(c *gin.Context) {
 	c.JSON(http.StatusOK, tts)
 }
 
-func getTaskType(c *gin.Context) {
+func (s *ServerConfig) getTaskType(c *gin.Context) {
 	name := c.Param("name")
 	c.Header("Content-Type", "application/json")
 

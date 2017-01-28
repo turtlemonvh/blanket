@@ -2,6 +2,7 @@ package command
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	bolt "github.com/turtlemonvh/blanket/lib/bolt"
 	"github.com/turtlemonvh/blanket/server"
 )
@@ -21,7 +22,14 @@ var RootCmd = &cobra.Command{
 
 		// DB and Q initializers are fatal if they don't succeed
 		// Serve gracefully
-		s := server.Serve(bolt.NewBlanketBoltDB(db), bolt.NewBlanketBoltQueue(db))
+
+		c := server.ServerConfig{
+			DB:          bolt.NewBlanketBoltDB(db),
+			Q:           bolt.NewBlanketBoltQueue(db),
+			Port:        viper.GetInt("port"),
+			ResultsPath: viper.GetString("tasks.resultsPath"),
+		}
+		s := c.Serve()
 		s.ListenAndServe()
 	},
 }

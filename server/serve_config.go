@@ -11,7 +11,7 @@ import (
 
 // Get all configuration variables
 // We use this instead of viper.AllSettings so that we have just 1 value for each path
-func getConfigProcessed(c *gin.Context) {
+func (s *ServerConfig) getConfigProcessed(c *gin.Context) {
 	conf := make(map[string]interface{})
 	keys := viper.AllKeys()
 

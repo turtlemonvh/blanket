@@ -19,7 +19,7 @@ const (
 // isComplete should return true if we know that the subscription is finished.
 // - task stopped when in terminal state
 // - worker stopped when no longer heartbeating
-func streamLog(c *gin.Context, sub *tailed_file.TailedFileSubscriber, isComplete func() bool) {
+func (s *ServerConfig) streamLog(c *gin.Context, sub *tailed_file.TailedFileSubscriber, isComplete func() bool) {
 	loglineChannelIsEmpty := false
 	lineno := 1
 	c.Stream(func(w io.Writer) bool {
