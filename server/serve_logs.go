@@ -3,7 +3,6 @@ package server
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/manucorporat/sse"
-	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"io"
 	"strconv"
@@ -25,7 +24,7 @@ func (s *ServerConfig) streamLog(c *gin.Context, sub *tailed_file.TailedFileSubs
 	c.Stream(func(w io.Writer) bool {
 		// This function returns a boolean indicating whether the stream should stay open
 		// Every time this is called, also checks if client has left
-		timer := time.NewTimer(time.Second * time.Duration(viper.GetFloat64("timeMultiplier")*LOGLINE_WAIT_DURATION))
+		timer := time.NewTimer(time.Second * time.Duration(s.TimeMultiplier*LOGLINE_WAIT_DURATION))
 
 		select {
 		case logline := <-sub.NewLines:

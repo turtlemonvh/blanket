@@ -4,7 +4,6 @@ import (
 	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/worker"
 	"gopkg.in/mgo.v2/bson"
@@ -178,8 +177,8 @@ func (s *ServerConfig) launchWorker(c *gin.Context, w *worker.WorkerConf) {
 	}
 
 	// Poll database until worker is found
-	maxRequestTime := time.NewTimer(time.Duration(MAX_REQUEST_TIME_SECONDS*viper.GetFloat64("timeMultiplier")) * time.Second)
-	loopWaitTime := time.Duration(500*viper.GetFloat64("timeMultiplier")) * time.Millisecond
+	maxRequestTime := time.NewTimer(time.Duration(MAX_REQUEST_TIME_SECONDS*s.TimeMultiplier) * time.Second)
+	loopWaitTime := time.Duration(500*s.TimeMultiplier) * time.Millisecond
 	for {
 		w, _ := s.DB.GetWorker(w.Id)
 		if w.Pid != 0 {

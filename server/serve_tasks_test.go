@@ -1,14 +1,8 @@
 package server
 
 import (
-	//"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
-	//"github.com/turtlemonvh/blanket/server"
-	//"gopkg.in/tylerb/graceful.v1"
-	//"io/ioutil"
-	//"net/http"
 	"testing"
-	//"time"
 )
 
 /*

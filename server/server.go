@@ -17,7 +17,6 @@ import (
 	"github.com/gin-gonic/contrib/ginrus"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
-	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/queue"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
@@ -27,10 +26,11 @@ import (
 )
 
 type ServerConfig struct {
-	DB          database.BlanketDB
-	Q           queue.BlanketQueue
-	ResultsPath string
-	Port        int
+	DB             database.BlanketDB
+	Q              queue.BlanketQueue
+	ResultsPath    string
+	Port           int
+	TimeMultiplier float64
 }
 
 func (s *ServerConfig) GetRouter() *gin.Engine {
@@ -114,7 +114,7 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 func (s *ServerConfig) Serve() *graceful.Server {
 	// Start server
 	log.WithFields(log.Fields{
-		"port": viper.GetInt("port"),
+		"port": s.Port,
 	}).Info("Starting main server")
 
 	// FIXME: Launch background process for automatically
