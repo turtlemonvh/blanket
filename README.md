@@ -72,6 +72,18 @@ while true; do
 done
 ```
 
+There is also limited functionality for sending tasks via the command line.
+
+```
+# Send in a single task
+./blanket submit -t python_hello -e '{"frogs": 5}'
+python_hello 5955c9e26b3c65257abc1e32 [1498794466]
+
+# Send in a single task, printing only the id of the task once it is submitted
+./blanket submit -t python_hello -e '{"frogs": 5}' -q
+5955c9df6b3c65257abc1e31
+```
+
 Delete a task
 
 ```bash
