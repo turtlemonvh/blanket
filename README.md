@@ -115,6 +115,7 @@ Usage:
 Available Commands:
   ps          List active and queued tasks
   rm          Remove tasks
+  submit      Submit a task to be executed.
   version     Print the version number of blanket
   worker      Run a worker with capabilities defined by tags
 
