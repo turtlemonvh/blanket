@@ -3,7 +3,7 @@ package tasks
 import (
 	"encoding/json"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"gopkg.in/mgo.v2/bson"
 	"net/http"

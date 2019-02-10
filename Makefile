@@ -7,9 +7,6 @@ VET_REPORT = vet.report
 TEST_REPORT = tests.xml
 GOARCH = amd64
 
-# Path to blanket UI: https://github.com/turtlemonvh/blanket-ui
-BLANKET_UI_PATH=/Users/timothy/Projects/blanket-ui
-
 COMMIT=$(shell git rev-parse HEAD)
 BRANCH=$(shell git rev-parse --abbrev-ref HEAD)
 
@@ -22,15 +19,28 @@ LDFLAGS = -ldflags "-X main.COMMIT=${COMMIT} -X main.BRANCH=${BRANCH}"
 # Build the project
 all: clean test-xunit vet linux darwin windows
 
+setup-dep:
+	# OSX
+	# https://golang.github.io/dep/docs/installation.html
+	brew install dep
+
 # Setup for bindata
 setup-bindata:
 	go get github.com/jteeuwen/go-bindata/...
 	go get github.com/elazarl/go-bindata-assetfs/...
 
-update-bindata:
+setup-ui-dev:
+	cd ui; \
+	npm install; \
+	npm install -g bower gulp; \
+	npm install --save-dev jshint gulp-jshint; \
+	bower install
+
+update-bindata: update-ui
 	# Change 'public' to 'dev' for un-minified code
-	cd ${BLANKET_UI_PATH} && go-bindata-assetfs -pkg=server dev/...
-	mv ${BLANKET_UI_PATH}/bindata_assetfs.go server
+	cd ui && gulp build
+	cd ui && go-bindata-assetfs -pkg=server public/...
+	mv ui/bindata.go server/
 
 linux: 
 	GOOS=linux GOARCH=${GOARCH} go build ${LDFLAGS} -o ${BINARY}-linux-${GOARCH} .

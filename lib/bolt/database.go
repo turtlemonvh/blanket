@@ -3,7 +3,7 @@ package bolt
 import (
 	"encoding/json"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/boltdb/bolt"
 	"github.com/turtlemonvh/blanket/lib"
 	"github.com/turtlemonvh/blanket/lib/database"

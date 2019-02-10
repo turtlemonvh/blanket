@@ -1,7 +1,7 @@
 package tailed_file
 
 import (
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/codahale/metrics"
 	"github.com/hpcloud/tail"
 	"gopkg.in/tomb.v1"

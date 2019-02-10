@@ -1,0 +1,107 @@
+@import "bootstrap";
+@import "bootstrap/variables";
+@import "bootstrap/mixins";
+
+
+// http://stackoverflow.com/questions/18153234/center-a-column-using-twitter-bootstrap-3
+.col-centered {
+    float: none;
+    margin: 0 auto;
+}
+
+.navbar a {
+    cursor: pointer;
+}
+
+a.danger {
+    color: red;
+}
+
+table a {
+    // Make it easier to click
+    padding: 5px;
+    margin: -5px;
+    cursor: pointer;
+}
+
+button.stacked-right {
+    float: right;
+    margin-left: 10px;
+}
+
+.row-centered.table tbody tr {
+    th, td {
+        vertical-align: middle;
+    }
+}
+
+div.create-item-area {
+    margin-left: 0px;
+    margin-right: 0px;
+    border: 1px dashed black;
+    padding: 10px;
+}
+
+
+div.row.filter-edit, div.row.filter-details {
+    margin: 10px 0px;
+    padding: 10px;
+}
+
+div.row.filter-edit {
+    border: 1px dashed black;
+}
+
+
+div.row.filter-details {
+    &:hover {
+        cursor: pointer;
+        p.text-muted {
+            color: $brand-info;
+        }
+    }
+}
+
+div.form-group.submit {
+    margin-bottom: 0px;
+}
+
+div.list-header {
+    line-height: 60px;
+    margin-left: 0px;
+    margin-right: 0px;
+    margin-bottom: 20px;
+    margin-top: -20px;
+
+    h1, h2 {
+        display: inline-block;
+        vertical-align: bottom;
+        margin-bottom: 0px;
+    }
+    .list-actions {
+        float: right;
+        button {
+            vertical-align: bottom;
+        }
+    }
+}
+
+table tr.like-sm-input :not(input) {
+    font-size: 0.9em;
+}
+
+// Shortened string
+// https://css-tricks.com/snippets/css/truncate-string-with-ellipsis/
+.truncated {
+    max-width: 300px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+}
+
+.truncated:hover {
+    cursor: help;
+}
+
+

@@ -165,3 +165,9 @@ If you are interested in using blanket for a project and want to ask whether bla
     * The main feature is a json/rest interface
 
 
+## Misc
+
+* Uses [`dep`](https://golang.github.io/dep/docs/daily-dep.html) for dependency management
+* Uses [bindata-assetfs](github.com/elazarl/go-bindata-assetfs) for static files
+* Uses bower and angularjs for front end (both are deprecated, so I need to upgrade these)
+

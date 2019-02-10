@@ -1,0 +1,139 @@
+<div class="col-md-10 col-centered" ng-controller="TaskDetailCtl">
+    <div class="row list-header">
+        <h2>Task Detail :: {{ task.type }} :: {{ task.id }}</h2>
+    </div>
+
+    <!-- Controls -->
+    <div class="row">
+
+        <div class="col-sm-10">
+            <h3>Description</h3>
+            <pre>{{ taskType.description }}</pre>
+
+            <h3>Basic settings</h3>
+            <table class="table table-condensed row-centered">
+                <thead>
+                    <tr>
+                        <th>Setting</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- What -->
+                    <tr class="like-sm-input active">
+                        <td>ID</td>
+                        <td>{{ task.id }}</td>
+                    </tr>
+                    <tr class="like-sm-input active">
+                        <td>Task Type</td>
+                        <td>
+                            <a ng-href="{{baseUrl}}/task_type/{{task.type}}">{{ task.type }}</a>
+                        </td>
+                    </tr>
+                    <tr class="like-sm-input active">
+                        <td>JSON description</td>
+                        <td>
+                            <a ng-href="{{ jsonURL }}">JSON representation</a>
+                        </td>
+                    </tr>
+                    <!-- Logs -->
+                    <tr class="like-sm-input active">
+                        <td>Stdout Logs</td>
+                        <td>
+                            <a ng-href="{{baseUrl}}/results/{{taskId}}/blanket.stdout.log">blanket.stdout.log</a>
+                        </td>
+                    </tr>
+                    <tr class="like-sm-input active">
+                        <td>Stderr Logs</td>
+                        <td>
+                            <a ng-href="{{baseUrl}}/results/{{taskId}}/blanket.stderr.log">blanket.stderr.log</a>
+                        </td>
+                    </tr>
+                    <!-- When -->
+                    <tr class="like-sm-input active">
+                        <td>Date Created</td>
+                        <td>{{ task.createdTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
+                    </tr>
+                    <tr class="like-sm-input active">
+                        <td>Date Started</td>
+                        <td ng-if="task.startedTs === 0" >None</td>
+                        <td ng-if="task.startedTs !== 0" >{{ task.startedTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
+                    </tr>
+                    <tr class="like-sm-input active">
+                        <td>Time Running</td>
+                        <td ng-if="task.startedTs === 0" >0 seconds</td>
+                        <td ng-if="task.startedTs !== 0" >{{ timeRunning(task) | number }} s ({{ task.timeout | number }} s max)</td>
+                    </tr>
+
+
+                    <tr class="like-sm-input active">
+                        <td>Date Last Updated</td>
+                        <td>{{ task.lastUpdatedTs | date:'yyyy/MM/dd HH:mm:ss a' }}</td>
+                    </tr>
+                    <!-- State -->
+                    <tr class="like-sm-input active">
+                        <td>State</td>
+                        <td><span class="label label-{{ task.labelClass }}">{{ task.state }}</span></td>
+                    </tr>
+                    <tr class="like-sm-input active">
+                        <td>Results</td>
+                        <td ng-if="task.hasResults === true" ><a ng-href="{{baseUrl}}/results/{{task.id}}">Results</a></td> 
+                        <td ng-if="task.hasResults === false" >None</td> 
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="col-sm-10">
+            <h3>Environment variables</h3>
+            <table class="table table-condensed row-centered">
+                <thead>
+                    <tr>
+                        <th>Setting</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr 
+                        ng-repeat="(k, v) in task.defaultEnv" 
+                        class="like-sm-input active">
+                        <td>{{ k }}</td>
+                        <td>{{ v }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="row">
+        <h3>Logfile live updates</h3>
+        <form>
+            <div class="form-group">
+                <div class="checkbox">
+                    <label>
+                        <input type="checkbox" ng-model="pinToBottom" ng-change="setScroll()"> Pin to bottom?
+                    </label>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <div class="row">
+        <pre><span ng-repeat="item in events">{{ item.data }}<br/></span></pre>
+    </div>
+
+    <!-- Controls -->
+    <div class="row">
+        <form>
+            <div class="form-group">
+                <div class="checkbox">
+                    <label>
+                        <input type="checkbox" ng-model="pinToBottom" ng-change="setScroll()"> Pin to bottom?
+                    </label>
+                </div>
+            </div>
+        </form>
+
+    </div>
+
+</div> <!-- End TaskDetailCtl -->

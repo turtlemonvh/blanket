@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/boltdb/bolt"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/database"

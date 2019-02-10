@@ -3,7 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cast"
 	"github.com/turtlemonvh/blanket/lib/database"
@@ -141,7 +141,7 @@ func (s *ServerConfig) claimTask(c *gin.Context) {
 			status := http.StatusNotFound
 			errMsg = fmt.Sprintf("Could not find task in database, it was likely stopped and deleted")
 			if err = ackCb(); err != nil {
-				errMsg = fmt.Sprintf("%s: Encountered error while trying to ack task :: %s")
+				errMsg = "%s: Encountered error while trying to ack task :: %s"
 				status = http.StatusInternalServerError
 			}
 			c.String(status, MakeErrorString(errMsg))

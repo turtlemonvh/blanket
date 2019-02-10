@@ -1,0 +1,47 @@
+<!doctype html>
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <title>Blanket UI</title>
+    <meta name="description" content="User interface for working with Blanket">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="css/main.css">
+    <script src="js/lib/common.min.js"></script>
+    <script src="js/app/app.min.js"></script>
+</head>
+<body ng-app="blanketApp">
+    <!--[if lt IE 8]>
+        <p class="browserupgrade">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+    <![endif]-->
+    <nav class="navbar navbar-default" ng-controller="NavCtl">
+        <div class="container-fluid">
+            <div class="row">
+                <ul class="col-md-10 col-centered">
+                    <div class="navbar-header">
+                      <a class="navbar-brand" ui-sref="home">Blanket UI</a>
+                      <ul class="nav navbar-nav">
+                        <li><a ui-sref="tasks">Tasks</a></li>
+                        <li><a ui-sref="taskTypes">Task Types</a></li>
+                        <li><a ui-sref="workers">Workers</a></li>
+                        <li><a ui-sref="about">About</a></li>
+                      </ul>
+                    </div>
+                    <p class="navbar-text navbar-right">
+                        Autorefresh?  <input type="checkbox" ng-model="autoRefresh" ng-change="toggleAutoRefresh()">
+                        | Current Time: {{ lastRefreshed | date:'yyyy/MM/dd HH:mm:ss a' }}
+                    </p>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main view -->
+    <div class="container-fluid">
+        <div ui-view class="row">
+            <div class="col-md-10 col-centered">
+                <h2>NOT FOUND</h1>
+            </div>
+        </div>
+    </div>
+
+</body>

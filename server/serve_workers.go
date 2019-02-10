@@ -2,7 +2,7 @@ package server
 
 import (
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/gin-gonic/gin"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/worker"
@@ -60,7 +60,7 @@ func (s *ServerConfig) updateWorker(c *gin.Context) {
 
 	// Validate worker conf before saving
 	if workerId != w.Id {
-		errMsg := fmt.Sprintf(`{"error": "Problem parsing conf. Id does not equal the expected value ('%d' != '%d')"}`, w.Id, workerId)
+		errMsg := fmt.Sprintf(`{"error": "Problem parsing conf. Id does not equal the expected value ('%s' != '%s')"}`, w.Id, workerId)
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}

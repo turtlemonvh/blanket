@@ -3,7 +3,7 @@ package tasks
 import (
 	"encoding/json"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib"

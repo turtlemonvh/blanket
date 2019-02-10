@@ -30,11 +30,21 @@ func (s *ServerConfig) streamLog(c *gin.Context, sub *tailed_file.TailedFileSubs
 		case logline := <-sub.NewLines:
 			// Send event with message content
 			timer.Stop()
+			sse.Encode(c.Writer, sse.Event{
+				Id:    strconv.Itoa(lineno),
+				Event: "message",
+				Data:  logline,
+			})
+			/*
+			server/serve_logs.go:33:26: cannot use sse.Event literal (type sse.Event) as type render.Render in argument to c.Render:
+        		sse.Event does not implement render.Render (missing WriteContentType method)
+
 			c.Render(-1, sse.Event{
 				Id:    strconv.Itoa(lineno),
 				Event: "message",
 				Data:  logline,
 			})
+			*/
 			lineno++
 			loglineChannelIsEmpty = false
 		case <-timer.C:

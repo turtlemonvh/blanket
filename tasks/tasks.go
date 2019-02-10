@@ -3,7 +3,7 @@ package tasks
 import (
 	"bytes"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"gopkg.in/mgo.v2/bson"
 	"os"
 	"os/exec"

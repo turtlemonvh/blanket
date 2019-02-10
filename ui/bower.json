@@ -1,0 +1,26 @@
+{
+  "name": "blanket-ui",
+  "description": "Web app for working with blanket.",
+  "main": "gulpfile.js",
+  "authors": [
+    "Timothy Van Heest"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "queue"
+  ],
+  "moduleType": [],
+  "homepage": "",
+  "private": true,
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests"
+  ],
+  "devDependencies": {
+    "lodash": "^4.1.0",
+    "angular-ui-router": "^0.2.18"
+  }
+}
