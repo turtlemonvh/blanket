@@ -25,7 +25,7 @@ Checking syntax of js files
 
 ## Integrating with main blanket project
 
-    # In html dir of this projkct
+    # In html dir of this project
     gulp build-app
 
     # In blanket dir; re-grab binary data and rebuild

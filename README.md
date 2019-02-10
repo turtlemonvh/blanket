@@ -169,5 +169,5 @@ If you are interested in using blanket for a project and want to ask whether bla
 
 * Uses [`dep`](https://golang.github.io/dep/docs/daily-dep.html) for dependency management
 * Uses [bindata-assetfs](github.com/elazarl/go-bindata-assetfs) for static files
-* Uses bower and angularjs for front end (both are deprecated, so I need to upgrade these)
+* Uses bower and angularjs 1.6 for front end (both are deprecated, so I need to upgrade these)
 

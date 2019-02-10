@@ -36,10 +36,15 @@ setup-ui-dev:
 	npm install --save-dev jshint gulp-jshint; \
 	bower install
 
-update-bindata: update-ui
-	# Change 'public' to 'dev' for un-minified code
+update-bindata:
 	cd ui && gulp build
 	cd ui && go-bindata-assetfs -pkg=server public/...
+	mv ui/bindata.go server/
+
+update-bindata-dev:
+	# Change 'dev' to 'public' for un-minified code
+	cd ui && gulp build-dev
+	cd ui && go-bindata-assetfs -pkg=server dev/...
 	mv ui/bindata.go server/
 
 linux: 

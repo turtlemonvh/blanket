@@ -43,4 +43,9 @@ angular.module('blanketApp', ["ui.router", "ui.bootstrap.dateparser"])
                 return $templateCache.get('about.html');
             }
         });
-    }]);
+    }])
+    // Mute unhandled exceptions. Really we want to handle these, but we want to upgrade to Angular 6 anyway...
+    // https://www.codelord.net/2017/08/20/angular-1-dot-6-s-possibly-unhandled-rejection-errors/
+    .config(function ($qProvider) {
+        $qProvider.errorOnUnhandledRejections(false);
+    });
