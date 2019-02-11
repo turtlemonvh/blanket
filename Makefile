@@ -37,6 +37,10 @@ setup-ui-dev:
 	bower install
 
 update-bindata:
+	# WARNING: We get an `unknown provider` warning when trying to use this version
+	# FIX: https://stackoverflow.com/questions/20340644/angular-unknown-provider-error-after-minification-with-grunt-build-in-yeoman-a
+	# Exit early to force using `dev` instead until this is fixed
+	exit 1
 	cd ui && gulp build
 	cd ui && go-bindata-assetfs -pkg=server public/...
 	mv ui/bindata.go server/
