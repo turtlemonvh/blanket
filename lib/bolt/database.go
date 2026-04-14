@@ -153,7 +153,6 @@ func (DB *BlanketBoltDB) GetTasks(tc *database.TaskSearchConf) ([]tasks.Task, in
 }
 
 func (DB *BlanketBoltDB) DeleteTask(taskId bson.ObjectId) error {
-	var err error
 	return DB.db.Update(func(tx *bolt.Tx) error {
 		b, err := fetchTaskBucket(tx)
 		if err != nil {
@@ -161,7 +160,6 @@ func (DB *BlanketBoltDB) DeleteTask(taskId bson.ObjectId) error {
 		}
 		return b.Delete(IdBytes(taskId))
 	})
-	return err
 }
 
 // progress is a number [0:100]

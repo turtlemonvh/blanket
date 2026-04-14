@@ -3,7 +3,6 @@ package server
 import (
 	"expvar"
 	"fmt"
-	"github.com/codahale/metrics"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"runtime"
@@ -12,8 +11,8 @@ import (
 
 var (
 	// Updated periodically
-	nGoRoutines = metrics.Gauge("nGoRoutines")
-	nCGoCalls   = metrics.Gauge("nCGoCalls")
+	nGoRoutines = expvar.NewInt("nGoRoutines")
+	nCGoCalls   = expvar.NewInt("nCGoCalls")
 )
 
 func init() {

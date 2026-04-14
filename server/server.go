@@ -14,7 +14,6 @@ package server
 import (
 	"fmt"
 	log "github.com/sirupsen/logrus"
-	"github.com/gin-gonic/contrib/ginrus"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
 	"github.com/turtlemonvh/blanket/lib/database"
@@ -24,6 +23,33 @@ import (
 	"net/http"
 	"time"
 )
+
+// ginLogger is a drop-in replacement for gin-gonic/contrib/ginrus.
+// It logs each request via logrus with the same fields ginrus would produce.
+func ginLogger(logger *log.Logger, timeFormat string, utc bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		c.Next()
+		end := time.Now()
+		if utc {
+			end = end.UTC()
+		}
+		entry := logger.WithFields(log.Fields{
+			"status":  c.Writer.Status(),
+			"method":  c.Request.Method,
+			"path":    path,
+			"ip":      c.ClientIP(),
+			"latency": end.Sub(start),
+			"time":    end.Format(timeFormat),
+		})
+		if len(c.Errors) > 0 {
+			entry.Error(c.Errors.String())
+		} else {
+			entry.Info()
+		}
+	}
+}
 
 type ServerConfig struct {
 	DB             database.BlanketDB
@@ -57,7 +83,7 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	}
 
 	r := gin.New()
-	r.Use(ginrus.Ginrus(log.StandardLogger(), time.RFC3339, true))
+	r.Use(ginLogger(log.StandardLogger(), time.RFC3339, true))
 	r.Use(gin.Recovery())
 	r.Use(gin.WrapF(makeCorsHandler(c)))
 

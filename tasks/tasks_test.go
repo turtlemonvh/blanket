@@ -45,7 +45,8 @@ executor="bash"
 	assert.Equal(t, nt.TypeId, "bash_task")
 
 	cmd, err := nt.GetCmd(&tt)
-	assert.Equal(t, cmd.Path, "/bin/bash")
+	assert.NoError(t, err)
+	assert.Contains(t, cmd.Path, "bash")
 	assert.True(t, len(cmd.Args) > 1)
 
 }

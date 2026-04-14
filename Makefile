@@ -17,12 +17,12 @@ GITHUB_USERNAME=turtlemonvh
 LDFLAGS = -ldflags "-X main.COMMIT=${COMMIT} -X main.BRANCH=${BRANCH}"
 
 # Build the project
-all: clean test-xunit vet linux darwin windows
+all: clean test vet linux darwin windows
 
-setup-dep:
-	# OSX
-	# https://golang.github.io/dep/docs/installation.html
-	brew install dep
+# First-time setup on a fresh Ubuntu / WSL2 box. Installs Go, nvm+Node, and
+# Playwright (with system deps). Safe to re-run. Requires sudo.
+setup:
+	bash scripts/setup.sh
 
 # Setup for bindata
 setup-bindata:
@@ -61,15 +61,25 @@ windows:
 	GOOS=windows GOARCH=${GOARCH} go build ${LDFLAGS} -o ${BINARY}-windows-${GOARCH}.exe .
 
 test:
-	# To test just a module:
-	# go test ./tasks
-	go test -v ./...
+	go test -v -count=1 ./...
 
-test-xunit:
-	# To test just a module:
-	# go test ./tasks
-	if ! hash go2xunit 2>/dev/null; then go install github.com/tebeka/go2xunit; fi
-	go test -v ./... 2>&1 | go2xunit -output ${TEST_REPORT}
+# Integration tests spin up a real server + worker; skip with -short
+test-integration:
+	go test -v -count=1 -run TestProcessOne ./worker/...
+
+# E2E tests require Node.js + Playwright.
+# Run `make install-playwright` once before running this target.
+# Requires a built blanket binary in the repo root (make linux/darwin first).
+# Set SKIP_BROWSER_TESTS=1 to run only API-level tests when Chromium system
+# dependencies (libnspr4 etc.) are not installed.
+test-browser:
+	cd tests/e2e && npx playwright test
+
+test-api-e2e:
+	cd tests/e2e && SKIP_BROWSER_TESTS=1 npx playwright test
+
+install-playwright:
+	cd tests/e2e && npm install && npx playwright install --with-deps chromium
 
 vet:
 	go vet ./... > ${VET_REPORT} 2>&1
@@ -82,4 +92,4 @@ clean:
 	-rm -f ${VET_REPORT}
 	-rm -f ${BINARY}-*
 
-.PHONY: linux darwin windows test test-xunit vet fmt clean update-bindata
+.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e install-playwright vet fmt clean update-bindata

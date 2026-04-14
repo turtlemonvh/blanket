@@ -1,8 +1,8 @@
 package tailed_file
 
 import (
+	"expvar"
 	log "github.com/sirupsen/logrus"
-	"github.com/codahale/metrics"
 	"github.com/hpcloud/tail"
 	"gopkg.in/tomb.v1"
 	"math/rand"
@@ -19,8 +19,8 @@ const (
 
 var (
 	defaultTfc             *TailedFileCollection
-	nTailedFiles           = metrics.Gauge("nTailedFiles")
-	nTailedFileSubscribers = metrics.Gauge("nTailedFiles")
+	nTailedFiles           = expvar.NewInt("nTailedFiles")
+	nTailedFileSubscribers = expvar.NewInt("nTailedFileSubscribers")
 )
 
 type TailedFileCollection struct {

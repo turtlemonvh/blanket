@@ -1,0 +1,8 @@
+{
+  "port": 8773,
+  "tasks": {
+    "typesPaths": ["./testdata/types"],
+    "resultsPath": "/tmp/blanket-test-results"
+  },
+  "logLevel": "error"
+}

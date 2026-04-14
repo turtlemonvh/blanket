@@ -199,7 +199,6 @@ func (s *ServerConfig) launchWorker(c *gin.Context, w *worker.WorkerConf) {
 			continue
 		}
 	}
-	c.String(http.StatusOK, `{}`)
 }
 
 // FIXME: Stream file contents

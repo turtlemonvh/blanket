@@ -2,6 +2,16 @@
 
 Blanket is a RESTy wrapper for long running tasks.
 
+## Development setup (Ubuntu / WSL2)
+
+One-shot install of Go, Node, and Playwright (uses `sudo` for apt + `/usr/local/go`):
+
+```bash
+make setup
+```
+
+See `scripts/setup.sh` for what it installs.
+
 ## Quick Start
 
 ```bash
