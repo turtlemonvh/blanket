@@ -53,6 +53,12 @@ effort than a normal test add.
   `scripts/setup.sh` handles dev setup). Add a `Dockerfile` that reproduces
   the Go + Node + Playwright toolchain, and a GitHub Actions workflow that
   runs `make test` and `make test-browser` against it on each push/PR.
+- **Cross-compile release binaries in CI** — the `Makefile` already has
+  `linux`, `darwin`, `windows` targets (all amd64). The CI workflow should
+  build all three on every push/PR and attach the artifacts on tagged
+  releases, so contributors and users can pull a binary without a local
+  Go toolchain. "Single binary that drops on any host" is a load-bearing
+  promise of the project — CI should verify it on every commit.
 
 ## Docs
 
@@ -68,30 +74,18 @@ effort than a normal test add.
   Consistent branding makes the project feel maintained and gives the docs
   somewhere to hang visual identity.
 
-## UI Modernization (HTMX + Go templates)
+## UI follow-ups
 
-Phase A (Playwright journey harness) and Phase B (HTMX scaffold at
-`/ui-next/`, task detail + SSE log stream, env var editor, new-worker
-form) are landed. Remaining before Phase C cut over:
+The HTMX + Go-template UI is now the only UI (Phase C complete — Angular,
+`gulp`, `bower`, and `server/ui_dist/` are gone). Remaining polish:
 
-- **Filter controls on the tasks list** — tags, states, types, date range.
-  Angular's `tasks.html` has the full form; port it with HTMX form posts
-  that re-render `#tasks-rows` (query params flow through
-  `TaskSearchConfFromContext`).
-- **"Add custom setting" button on the new-task env editor** — Angular
-  lets users inject arbitrary `name=value` pairs beyond the TOML-declared
-  ones. Our scaffold only renders declared vars.
-- **Retarget the Playwright journey suite at `/ui-next/`** — currently it
-  covers the Angular UI. Dup the spec (or parameterize it) so both UIs
-  must stay green during the migration.
-- **Phase C cut over** — repoint `/` and `/ui/` at the new UI and delete
-  `ui/`, `server/ui_dist/`, and the legacy Angular bits (`gulpfile.js`,
-  `bower.json`, top-level `package.json`, SCSS).
 - **Worker management `FIXME`s in `server/serve_workers.go`**:
   - Make the stop-worker update atomic (currently read-modify-write)
   - Update `lastHeardTs` on stop
   - Allow a `force` option that sends signals on supported platforms
   - `deleteWorker` should validate the worker is stopped before deleting
+- **Rename `server/ui_next/` → `server/ui/`** and the `uiNext*` funcs to
+  drop the migration-era suffix. Pure cosmetic; safe to do any time.
 
 ## Candidate Phases
 

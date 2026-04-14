@@ -81,6 +81,46 @@ func (e ItemNotFoundError) Error() string {
 	return fmt.Sprintf("Item not found: %s", string(e))
 }
 
+// parseFilterTime parses a user-supplied date/time in one of several formats
+// and falls back to unix seconds. Returns (time, true) on success.
+// Supported shapes: unix int, RFC3339, "2006-01-02T15:04" (datetime-local),
+// "2006-01-02", "2006/01/02 15:04" (legacy Angular UI format).
+func parseFilterTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	if sec, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return time.Unix(sec, 0), true
+	}
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02T15:04",
+		"2006-01-02",
+		"2006/01/02 15:04",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// collectCSV reads all values for a query key (supports both `k=a,b` and
+// `k=a&k=b`), splits on commas, trims, and drops empties.
+func collectCSV(c *gin.Context, key string) []string {
+	out := []string{}
+	for _, raw := range c.QueryArray(key) {
+		for _, v := range strings.Split(raw, ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
 // Create a search configuration object out of a request context
 func TaskSearchConfFromContext(c *gin.Context) *TaskSearchConf {
 	tc := &TaskSearchConf{}
@@ -100,48 +140,29 @@ func TaskSearchConfFromContext(c *gin.Context) *TaskSearchConf {
 
 	tc.ReverseSort = c.Query("reverseSort") == "true"
 
-	// Should be unix timestamps, in seconds
-	startTimeSent := c.Query("createdAfter")
-	endTimeSent := c.Query("createdBefore")
-
+	// Dates accept unix-seconds or any of the human layouts in parseFilterTime.
 	startTime := time.Unix(0, 0)
 	endTime := time.Unix(FAR_FUTURE_SECONDS, 0)
-	startTimeSentInt, err := strconv.ParseInt(startTimeSent, 10, 64)
-	if err == nil {
-		startTime = time.Unix(startTimeSentInt, 0)
+	if t, ok := parseFilterTime(c.Query("createdAfter")); ok {
+		startTime = t
 	}
-	endTimeSentInt, err := strconv.ParseInt(endTimeSent, 10, 64)
-	if err == nil {
-		endTime = time.Unix(endTimeSentInt, 0)
+	if t, ok := parseFilterTime(c.Query("createdBefore")); ok {
+		endTime = t
 	}
 	tc.SmallestId = objectid.NewObjectIdWithTime(startTime)
 	tc.LargestId = objectid.NewObjectIdWithTime(endTime)
 
-	// Filtering based on tags, states, types
-	tags := c.Query("requiredTags")
-	if tags != "" {
-		tc.RequiredTags = strings.Split(tags, ",")
-	}
+	tc.RequiredTags = collectCSV(c, "requiredTags")
+	tc.MaxTags = collectCSV(c, "maxTags")
 
-	maxTags := c.Query("maxTags")
-	if maxTags != "" {
-		tc.MaxTags = strings.Split(maxTags, ",")
-	}
-
-	sentAllowedStates := c.Query("states")
 	tc.AllowedTaskStates = make(map[string]bool)
-	if sentAllowedStates != "" {
-		for _, tstate := range strings.Split(sentAllowedStates, ",") {
-			tc.AllowedTaskStates[tstate] = true
-		}
+	for _, s := range collectCSV(c, "states") {
+		tc.AllowedTaskStates[s] = true
 	}
 
-	sentAllowedTypes := c.Query("types")
 	tc.AllowedTaskTypes = make(map[string]bool)
-	if sentAllowedTypes != "" {
-		for _, ttype := range strings.Split(sentAllowedTypes, ",") {
-			tc.AllowedTaskTypes[ttype] = true
-		}
+	for _, s := range collectCSV(c, "types") {
+		tc.AllowedTaskTypes[s] = true
 	}
 
 	return tc

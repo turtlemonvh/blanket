@@ -1,8 +1,8 @@
 {{define "new-worker-form"}}
-<form hx-post="/ui-next/workers"
+<form hx-post="/ui/workers"
       hx-target="#workers-rows"
       hx-swap="innerHTML"
-      hx-on::after-request="this.parentElement.innerHTML=''"
+      hx-on::after-request="if (event.target === this && event.detail.successful) this.parentElement.innerHTML=''"
       style="padding:1rem;border:1px solid var(--border);border-radius:6px;margin-bottom:1rem;">
     <div style="margin-bottom:0.5rem;">
         <label for="newWorkerTags">Worker Tags</label><br>
@@ -14,7 +14,7 @@
         <input id="newWorkerInterval" type="number" name="checkInterval" step="0.1" min="0.1" placeholder="2" aria-label="check interval">
     </div>
     <button type="submit" class="primary" aria-label="launch worker">Launch Worker</button>
-    <button type="button" hx-get="/ui-next/partials/blank" hx-target="#new-worker-form" hx-swap="innerHTML">
+    <button type="button" hx-get="/ui/partials/blank" hx-target="#new-worker-form" hx-swap="innerHTML">
         Cancel
     </button>
 </form>

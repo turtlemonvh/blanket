@@ -1,0 +1,15 @@
+{{define "custom-env-row"}}
+<tr>
+    <td>
+        <input type="text" name="customEnvName" placeholder="setting" aria-label="custom setting name">
+    </td>
+    <td>
+        <input type="text" name="customEnvValue" placeholder="value" aria-label="custom setting value">
+    </td>
+    <td class="muted"></td>
+    <td><span class="badge">Custom</span></td>
+    <td>
+        <a class="danger" onclick="this.closest('tr').remove()">Remove</a>
+    </td>
+</tr>
+{{end}}

@@ -53,9 +53,10 @@ test.describe('API health', () => {
     const res = await request.get('/ui/');
     expect(res.ok()).toBeTruthy();
     const text = await res.text();
-    // The embedded UI starts with <!doctype html> and contains the Blanket app markup.
+    // The embedded UI starts with <!doctype html> and sets a <title> prefixed
+    // with "Blanket" for every page.
     expect(text.toLowerCase()).toContain('<!doctype html');
-    expect(text).toContain('Blanket UI');
+    expect(text).toContain('<title>Blanket');
   });
 });
 

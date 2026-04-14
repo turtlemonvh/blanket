@@ -3,13 +3,14 @@
     <div class="list-header">
         <h2>Tasks</h2>
         <button type="button" class="primary"
-                hx-get="/ui-next/partials/new-task"
+                hx-get="/ui/partials/new-task"
                 hx-target="#new-task-form"
                 hx-swap="innerHTML">
             New
         </button>
         <button type="button"
-                hx-get="/ui-next/partials/tasks-rows"
+                hx-get="/ui/partials/tasks-rows"
+                hx-include="#task-filter"
                 hx-target="#tasks-rows"
                 hx-swap="innerHTML">
             Refresh List
@@ -17,6 +18,56 @@
     </div>
 
     <div id="new-task-form"></div>
+
+    <details class="filter-form" style="margin:0.75rem 0;">
+        <summary style="cursor:pointer;">Filter</summary>
+        <form id="task-filter"
+              hx-get="/ui/partials/tasks-rows"
+              hx-target="#tasks-rows"
+              hx-swap="innerHTML"
+              hx-trigger="submit, change delay:400ms"
+              style="padding:0.75rem;border:1px solid var(--border);border-radius:6px;margin-top:0.5rem;">
+            <div style="margin-bottom:0.5rem;">
+                <label for="filterTags">Required Tags</label><br>
+                <input id="filterTags" type="text" name="requiredTags" placeholder="bash,unix" aria-label="required tags">
+                <span class="muted" style="margin-left:0.5rem;">Comma-separated. Matching tasks must have all of these tags.</span>
+            </div>
+
+            <fieldset style="margin-bottom:0.5rem;border:1px solid var(--border);padding:0.5rem;">
+                <legend>States</legend>
+                {{range .TaskStates}}
+                <label style="margin-right:0.75rem;">
+                    <input type="checkbox" name="states" value="{{.}}"> {{.}}
+                </label>
+                {{end}}
+            </fieldset>
+
+            <fieldset style="margin-bottom:0.5rem;border:1px solid var(--border);padding:0.5rem;">
+                <legend>Task Types</legend>
+                {{range .TaskTypeNames}}
+                <label style="margin-right:0.75rem;">
+                    <input type="checkbox" name="types" value="{{.}}"> {{.}}
+                </label>
+                {{else}}
+                <span class="muted">No task types configured.</span>
+                {{end}}
+            </fieldset>
+
+            <div style="margin-bottom:0.5rem;">
+                <label for="filterAfter">Earliest creation</label>
+                <input id="filterAfter" type="datetime-local" name="createdAfter" aria-label="earliest creation">
+                <label for="filterBefore" style="margin-left:0.75rem;">Latest creation</label>
+                <input id="filterBefore" type="datetime-local" name="createdBefore" aria-label="latest creation">
+            </div>
+
+            <button type="submit" class="primary" aria-label="apply filter">Apply</button>
+            <button type="button"
+                    aria-label="clear filter"
+                    onclick="this.form.reset(); htmx.trigger(this.form, 'submit');">
+                Clear
+            </button>
+        </form>
+    </details>
 
     <table>
         <thead>

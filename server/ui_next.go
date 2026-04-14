@@ -145,8 +145,18 @@ func (s *ServerConfig) uiNextTasksPage(c *gin.Context) {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
+	views := readTaskTypeViews()
+	typeNames := make([]string, 0, len(views))
+	for _, v := range views {
+		typeNames = append(typeNames, v.Name)
+	}
 	t := mustParseUINextPage("tasks", "ui_next/templates/tasks.html", "ui_next/templates/tasks_rows.html")
-	s.renderUINext(c, t, gin.H{"Title": "Tasks", "Tasks": tks})
+	s.renderUINext(c, t, gin.H{
+		"Title":         "Tasks",
+		"Tasks":         tks,
+		"TaskStates":    tasks.ValidTaskStates,
+		"TaskTypeNames": typeNames,
+	})
 }
 
 // uiNextTaskDetailPage renders one task's metadata, env vars, and log stream.
@@ -359,6 +369,16 @@ func (s *ServerConfig) uiNextBlankPartial(c *gin.Context) {
 	c.String(http.StatusOK, "")
 }
 
+// uiNextCustomEnvRowPartial returns one empty "custom setting" row that
+// the env editor appends to its tbody when the user clicks "Add custom setting".
+func (s *ServerConfig) uiNextCustomEnvRowPartial(c *gin.Context) {
+	t := mustParsePartial("custom-env-row", "custom_env_row.html")
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	if err := t.ExecuteTemplate(c.Writer, "custom-env-row", nil); err != nil {
+		log.WithField("err", err).Warn("ui-next: render custom-env-row")
+	}
+}
+
 // uiNextSubmitTask handles the New Task form submit and returns fresh rows.
 // Form fields named `env.<NAME>` are collected into the task's ExecEnv.
 func (s *ServerConfig) uiNextSubmitTask(c *gin.Context) {
@@ -387,6 +407,26 @@ func (s *ServerConfig) uiNextSubmitTask(c *gin.Context) {
 			continue
 		}
 		childEnv[strings.TrimPrefix(key, "env.")] = v
+	}
+
+	// "Add custom setting" rows emit paired customEnvName/customEnvValue
+	// arrays; zip by index. A blank name (user added a row but didn't fill
+	// it) is silently dropped. Declared env.* fields take precedence.
+	names := c.Request.PostForm["customEnvName"]
+	values := c.Request.PostForm["customEnvValue"]
+	for i, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || strings.HasPrefix(name, "env.") {
+			continue
+		}
+		if _, exists := childEnv[name]; exists {
+			continue
+		}
+		v := ""
+		if i < len(values) {
+			v = values[i]
+		}
+		childEnv[name] = v
 	}
 
 	for name := range tt.RequiredEnv() {

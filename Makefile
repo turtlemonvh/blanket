@@ -24,22 +24,7 @@ all: clean test vet linux darwin windows
 setup:
 	bash scripts/setup.sh
 
-setup-ui-dev:
-	cd ui; \
-	npm install; \
-	npm install -g bower gulp; \
-	npm install --save-dev jshint gulp-jshint; \
-	bower install
-
-# Rebuild the embedded UI assets. UI source lives in ui/src; running `gulp
-# build-dev` produces ui/dev/, which we sync into server/ui_dist/ — that
-# directory is embedded at compile time via //go:embed in server/ui.go.
-update-ui-dist:
-	cd ui && gulp build-dev
-	rm -rf server/ui_dist
-	cp -R ui/dev server/ui_dist
-
-linux: 
+linux:
 	GOOS=linux GOARCH=${GOARCH} go build ${LDFLAGS} -o ${BINARY}-linux-${GOARCH} .
 
 darwin:
@@ -80,4 +65,4 @@ clean:
 	-rm -f ${VET_REPORT}
 	-rm -f ${BINARY}-*
 
-.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e install-playwright vet fmt clean update-ui-dist setup-ui-dev
+.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e install-playwright vet fmt clean

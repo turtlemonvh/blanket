@@ -90,29 +90,27 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	// Make the result dir browseable
 	r.StaticFS("/results", gin.Dir(s.ResultsPath, true))
 
-	// Serve ui from embedded filesystem (server/ui_dist)
-	r.StaticFS("/ui", uiHTTPFS())
-
-	// New HTMX UI scaffold, served in parallel during the modernization.
-	r.StaticFS("/ui-next/static", uiNextStaticFS())
-	r.GET("/ui-next/", s.uiNextTasksPage)
-	r.GET("/ui-next/tasks/:id", s.uiNextTaskDetailPage)
-	r.GET("/ui-next/workers", s.uiNextWorkersPage)
-	r.GET("/ui-next/task-types", s.uiNextTaskTypesPage)
-	r.GET("/ui-next/about", s.uiNextAboutPage)
-	r.POST("/ui-next/tasks", s.uiNextSubmitTask)
-	r.POST("/ui-next/workers", s.uiNextSubmitWorker)
-	r.GET("/ui-next/partials/tasks-rows", s.uiNextTasksRowsPartial)
-	r.GET("/ui-next/partials/workers-rows", s.uiNextWorkersRowsPartial)
-	r.GET("/ui-next/partials/task-types-rows", s.uiNextTaskTypesRowsPartial)
-	r.GET("/ui-next/partials/new-task", s.uiNextNewTaskPartial)
-	r.GET("/ui-next/partials/task-type-env", s.uiNextTaskTypeEnvPartial)
-	r.GET("/ui-next/partials/new-worker", s.uiNextNewWorkerPartial)
-	r.GET("/ui-next/partials/blank", s.uiNextBlankPartial)
+	// HTMX + Go-template UI.
+	r.StaticFS("/ui/static", uiNextStaticFS())
+	r.GET("/ui/", s.uiNextTasksPage)
+	r.GET("/ui/tasks/:id", s.uiNextTaskDetailPage)
+	r.GET("/ui/workers", s.uiNextWorkersPage)
+	r.GET("/ui/task-types", s.uiNextTaskTypesPage)
+	r.GET("/ui/about", s.uiNextAboutPage)
+	r.POST("/ui/tasks", s.uiNextSubmitTask)
+	r.POST("/ui/workers", s.uiNextSubmitWorker)
+	r.GET("/ui/partials/tasks-rows", s.uiNextTasksRowsPartial)
+	r.GET("/ui/partials/workers-rows", s.uiNextWorkersRowsPartial)
+	r.GET("/ui/partials/task-types-rows", s.uiNextTaskTypesRowsPartial)
+	r.GET("/ui/partials/new-task", s.uiNextNewTaskPartial)
+	r.GET("/ui/partials/task-type-env", s.uiNextTaskTypeEnvPartial)
+	r.GET("/ui/partials/custom-env-row", s.uiNextCustomEnvRowPartial)
+	r.GET("/ui/partials/new-worker", s.uiNextNewWorkerPartial)
+	r.GET("/ui/partials/blank", s.uiNextBlankPartial)
 
 	// Redirect to ui
 	r.GET("/", func(c *gin.Context) {
-		c.Redirect(http.StatusMovedPermanently, "/ui")
+		c.Redirect(http.StatusMovedPermanently, "/ui/")
 	})
 	r.GET("/version", func(c *gin.Context) {
 		c.JSON(200, gin.H{

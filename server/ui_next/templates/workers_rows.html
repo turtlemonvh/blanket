@@ -11,12 +11,12 @@
     <td class="row-actions">
         {{if $w.Stopped}}
         <a hx-put="/worker/{{hex $w.Id}}/restart" hx-swap="none"
-           hx-on::after-request="htmx.ajax('GET', '/ui-next/partials/workers-rows', '#workers-rows')">Restart</a>
+           hx-on::after-request="htmx.ajax('GET', '/ui/partials/workers-rows', '#workers-rows')">Restart</a>
         <a class="danger" hx-delete="/worker/{{hex $w.Id}}" hx-swap="none"
-           hx-on::after-request="htmx.ajax('GET', '/ui-next/partials/workers-rows', '#workers-rows')">Delete</a>
+           hx-on::after-request="htmx.ajax('GET', '/ui/partials/workers-rows', '#workers-rows')">Delete</a>
         {{else}}
         <a class="danger" hx-put="/worker/{{hex $w.Id}}/stop" hx-swap="none"
-           hx-on::after-request="htmx.ajax('GET', '/ui-next/partials/workers-rows', '#workers-rows')">Stop</a>
+           hx-on::after-request="htmx.ajax('GET', '/ui/partials/workers-rows', '#workers-rows')">Stop</a>
         {{end}}
     </td>
 </tr>

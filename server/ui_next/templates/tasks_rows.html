@@ -2,7 +2,7 @@
 {{range $i, $t := .Tasks}}
 <tr>
     <th scope="row">{{add $i 1}}</th>
-    <td><a href="/ui-next/tasks/{{hex $t.Id}}">{{shortId $t.Id}}</a></td>
+    <td><a href="/ui/tasks/{{hex $t.Id}}">{{shortId $t.Id}}</a></td>
     <td>{{$t.TypeId}}</td>
     <td>{{join $t.Tags ", "}}</td>
     <td>{{fmtTs $t.CreatedTs}}</td>
@@ -14,7 +14,7 @@
         <a class="danger"
            hx-put="/task/{{hex $t.Id}}/cancel"
            hx-swap="none"
-           hx-on::after-request="htmx.ajax('GET', '/ui-next/partials/tasks-rows', '#tasks-rows')">
+           hx-on::after-request="htmx.ajax('GET', '/ui/partials/tasks-rows', '#tasks-rows')">
             Cancel
         </a>
         {{end}}
@@ -22,7 +22,7 @@
         <a class="danger"
            hx-delete="/task/{{hex $t.Id}}"
            hx-swap="none"
-           hx-on::after-request="htmx.ajax('GET', '/ui-next/partials/tasks-rows', '#tasks-rows')">
+           hx-on::after-request="htmx.ajax('GET', '/ui/partials/tasks-rows', '#tasks-rows')">
             Delete
         </a>
         {{end}}

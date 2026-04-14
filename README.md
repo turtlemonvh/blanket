@@ -116,9 +116,9 @@ Run worker with certain capabilities
 
 `go build` produces a single static binary with the web UI baked in.
 Templates, CSS, and vendored htmx live under `server/ui_next/` and are
-pulled into the binary via `//go:embed` (see `server/ui_next.go` and
-`server/ui.go`). No separate asset deploy, no runtime filesystem lookups —
-drop the binary on a host and run it.
+pulled into the binary via `//go:embed` (see `server/ui_next.go`). No
+separate asset deploy, no runtime filesystem lookups — drop the binary
+on a host and run it.
 
 To refresh the vendored htmx bundle:
 
@@ -128,10 +128,6 @@ curl -sSfL https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js \
 curl -sSfL https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js \
     -o server/ui_next/static/htmx-sse.js
 ```
-
-The legacy AngularJS UI under `ui/` still compiles to `server/ui_dist/`
-via `gulp` during the modernization — that path will go away once the
-HTMX UI reaches parity (see `docs/NextUp.md`).
 
 ## Command line API
 
@@ -198,7 +194,7 @@ If you are interested in using blanket for a project and want to ask whether bla
 
 ## Misc
 
-* Uses [`dep`](https://golang.github.io/dep/docs/daily-dep.html) for dependency management
-* Uses [bindata-assetfs](github.com/elazarl/go-bindata-assetfs) for static files
-* Uses bower and angularjs 1.6 for front end (both are deprecated, so I need to upgrade these)
+* Go modules for dependency management
+* `//go:embed` for static files (see `server/ui_next.go`)
+* Server-rendered Go templates + [htmx](https://htmx.org/) for the web UI
 
