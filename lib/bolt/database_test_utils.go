@@ -2,7 +2,7 @@ package bolt
 
 import (
 	"fmt"
-	"github.com/boltdb/bolt"
+	bolt "go.etcd.io/bbolt"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"io/ioutil"
 	"os"
