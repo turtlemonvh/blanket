@@ -66,11 +66,27 @@ effort than a normal test add.
   Consistent branding makes the project feel maintained and gives the docs
   somewhere to hang visual identity.
 
-## Deferred (Non-Urgent)
+## UI Modernization (HTMX + Go templates)
 
-- **UI stack modernization** — AngularJS 1.6 + bower + gulp are all deprecated.
-  Not blocking anything until we touch the UI. Bigger project: likely a
-  rewrite against a current framework, plus regenerating `server/ui_dist/`.
+Phase A (Playwright journey harness) and Phase B (HTMX scaffold at
+`/ui-next/`) are landed. Remaining:
+
+- **Task detail page** — the Angular UI has a per-task page with log
+  streaming (SSE). The scaffold doesn't cover it yet; needs a dedicated
+  template plus a streaming endpoint (or reuse `/task/:id/log`).
+- **Filter controls on the tasks list** — tags, states, types, date range.
+  Angular's `tasks.html` has the full form; port it with HTMX form posts
+  that re-render `#tasks-rows`.
+- **New-worker form** — the Workers page's "New" button is inert in the
+  scaffold; mirror the Angular form (tags, check interval).
+- **Env var editor on the new-task form** — currently the scaffold refuses
+  task types with required env vars. Add the table editor before cut over.
+- **Vendor pinning / upgrade plan for htmx** — `ui_next/static/htmx.min.js`
+  is vendored at 1.9.12. Document where it came from and how to refresh it
+  (a one-line curl in the README is fine).
+- **Phase C cut over** — once the above are done, repoint `/ui/` at the
+  new UI and delete `ui/`, `server/ui_dist/`, and the legacy Angular
+  bits (`gulpfile.js`, `bower.json`, `package.json`, SCSS).
 - **Worker management `FIXME`s in `server/serve_workers.go`**:
   - Make the stop-worker update atomic (currently read-modify-write)
   - Update `lastHeardTs` on stop

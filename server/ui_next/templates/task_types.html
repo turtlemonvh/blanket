@@ -1,0 +1,28 @@
+{{define "content"}}
+<section>
+    <div class="list-header">
+        <h2>Task Types</h2>
+        <button type="button"
+                hx-get="/ui-next/partials/task-types-rows"
+                hx-target="#task-types-rows"
+                hx-swap="innerHTML">
+            Refresh List
+        </button>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Name</th>
+                <th>Tags</th>
+                <th>Loaded</th>
+                <th>Config File</th>
+                <th>Version</th>
+            </tr>
+        </thead>
+        <tbody id="task-types-rows">
+            {{template "task-types-rows" .}}
+        </tbody>
+    </table>
+</section>
+{{end}}

@@ -1,0 +1,40 @@
+{{define "content"}}
+<section>
+    <div class="list-header">
+        <h2>Tasks</h2>
+        <button type="button" class="primary"
+                hx-get="/ui-next/partials/new-task"
+                hx-target="#new-task-form"
+                hx-swap="innerHTML">
+            New
+        </button>
+        <button type="button"
+                hx-get="/ui-next/partials/tasks-rows"
+                hx-target="#tasks-rows"
+                hx-swap="innerHTML">
+            Refresh List
+        </button>
+    </div>
+
+    <div id="new-task-form"></div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Id</th>
+                <th>Type</th>
+                <th>Tags</th>
+                <th>Created</th>
+                <th>Started</th>
+                <th>Updated</th>
+                <th>State</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="tasks-rows">
+            {{template "tasks-rows" .}}
+        </tbody>
+    </table>
+</section>
+{{end}}

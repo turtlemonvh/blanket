@@ -1,0 +1,14 @@
+{{define "task-types-rows"}}
+{{range $i, $tt := .TaskTypes}}
+<tr>
+    <th scope="row">{{add $i 1}}</th>
+    <td><a href="/task_type/{{$tt.Name}}">{{$tt.Name}}</a></td>
+    <td>{{join $tt.Tags ", "}}</td>
+    <td>{{fmtTs $tt.LoadedTs}}</td>
+    <td class="muted">{{$tt.ConfigFile}}</td>
+    <td class="muted">{{$tt.VersionHash}}</td>
+</tr>
+{{else}}
+<tr><td colspan="6" class="muted">No task types configured.</td></tr>
+{{end}}
+{{end}}

@@ -1,0 +1,25 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Blanket · {{.Title}}</title>
+    <link rel="stylesheet" href="/ui-next/static/app.css">
+    <script src="/ui-next/static/htmx.min.js" defer></script>
+</head>
+<body>
+    <nav class="topbar">
+        <span class="brand"><a href="/ui-next/">Blanket</a></span>
+        <a href="/ui-next/">Tasks</a>
+        <a href="/ui-next/workers">Workers</a>
+        <a href="/ui-next/task-types">Task Types</a>
+        <a href="/ui-next/about">About</a>
+        <span class="spacer"></span>
+        <span class="muted">htmx scaffold</span>
+    </nav>
+    <main>
+        {{template "content" .}}
+    </main>
+</body>
+</html>
+{{end}}

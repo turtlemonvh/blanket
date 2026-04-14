@@ -1,0 +1,18 @@
+{{define "content"}}
+<section>
+    <div class="list-header">
+        <h2>About</h2>
+    </div>
+    <h3>Settings</h3>
+    <table>
+        <thead>
+            <tr><th>Key</th><th>Value</th></tr>
+        </thead>
+        <tbody>
+            {{range .Settings}}
+            <tr><td>{{.Key}}</td><td class="muted">{{.Value}}</td></tr>
+            {{end}}
+        </tbody>
+    </table>
+</section>
+{{end}}

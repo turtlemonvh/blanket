@@ -1,0 +1,19 @@
+{{define "new-task-form"}}
+<form hx-post="/ui-next/tasks"
+      hx-target="#tasks-rows"
+      hx-swap="innerHTML"
+      hx-on::after-request="this.parentElement.innerHTML=''"
+      style="padding:1rem;border:1px solid var(--border);border-radius:6px;margin-bottom:1rem;">
+    <label for="newTaskType">New Task Type</label>
+    <select id="newTaskType" name="type" aria-label="new task type" required>
+        <option value="" disabled selected>Choose a task type…</option>
+        {{range .TaskTypes}}
+        <option value="{{.Name}}">{{.Name}}</option>
+        {{end}}
+    </select>
+    <button type="submit" class="primary" aria-label="launch task">Launch Task</button>
+    <button type="button" hx-get="/ui-next/partials/blank" hx-target="#new-task-form" hx-swap="innerHTML">
+        Cancel
+    </button>
+</form>
+{{end}}

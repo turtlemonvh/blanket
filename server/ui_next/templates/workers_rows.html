@@ -1,0 +1,26 @@
+{{define "workers-rows"}}
+{{range $i, $w := .Workers}}
+<tr>
+    <th scope="row">{{add $i 1}}</th>
+    <td>{{$w.Pid}}</td>
+    <td>{{join $w.Tags ", "}}</td>
+    <td>{{fmtTs $w.StartedTs}}</td>
+    <td class="muted">{{$w.Logfile}}</td>
+    <td>{{$w.CheckInterval}}s</td>
+    <td>{{if $w.Stopped}}yes{{else}}no{{end}}</td>
+    <td class="row-actions">
+        {{if $w.Stopped}}
+        <a hx-put="/worker/{{hex $w.Id}}/restart" hx-swap="none"
+           hx-on::after-request="htmx.ajax('GET', '/ui-next/partials/workers-rows', '#workers-rows')">Restart</a>
+        <a class="danger" hx-delete="/worker/{{hex $w.Id}}" hx-swap="none"
+           hx-on::after-request="htmx.ajax('GET', '/ui-next/partials/workers-rows', '#workers-rows')">Delete</a>
+        {{else}}
+        <a class="danger" hx-put="/worker/{{hex $w.Id}}/stop" hx-swap="none"
+           hx-on::after-request="htmx.ajax('GET', '/ui-next/partials/workers-rows', '#workers-rows')">Stop</a>
+        {{end}}
+    </td>
+</tr>
+{{else}}
+<tr><td colspan="8" class="muted">No workers.</td></tr>
+{{end}}
+{{end}}

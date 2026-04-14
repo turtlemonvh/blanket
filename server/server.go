@@ -93,6 +93,19 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	// Serve ui from embedded filesystem (server/ui_dist)
 	r.StaticFS("/ui", uiHTTPFS())
 
+	// New HTMX UI scaffold, served in parallel during the modernization.
+	r.StaticFS("/ui-next/static", uiNextStaticFS())
+	r.GET("/ui-next/", s.uiNextTasksPage)
+	r.GET("/ui-next/workers", s.uiNextWorkersPage)
+	r.GET("/ui-next/task-types", s.uiNextTaskTypesPage)
+	r.GET("/ui-next/about", s.uiNextAboutPage)
+	r.POST("/ui-next/tasks", s.uiNextSubmitTask)
+	r.GET("/ui-next/partials/tasks-rows", s.uiNextTasksRowsPartial)
+	r.GET("/ui-next/partials/workers-rows", s.uiNextWorkersRowsPartial)
+	r.GET("/ui-next/partials/task-types-rows", s.uiNextTaskTypesRowsPartial)
+	r.GET("/ui-next/partials/new-task", s.uiNextNewTaskPartial)
+	r.GET("/ui-next/partials/blank", s.uiNextBlankPartial)
+
 	// Redirect to ui
 	r.GET("/", func(c *gin.Context) {
 		c.Redirect(http.StatusMovedPermanently, "/ui")

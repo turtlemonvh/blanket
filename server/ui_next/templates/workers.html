@@ -1,0 +1,31 @@
+{{define "content"}}
+<section>
+    <div class="list-header">
+        <h2>Workers</h2>
+        <button type="button" class="primary">New</button>
+        <button type="button"
+                hx-get="/ui-next/partials/workers-rows"
+                hx-target="#workers-rows"
+                hx-swap="innerHTML">
+            Refresh List
+        </button>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>PID</th>
+                <th>Tags</th>
+                <th>Started</th>
+                <th>Logfile</th>
+                <th>Poll Interval</th>
+                <th>Stopped</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="workers-rows">
+            {{template "workers-rows" .}}
+        </tbody>
+    </table>
+</section>
+{{end}}

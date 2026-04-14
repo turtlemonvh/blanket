@@ -1,0 +1,99 @@
+/* Minimal scaffold styles for the HTMX UI. Intentionally framework-free. */
+
+:root {
+  --fg: #222;
+  --muted: #666;
+  --bg: #fff;
+  --panel: #f6f7f9;
+  --border: #dce0e4;
+  --accent: #2a6fb0;
+  --danger: #b02a2a;
+  --ok: #2a8b4a;
+  --warn: #b0802a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+nav.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+nav.topbar .brand { font-weight: 600; }
+nav.topbar a { color: var(--fg); text-decoration: none; }
+nav.topbar a:hover { color: var(--accent); }
+nav.topbar .spacer { flex: 1; }
+
+main {
+  max-width: 1200px;
+  margin: 1.5rem auto;
+  padding: 0 1.25rem;
+}
+
+h2 { margin-top: 0; }
+
+.list-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.list-header h2 { flex: 1; margin: 0; }
+
+button, .btn {
+  font: inherit;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+}
+button:hover, .btn:hover { border-color: var(--accent); }
+button.primary, .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.danger, .btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+th, td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+th { background: var(--panel); font-weight: 600; }
+tr:hover td { background: #fafbfc; }
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+}
+.badge.state-WAITING  { background: #eef3fb; color: var(--accent); border-color: #c4d7ec; }
+.badge.state-CLAIMED  { background: #eef3fb; color: var(--accent); border-color: #c4d7ec; }
+.badge.state-RUNNING  { background: #fff6e0; color: var(--warn); border-color: #ead59a; }
+.badge.state-SUCCESS  { background: #e6f4ea; color: var(--ok);   border-color: #b2d8bf; }
+.badge.state-ERROR    { background: #fbe9e9; color: var(--danger); border-color: #ecb9b9; }
+.badge.state-STOPPED  { background: #f0f0f0; color: var(--muted); border-color: var(--border); }
+.badge.state-TIMEDOUT { background: #fbe9e9; color: var(--danger); border-color: #ecb9b9; }
+
+.muted { color: var(--muted); }
+.row-actions a { margin-right: 0.5rem; cursor: pointer; color: var(--accent); }
+.row-actions a.danger { color: var(--danger); }
