@@ -78,6 +78,11 @@ func MarkAsClaimed(workerId objectid.ObjectId) (Task, error) {
 	defer res.Body.Close()
 	dec := json.NewDecoder(res.Body)
 
+	if res.StatusCode == http.StatusNoContent {
+		// Empty queue for this worker — not an error, just poll again later.
+		return Task{}, nil
+	}
+
 	if res.StatusCode != 200 {
 		// FIXME: Get the error content from the JSON response
 		errMsg := make(map[string]interface{})

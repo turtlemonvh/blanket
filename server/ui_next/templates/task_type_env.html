@@ -1,0 +1,43 @@
+{{define "task-type-env"}}
+{{if .Description}}
+<p class="muted" style="margin:0.5rem 0;">{{.Description}}</p>
+{{end}}
+
+{{if or .Defaults .Required .Optional}}
+<table style="margin-bottom:0.75rem;">
+    <thead>
+        <tr><th>Setting</th><th>Value</th><th>Description</th><th>Kind</th></tr>
+    </thead>
+    <tbody>
+        {{range .Defaults}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td class="muted">{{.Value}}</td>
+            <td class="muted">{{.Description}}</td>
+            <td><span class="badge">Default</span></td>
+        </tr>
+        {{end}}
+        {{range .Required}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>
+                <input type="text" name="env.{{.Name}}" placeholder="{{if .Type}}{{.Type}}{{else}}required{{end}}" required>
+            </td>
+            <td class="muted">{{.Description}}</td>
+            <td><span class="badge state-ERROR">Required</span></td>
+        </tr>
+        {{end}}
+        {{range .Optional}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>
+                <input type="text" name="env.{{.Name}}" placeholder="{{if .Value}}{{.Value}}{{else}}optional{{end}}">
+            </td>
+            <td class="muted">{{.Description}}</td>
+            <td><span class="badge">Optional</span></td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{end}}
+{{end}}

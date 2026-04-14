@@ -96,14 +96,18 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	// New HTMX UI scaffold, served in parallel during the modernization.
 	r.StaticFS("/ui-next/static", uiNextStaticFS())
 	r.GET("/ui-next/", s.uiNextTasksPage)
+	r.GET("/ui-next/tasks/:id", s.uiNextTaskDetailPage)
 	r.GET("/ui-next/workers", s.uiNextWorkersPage)
 	r.GET("/ui-next/task-types", s.uiNextTaskTypesPage)
 	r.GET("/ui-next/about", s.uiNextAboutPage)
 	r.POST("/ui-next/tasks", s.uiNextSubmitTask)
+	r.POST("/ui-next/workers", s.uiNextSubmitWorker)
 	r.GET("/ui-next/partials/tasks-rows", s.uiNextTasksRowsPartial)
 	r.GET("/ui-next/partials/workers-rows", s.uiNextWorkersRowsPartial)
 	r.GET("/ui-next/partials/task-types-rows", s.uiNextTaskTypesRowsPartial)
 	r.GET("/ui-next/partials/new-task", s.uiNextNewTaskPartial)
+	r.GET("/ui-next/partials/task-type-env", s.uiNextTaskTypeEnvPartial)
+	r.GET("/ui-next/partials/new-worker", s.uiNextNewWorkerPartial)
 	r.GET("/ui-next/partials/blank", s.uiNextBlankPartial)
 
 	// Redirect to ui

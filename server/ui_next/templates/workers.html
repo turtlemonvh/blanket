@@ -2,7 +2,12 @@
 <section>
     <div class="list-header">
         <h2>Workers</h2>
-        <button type="button" class="primary">New</button>
+        <button type="button" class="primary"
+                hx-get="/ui-next/partials/new-worker"
+                hx-target="#new-worker-form"
+                hx-swap="innerHTML">
+            New
+        </button>
         <button type="button"
                 hx-get="/ui-next/partials/workers-rows"
                 hx-target="#workers-rows"
@@ -10,6 +15,7 @@
             Refresh List
         </button>
     </div>
+    <div id="new-worker-form"></div>
     <table>
         <thead>
             <tr>

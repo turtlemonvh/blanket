@@ -301,7 +301,6 @@ func (c *WorkerConf) ProcessTasks() {
 			}).Info("successfully refreshed worker state")
 		}
 
-		// FIXME: Handle task not found differently than a 500, 401, etc
 		t, err = tasks.MarkAsClaimed(c.Id)
 		if err != nil {
 			log.WithFields(log.Fields{

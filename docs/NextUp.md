@@ -14,7 +14,9 @@ Small, known-scope items to clear before the next big refactor.
   `ItemNotFoundError` already exists in `lib/database` and is used in one
   branch of `claimTask` — extend that pattern so missing-id errors map to 404
   consistently. Current tests assert the existing (non-404) behavior; update
-  them when this lands.
+  them when this lands. (Partial: `claimTask` now returns 204 for the
+  empty-queue steady state via `queue.ErrQueueEmpty` — the missing-worker
+  and missing-task-id cases still need normalization.)
 - **`updateTaskProgress` doesn't check task state** — a progress update on a
   terminal (SUCCESS/STOPPED) task silently succeeds. Add a state guard that
   rejects progress updates on non-RUNNING tasks, then add a regression test.
@@ -69,24 +71,22 @@ effort than a normal test add.
 ## UI Modernization (HTMX + Go templates)
 
 Phase A (Playwright journey harness) and Phase B (HTMX scaffold at
-`/ui-next/`) are landed. Remaining:
+`/ui-next/`, task detail + SSE log stream, env var editor, new-worker
+form) are landed. Remaining before Phase C cut over:
 
-- **Task detail page** — the Angular UI has a per-task page with log
-  streaming (SSE). The scaffold doesn't cover it yet; needs a dedicated
-  template plus a streaming endpoint (or reuse `/task/:id/log`).
 - **Filter controls on the tasks list** — tags, states, types, date range.
   Angular's `tasks.html` has the full form; port it with HTMX form posts
-  that re-render `#tasks-rows`.
-- **New-worker form** — the Workers page's "New" button is inert in the
-  scaffold; mirror the Angular form (tags, check interval).
-- **Env var editor on the new-task form** — currently the scaffold refuses
-  task types with required env vars. Add the table editor before cut over.
-- **Vendor pinning / upgrade plan for htmx** — `ui_next/static/htmx.min.js`
-  is vendored at 1.9.12. Document where it came from and how to refresh it
-  (a one-line curl in the README is fine).
-- **Phase C cut over** — once the above are done, repoint `/ui/` at the
-  new UI and delete `ui/`, `server/ui_dist/`, and the legacy Angular
-  bits (`gulpfile.js`, `bower.json`, `package.json`, SCSS).
+  that re-render `#tasks-rows` (query params flow through
+  `TaskSearchConfFromContext`).
+- **"Add custom setting" button on the new-task env editor** — Angular
+  lets users inject arbitrary `name=value` pairs beyond the TOML-declared
+  ones. Our scaffold only renders declared vars.
+- **Retarget the Playwright journey suite at `/ui-next/`** — currently it
+  covers the Angular UI. Dup the spec (or parameterize it) so both UIs
+  must stay green during the migration.
+- **Phase C cut over** — repoint `/` and `/ui/` at the new UI and delete
+  `ui/`, `server/ui_dist/`, and the legacy Angular bits (`gulpfile.js`,
+  `bower.json`, top-level `package.json`, SCSS).
 - **Worker management `FIXME`s in `server/serve_workers.go`**:
   - Make the stop-worker update atomic (currently read-modify-write)
   - Update `lastHeardTs` on stop

@@ -112,6 +112,27 @@ Run worker with certain capabilities
 ./blanket worker -t unix,bash,python,python2,python27
 ```
 
+## Single-binary distribution
+
+`go build` produces a single static binary with the web UI baked in.
+Templates, CSS, and vendored htmx live under `server/ui_next/` and are
+pulled into the binary via `//go:embed` (see `server/ui_next.go` and
+`server/ui.go`). No separate asset deploy, no runtime filesystem lookups —
+drop the binary on a host and run it.
+
+To refresh the vendored htmx bundle:
+
+```bash
+curl -sSfL https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js \
+    -o server/ui_next/static/htmx.min.js
+curl -sSfL https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js \
+    -o server/ui_next/static/htmx-sse.js
+```
+
+The legacy AngularJS UI under `ui/` still compiles to `server/ui_dist/`
+via `gulp` during the modernization — that path will go away once the
+HTMX UI reaches parity (see `docs/NextUp.md`).
+
 ## Command line API
 
 ```bash

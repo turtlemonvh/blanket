@@ -2,11 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cast"
 	"github.com/turtlemonvh/blanket/lib/database"
+	"github.com/turtlemonvh/blanket/lib/queue"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/lib/objectid"
@@ -126,8 +128,11 @@ func (s *ServerConfig) claimTask(c *gin.Context) {
 	var nackCb func() error
 	t, ackCb, nackCb, err = s.Q.ClaimTask(&w)
 	if err != nil {
-		// FIXME: Return 404 if a not found error, 400 for other errors
-		// Task could not be found, probably
+		if errors.Is(err, queue.ErrQueueEmpty) {
+			// Normal polling state — no task for this worker right now.
+			c.Status(http.StatusNoContent)
+			return
+		}
 		errMsg = fmt.Sprintf("Problem claiming task :: %s", err.Error())
 		c.String(http.StatusNotFound, MakeErrorString(errMsg))
 		return

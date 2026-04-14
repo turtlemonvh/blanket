@@ -555,8 +555,9 @@ func TestClaim_NoMatchingTask(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Empty queue → ClaimTask returns an error → handler maps to 404.
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	// Empty queue is a normal polling state — handler returns 204 No Content
+	// so idle workers don't spam error logs.
+	assert.Equal(t, http.StatusNoContent, w.Code)
 }
 
 // --- GET /task/ with additional filters ---

@@ -2,7 +2,6 @@ package bolt
 
 import (
 	"encoding/json"
-	"fmt"
 	bolt "go.etcd.io/bbolt"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/queue"
@@ -109,11 +108,10 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 		return task, ackCallback, nackCallback, err
 	}
 
-	// Check that exactly 1 item was returned
-	// Return not found error if not here
+	// No eligible task for this worker — normal steady state when the queue
+	// is drained or no queued task matches the worker's tags.
 	if len(ts) != 1 {
-		// FIXME: Return typed error
-		return tasks.Task{}, ackCallback, nackCallback, fmt.Errorf("No eligible tasks were found")
+		return tasks.Task{}, ackCallback, nackCallback, queue.ErrQueueEmpty
 	}
 	task = ts[0]
 

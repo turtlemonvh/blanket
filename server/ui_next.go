@@ -12,10 +12,12 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
+	"github.com/turtlemonvh/blanket/worker"
 )
 
 //go:embed all:ui_next/templates all:ui_next/static
@@ -147,6 +149,22 @@ func (s *ServerConfig) uiNextTasksPage(c *gin.Context) {
 	s.renderUINext(c, t, gin.H{"Title": "Tasks", "Tasks": tks})
 }
 
+// uiNextTaskDetailPage renders one task's metadata, env vars, and log stream.
+func (s *ServerConfig) uiNextTaskDetailPage(c *gin.Context) {
+	taskId, err := SafeObjectId(c.Param("id"))
+	if err != nil {
+		c.String(http.StatusBadRequest, err.Error())
+		return
+	}
+	task, err := s.DB.GetTask(taskId)
+	if err != nil {
+		c.String(http.StatusNotFound, err.Error())
+		return
+	}
+	t := mustParseUINextPage("task-detail", "ui_next/templates/task_detail.html")
+	s.renderUINext(c, t, gin.H{"Title": "Task " + taskId.Hex()[:8], "Task": task})
+}
+
 // uiNextTasksRowsPartial renders just the tbody for htmx swaps.
 func (s *ServerConfig) uiNextTasksRowsPartial(c *gin.Context) {
 	tks, _, err := s.DB.GetTasks(database.TaskSearchConfFromContext(c))
@@ -169,6 +187,57 @@ func (s *ServerConfig) uiNextWorkersPage(c *gin.Context) {
 	}
 	t := mustParseUINextPage("workers", "ui_next/templates/workers.html", "ui_next/templates/workers_rows.html")
 	s.renderUINext(c, t, gin.H{"Title": "Workers", "Workers": ws})
+}
+
+// uiNextNewWorkerPartial returns the "new worker" form.
+func (s *ServerConfig) uiNextNewWorkerPartial(c *gin.Context) {
+	t := mustParsePartial("new-worker-form", "new_worker_form.html")
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	if err := t.ExecuteTemplate(c.Writer, "new-worker-form", nil); err != nil {
+		log.WithField("err", err).Warn("ui-next: render new-worker-form")
+	}
+}
+
+// uiNextSubmitWorker spawns a daemon worker from form input and returns
+// the refreshed rows partial. Mirrors server.launchWorker without the JSON
+// response shape.
+func (s *ServerConfig) uiNextSubmitWorker(c *gin.Context) {
+	rawTags := strings.TrimSpace(c.PostForm("tags"))
+	tags := []string{}
+	if rawTags != "" {
+		for _, t := range strings.Split(rawTags, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tags = append(tags, t)
+			}
+		}
+	}
+	interval := cast.ToFloat64(c.PostForm("checkInterval"))
+	if interval <= 0 {
+		interval = worker.DEFAULT_CHECK_INTERVAL_SECONDS
+	}
+
+	w := worker.WorkerConf{
+		Id:            objectid.NewObjectId(),
+		Tags:          tags,
+		Daemon:        true,
+		CheckInterval: interval,
+	}
+	if err := w.Run(); err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Short poll for the worker to register itself in the DB so the
+	// refreshed rows include it. Mirrors the API handler's wait loop.
+	deadline := time.Now().Add(time.Duration(float64(MAX_REQUEST_TIME_SECONDS)*s.TimeMultiplier) * time.Second)
+	for time.Now().Before(deadline) {
+		found, _ := s.DB.GetWorker(w.Id)
+		if found.Pid != 0 {
+			break
+		}
+		time.Sleep(time.Duration(250*s.TimeMultiplier) * time.Millisecond)
+	}
+	s.uiNextWorkersRowsPartial(c)
 }
 
 func (s *ServerConfig) uiNextWorkersRowsPartial(c *gin.Context) {
@@ -219,6 +288,71 @@ func (s *ServerConfig) uiNextNewTaskPartial(c *gin.Context) {
 	}
 }
 
+// envVarView is one row in the task-type env editor.
+type envVarView struct {
+	Name        string
+	Value       string
+	Type        string
+	Description string
+}
+
+// collectEnvVars extracts a slice of envVarView from a TOML array at path.
+// Handles the shape: [{name=..., value=..., description=..., type=...}, ...]
+func collectEnvVars(tt *tasks.TaskType, path string) []envVarView {
+	raw, ok := tt.Config.Get(path).([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]envVarView, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		out = append(out, envVarView{
+			Name:        toStr(m["name"]),
+			Value:       toStr(m["value"]),
+			Type:        toStr(m["type"]),
+			Description: toStr(m["description"]),
+		})
+	}
+	return out
+}
+
+func toStr(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// uiNextTaskTypeEnvPartial renders the env-var editor for a chosen task type.
+func (s *ServerConfig) uiNextTaskTypeEnvPartial(c *gin.Context) {
+	typeName := c.Query("type")
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	if typeName == "" {
+		return
+	}
+	tt, err := tasks.FetchTaskType(typeName)
+	if err != nil {
+		c.String(http.StatusBadRequest, err.Error())
+		return
+	}
+	data := gin.H{
+		"Description": tt.Config.GetString("description"),
+		"Defaults":    collectEnvVars(tt, "environment.default"),
+		"Required":    collectEnvVars(tt, "environment.required"),
+		"Optional":    collectEnvVars(tt, "environment.optional"),
+	}
+	t := mustParsePartial("task-type-env", "task_type_env.html")
+	if err := t.ExecuteTemplate(c.Writer, "task-type-env", data); err != nil {
+		log.WithField("err", err).Warn("ui-next: render task-type-env")
+	}
+}
+
 // uiNextBlankPartial is used to clear a target on Cancel.
 func (s *ServerConfig) uiNextBlankPartial(c *gin.Context) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
@@ -226,6 +360,7 @@ func (s *ServerConfig) uiNextBlankPartial(c *gin.Context) {
 }
 
 // uiNextSubmitTask handles the New Task form submit and returns fresh rows.
+// Form fields named `env.<NAME>` are collected into the task's ExecEnv.
 func (s *ServerConfig) uiNextSubmitTask(c *gin.Context) {
 	taskType := c.PostForm("type")
 	if taskType == "" {
@@ -237,11 +372,31 @@ func (s *ServerConfig) uiNextSubmitTask(c *gin.Context) {
 		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
-	if tt.HasRequiredEnv() {
-		c.String(http.StatusBadRequest, "task type has required env vars; use the API for now")
+
+	if err := c.Request.ParseForm(); err != nil {
+		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
-	t, err := tt.NewTask(map[string]string{})
+	childEnv := map[string]string{}
+	for key, vals := range c.Request.PostForm {
+		if !strings.HasPrefix(key, "env.") || len(vals) == 0 {
+			continue
+		}
+		v := vals[0]
+		if v == "" {
+			continue
+		}
+		childEnv[strings.TrimPrefix(key, "env.")] = v
+	}
+
+	for name := range tt.RequiredEnv() {
+		if childEnv[name] == "" {
+			c.String(http.StatusBadRequest, fmt.Sprintf("missing required env var: %s", name))
+			return
+		}
+	}
+
+	t, err := tt.NewTask(childEnv)
 	if err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
 		return

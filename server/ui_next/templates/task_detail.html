@@ -1,0 +1,73 @@
+{{define "content"}}
+<section>
+    <div class="list-header">
+        <h2>Task Detail</h2>
+        <a class="btn" href="/ui-next/">← Back to Tasks</a>
+    </div>
+
+    <h3>{{.Task.TypeId}} · <span class="muted">{{hex .Task.Id}}</span></h3>
+
+    <table>
+        <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+        <tbody>
+            <tr><td>ID</td><td>{{hex .Task.Id}}</td></tr>
+            <tr><td>Task Type</td><td><a href="/task_type/{{.Task.TypeId}}">{{.Task.TypeId}}</a></td></tr>
+            <tr><td>State</td><td><span class="badge state-{{.Task.State}}">{{.Task.State}}</span></td></tr>
+            <tr><td>Progress</td><td>{{.Task.Progress}}%</td></tr>
+            <tr><td>Created</td><td>{{fmtTs .Task.CreatedTs}}</td></tr>
+            <tr><td>Started</td><td>{{if eq .Task.StartedTs 0}}<span class="muted">None</span>{{else}}{{fmtTs .Task.StartedTs}}{{end}}</td></tr>
+            <tr><td>Last Updated</td><td>{{fmtTs .Task.LastUpdatedTs}}</td></tr>
+            <tr><td>Timeout</td><td>{{.Task.Timeout}} s</td></tr>
+            <tr><td>Tags</td><td>{{join .Task.Tags ", "}}</td></tr>
+            <tr><td>Worker ID</td><td class="muted">{{hex .Task.WorkerId}}</td></tr>
+            <tr><td>Result Dir</td><td class="muted">{{.Task.ResultDir}}</td></tr>
+            <tr><td>Stdout Log</td><td><a href="/results/{{hex .Task.Id}}/blanket.stdout.log">blanket.stdout.log</a></td></tr>
+            <tr><td>Stderr Log</td><td><a href="/results/{{hex .Task.Id}}/blanket.stderr.log">blanket.stderr.log</a></td></tr>
+            <tr><td>JSON</td><td><a href="/task/{{hex .Task.Id}}">JSON representation</a></td></tr>
+        </tbody>
+    </table>
+
+    <h3>Environment Variables</h3>
+    {{if .Task.ExecEnv}}
+    <table>
+        <thead><tr><th>Key</th><th>Value</th></tr></thead>
+        <tbody>
+            {{range $k, $v := .Task.ExecEnv}}
+            <tr><td>{{$k}}</td><td class="muted">{{$v}}</td></tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <p class="muted">No environment variables set.</p>
+    {{end}}
+
+    <h3>Live Log
+        <label style="font-weight:normal;font-size:0.9rem;margin-left:1rem;">
+            <input type="checkbox" id="pin-bottom" checked> Pin to bottom
+        </label>
+    </h3>
+    {{if eq .Task.State "RUNNING"}}
+    <pre id="task-log"
+         hx-ext="sse"
+         sse-connect="/task/{{hex .Task.Id}}/log"
+         sse-swap="message"
+         hx-swap="beforeend"
+         style="max-height:420px;overflow:auto;background:#0e1014;color:#d4d4d4;padding:0.75rem;border-radius:6px;"
+         aria-label="live task log"></pre>
+    <script>
+    (function () {
+      var el = document.getElementById('task-log');
+      var pin = document.getElementById('pin-bottom');
+      if (!el) return;
+      el.addEventListener('htmx:sseMessage', function () {
+        if (pin.checked) el.scrollTop = el.scrollHeight;
+      });
+    })();
+    </script>
+    {{else}}
+    <p class="muted">Task is not running — streaming is disabled. Use the
+        <a href="/results/{{hex .Task.Id}}/blanket.stdout.log">stdout log</a>
+        link above for the final output.</p>
+    {{end}}
+</section>
+{{end}}
