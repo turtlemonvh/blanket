@@ -8,41 +8,63 @@ reader (or a future AI session) can pick them up without conversation history.
 
 Small, known-scope items to clear before the next big refactor.
 
-- **Go version mismatch in `scripts/setup.sh`** — pins `GO_VERSION=1.22.4`, but
-  `go.mod` now requires `go 1.23` (bumped by bbolt). Fresh `make setup` will
-  install a Go that can't build the project. Fix: bump the default pin to a
-  1.23.x release.
-- **`TestStreamLogSingleSub` flaky** (`lib/tailed_file/tailed_file_test.go`) —
-  ~1 in 5 runs fail. Test's own comment: `// FIXME: Kind of brittle, but gives
-  file tailer time to flush`. Root cause is a fixed 1-second sleep before
-  closing the tail. Fix: replace with a deterministic "all lines received"
-  signal or a poll-until-n-lines loop.
+- **Normalize task-handler error status codes** (`server/serve_tasks.go`) —
+  `updateTaskProgress` returns 500 for a missing task id; `markTaskAsFinished`
+  returns 400; `claimTask` returns 500 when the worker isn't in the DB.
+  `ItemNotFoundError` already exists in `lib/database` and is used in one
+  branch of `claimTask` — extend that pattern so missing-id errors map to 404
+  consistently. Current tests assert the existing (non-404) behavior; update
+  them when this lands.
+- **`updateTaskProgress` doesn't check task state** — a progress update on a
+  terminal (SUCCESS/STOPPED) task silently succeeds. Add a state guard that
+  rejects progress updates on non-RUNNING tasks, then add a regression test.
 
 ## Test Coverage Expansion
 
-Captured at the top of the relevant test files as TODO blocks. Implement and
-delete the TODO line as each one lands.
+Remaining gaps — the TODO blocks at the top of each test file are the
+authoritative source. Items listed here are the ones deferred as higher
+effort than a normal test add.
 
 ### `worker/worker_test.go`
 
-- Two-task happy path (currently `TestProcessOne` covers one-task case)
-- Task timeout (task 1 exceeds timeout, gets killed; task 2 still succeeds)
-- Worker SIGTERM shutdown (stops cleanly before task 2 runs)
-- Stopped-task state (api-stop mid-flight → `STOPPED`; task 2 still succeeds)
-- Log production (both worker log and per-task stdout/stderr are written)
-- Goroutine-leak check across a run (use metrics API)
-- Time acceleration via `TimeMultiplier` for the above
+- **Worker SIGTERM shutdown** — needs a subprocess harness (the worker's
+  `Run()` calls `os.Exit`), so can't run in-process with the other tests.
+- **Goroutine-leak check** across a full run. The metrics API exposes a
+  goroutine count; sample before/after and assert stable.
 
 ### `server/serve_tasks_test.go`
 
-- `POST /task/` multipart form with file uploads (files land at task work dir root)
-- `GET /task/` with the full filter flag set (not just state — also type,
-  tags, created-before/after, limit, offset, sort)
-- `PUT /task/:id/stop` (distinct from cancel: applies to `RUNNING`, signals worker)
-- Cancel-then-still-try-to-run: worker observes the tombstone and stops cleanly
-- `PUT /task/:id/finish`: valid transition, missing task → 404, wrong-state rejected
-- `PUT /task/:id/progress`: missing task → 404, wrong-state rejected
-- `POST /task/claim/:workerid`: missing worker → 4xx; no matching task → appropriate status
+- **Stopping a `RUNNING` task** — `cancel` today only transitions `WAITING`
+  tasks to `STOPPED`; a `RUNNING` task has no supported endpoint. The
+  originally sketched `PUT /task/:id/stop` would cover this, but a single
+  endpoint is fine as long as it handles both cases. If we consolidate,
+  extend `cancel` to also accept `RUNNING` tasks (signals the worker via
+  the STOPPED tombstone) and add an explicit opt-in parameter
+  (e.g. `?force=true` or `?allowRunning=true`) so a caller can't
+  accidentally kill a running task when they meant to cancel a queued one.
+  Add regression tests for both paths once the handler change lands.
+
+## Build & CI
+
+- **Replace Vagrant with Docker + GitHub Actions** — drop the `Vagrantfile`
+  and `/provision` scripts (neither is exercised anymore now that
+  `scripts/setup.sh` handles dev setup). Add a `Dockerfile` that reproduces
+  the Go + Node + Playwright toolchain, and a GitHub Actions workflow that
+  runs `make test` and `make test-browser` against it on each push/PR.
+
+## Docs
+
+- **Add mermaidjs diagrams** — current docs are text-heavy. Cover key
+  components (server ↔ worker ↔ DB ↔ queue), the task lifecycle state
+  machine (`WAITING → CLAIMED → RUNNING → SUCCESS/ERROR/STOPPED/TIMEDOUT`),
+  the worker claim loop, and the `tailed_file` subscribe/backfill flow.
+
+## Branding
+
+- **Project branding pass** — pick a logo, color palette, and tagline for
+  blanket. Surface it in the README header, the UI navbar, and the favicon.
+  Consistent branding makes the project feel maintained and gives the docs
+  somewhere to hang visual identity.
 
 ## Deferred (Non-Urgent)
 
