@@ -1,0 +1,241 @@
+// Journey-level UI tests.
+//
+// These are written against what a user sees — role, text, label — rather
+// than against implementation details (ng-* directives, CSS class names,
+// bootstrap structure). The goal is that this suite is the acceptance
+// criteria for the upcoming HTMX/Go-template UI rewrite: the selectors
+// should survive a framework swap untouched.
+//
+// Conventions:
+//   - Use getByRole / getByLabel / getByText / getByPlaceholder.
+//   - Assert with expect(locator).toBeVisible() / toContainText(), not
+//     fixed waitForTimeout(). Avoid CSS class selectors.
+//   - Each test cleans up its own resources via the API so order doesn't
+//     matter and re-runs on a dirty DB don't interfere.
+
+import { test, expect } from '@playwright/test';
+
+const skipBrowser = process.env.SKIP_BROWSER_TESTS === '1';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Delete every task currently in the DB. Safe on an empty DB. */
+async function purgeTasks(apiRequest: import('@playwright/test').APIRequestContext) {
+  const res = await apiRequest.get('/task/');
+  if (!res.ok()) return;
+  const tasks = (await res.json()) as Array<{ id: string }>;
+  for (const t of tasks) {
+    await apiRequest.delete(`/task/${t.id}`);
+  }
+}
+
+/** Submit a task via the API and return its id. */
+async function createTask(
+  apiRequest: import('@playwright/test').APIRequestContext,
+  type: string,
+): Promise<string> {
+  const res = await apiRequest.post('/task/', { data: { type } });
+  expect(res.status()).toBe(201);
+  const body = await res.json();
+  return body.id as string;
+}
+
+// ---------------------------------------------------------------------------
+// Navigation — top-level nav links reach each main view
+// ---------------------------------------------------------------------------
+
+test.describe('Navigation', () => {
+  test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
+
+  test('nav links reach Tasks, Workers, Task Types, About', async ({ page }) => {
+    await page.goto('/ui/');
+
+    // Landing page is the tasks view by default.
+    await expect(
+      page.getByRole('heading', { name: 'Tasks', exact: true }),
+    ).toBeVisible();
+
+    await page.getByRole('link', { name: 'Workers' }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Workers', exact: true }),
+    ).toBeVisible();
+
+    await page.getByRole('link', { name: 'Task Types' }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Task Types', exact: true }),
+    ).toBeVisible();
+
+    // About page is nav-reachable; URL should reflect that even if the
+    // heading wording changes.
+    await page.getByRole('link', { name: 'About' }).click();
+    await expect(page).toHaveURL(/\/about$/);
+
+    // Back to Tasks.
+    await page.getByRole('link', { name: 'Tasks', exact: true }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Tasks', exact: true }),
+    ).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task list journey — submit via API, see the row appear after refresh
+// ---------------------------------------------------------------------------
+
+test.describe('Task list', () => {
+  test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
+
+  test.beforeEach(async ({ request }) => {
+    await purgeTasks(request);
+  });
+
+  test.afterEach(async ({ request }) => {
+    await purgeTasks(request);
+  });
+
+  test('empty state, then a task submitted via API appears after Refresh', async ({
+    page,
+    request,
+  }) => {
+    await page.goto('/ui/');
+    await expect(
+      page.getByRole('columnheader', { name: 'State' }),
+    ).toBeVisible();
+
+    const taskId = await createTask(request, 'echo_task');
+    await page.getByRole('button', { name: /refresh list/i }).click();
+
+    // The row's ID cell shows the first 8 chars; search by that prefix.
+    const idPrefix = taskId.slice(0, 8);
+    await expect(page.getByText(idPrefix, { exact: false })).toBeVisible();
+
+    await expect(
+      page.getByRole('cell', { name: 'echo_task' }).first(),
+    ).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Submit a task via the UI form
+// ---------------------------------------------------------------------------
+
+test.describe('Submit task via UI', () => {
+  test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
+
+  test.beforeEach(async ({ request }) => {
+    await purgeTasks(request);
+  });
+
+  test.afterEach(async ({ request }) => {
+    await purgeTasks(request);
+  });
+
+  test('opening New, choosing a type, Launch creates a task', async ({
+    page,
+    request,
+  }) => {
+    await page.goto('/ui/');
+
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+
+    const typeSelect = page.getByLabel(/new task type/i);
+    await expect(typeSelect).toBeVisible();
+    await typeSelect.selectOption({ label: 'echo_task' });
+
+    // echo_task in the test fixture has no required env vars, so Launch
+    // should be enabled immediately.
+    await page.getByRole('button', { name: /launch task/i }).click();
+
+    await page.getByRole('button', { name: /refresh list/i }).click();
+    await expect(
+      page.getByRole('cell', { name: 'echo_task' }).first(),
+    ).toBeVisible();
+
+    const res = await request.get('/task/');
+    const tasks = (await res.json()) as Array<{ type: string }>;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].type).toBe('echo_task');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cancel a WAITING task from the list
+// ---------------------------------------------------------------------------
+
+test.describe('Cancel task from list', () => {
+  test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
+
+  test.beforeEach(async ({ request }) => {
+    await purgeTasks(request);
+  });
+
+  test.afterEach(async ({ request }) => {
+    await purgeTasks(request);
+  });
+
+  test('clicking Cancel on a WAITING task transitions it to STOPPED', async ({
+    page,
+    request,
+  }) => {
+    const taskId = await createTask(request, 'echo_task');
+    await page.goto('/ui/');
+    await page.getByRole('button', { name: /refresh list/i }).click();
+
+    const idPrefix = taskId.slice(0, 8);
+    const row = page.getByRole('row').filter({ hasText: idPrefix });
+    await expect(row).toBeVisible();
+    await expect(row.getByText('WAITING')).toBeVisible();
+
+    // The Cancel control in the current UI is an <a> without href, which
+    // isn't a "link" in ARIA terms. Match by visible text scoped to the row.
+    await row.getByText('Cancel', { exact: true }).click();
+
+    await page.getByRole('button', { name: /refresh list/i }).click();
+    await expect(row.getByText('STOPPED')).toBeVisible();
+
+    const res = await request.get(`/task/${taskId}`);
+    const t = await res.json();
+    expect(t.state).toBe('STOPPED');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task types view lists configured types
+// ---------------------------------------------------------------------------
+
+test.describe('Task types view', () => {
+  test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
+
+  test('lists the echo_task fixture', async ({ page }) => {
+    // Navigate via the visible nav link rather than a deep hash URL so the
+    // test doesn't depend on AngularJS ui-router fragment parsing.
+    await page.goto('/ui/');
+    await page.getByRole('link', { name: 'Task Types' }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Task Types', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole('link', { name: 'echo_task' })).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Workers list view renders
+// ---------------------------------------------------------------------------
+
+test.describe('Workers view', () => {
+  test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
+
+  test('header and column labels render', async ({ page }) => {
+    await page.goto('/ui/');
+    await page.getByRole('link', { name: 'Workers' }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Workers', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'New', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Tags' })).toBeVisible();
+  });
+});
