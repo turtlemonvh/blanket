@@ -51,6 +51,12 @@ test-browser:
 test-api-e2e:
 	cd tests/e2e && SKIP_BROWSER_TESTS=1 npx playwright test
 
+# End-to-end smoke test for the built binary: starts the server on a throwaway
+# port + tempdir, exercises core endpoints, tears down. Run `make linux`
+# (or darwin/windows) first so scripts/smoke.sh has a binary to exec.
+test-smoke:
+	bash scripts/smoke.sh
+
 install-playwright:
 	cd tests/e2e && npm install && npx playwright install --with-deps chromium
 
@@ -65,4 +71,4 @@ clean:
 	-rm -f ${VET_REPORT}
 	-rm -f ${BINARY}-*
 
-.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e install-playwright vet fmt clean
+.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e test-smoke install-playwright vet fmt clean

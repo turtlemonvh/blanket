@@ -21,9 +21,15 @@ func MakeBucketDNEError(bucketName string) BucketDNEError {
 
 // https://blog.golang.org/error-handling-and-go
 func MustOpenBoltDatabase() *bolt.DB {
-	db, err := bolt.Open(viper.GetString("database"), 0666, &bolt.Options{Timeout: 1 * time.Second})
+	path := viper.GetString("database")
+	db, err := bolt.Open(path, 0666, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
-		log.Fatal(err)
+		// bbolt returns a bare "timeout" error when another process holds
+		// the file lock. Surface an actionable hint instead.
+		if err.Error() == "timeout" {
+			log.Fatalf("could not acquire lock on bolt database %q after 1s: is another blanket process already running?", path)
+		}
+		log.Fatalf("could not open bolt database %q: %v", path, err)
 	}
 	return db
 }
