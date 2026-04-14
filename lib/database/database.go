@@ -7,7 +7,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"strconv"
 	"strings"
 	"time"
@@ -37,18 +37,18 @@ FIXME:
 type BlanketDB interface {
 	// Worker functions
 	GetWorkers() ([]worker.WorkerConf, error)
-	GetWorker(workerId bson.ObjectId) (worker.WorkerConf, error)
-	DeleteWorker(workerId bson.ObjectId) error
+	GetWorker(workerId objectid.ObjectId) (worker.WorkerConf, error)
+	DeleteWorker(workerId objectid.ObjectId) error
 	UpdateWorker(worker *worker.WorkerConf) error
 	CleanupStalledWorkers() error
 	// Task functions
-	GetTask(taskId bson.ObjectId) (tasks.Task, error)
-	DeleteTask(taskId bson.ObjectId) error
+	GetTask(taskId objectid.ObjectId) (tasks.Task, error)
+	DeleteTask(taskId objectid.ObjectId) error
 	GetTasks(tc *TaskSearchConf) ([]tasks.Task, int, error)
 	SaveTask(t *tasks.Task) error
-	RunTask(taskId bson.ObjectId, fields *TaskRunConfig) error
-	FinishTask(taskId bson.ObjectId, newState string) error
-	UpdateTaskProgress(taskId bson.ObjectId, progress int) error
+	RunTask(taskId objectid.ObjectId, fields *TaskRunConfig) error
+	FinishTask(taskId objectid.ObjectId, newState string) error
+	UpdateTaskProgress(taskId objectid.ObjectId, progress int) error
 	CleanupStalledTasks() error
 }
 
@@ -69,8 +69,8 @@ type TaskSearchConf struct {
 	ReverseSort       bool
 	RequiredTags      []string
 	MaxTags           []string
-	SmallestId        bson.ObjectId
-	LargestId         bson.ObjectId
+	SmallestId        objectid.ObjectId
+	LargestId         objectid.ObjectId
 	AllowedTaskStates map[string]bool
 	AllowedTaskTypes  map[string]bool
 }
@@ -114,8 +114,8 @@ func TaskSearchConfFromContext(c *gin.Context) *TaskSearchConf {
 	if err == nil {
 		endTime = time.Unix(endTimeSentInt, 0)
 	}
-	tc.SmallestId = bson.NewObjectIdWithTime(startTime)
-	tc.LargestId = bson.NewObjectIdWithTime(endTime)
+	tc.SmallestId = objectid.NewObjectIdWithTime(startTime)
+	tc.LargestId = objectid.NewObjectIdWithTime(endTime)
 
 	// Filtering based on tags, states, types
 	tags := c.Query("requiredTags")

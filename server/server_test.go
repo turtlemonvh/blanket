@@ -9,7 +9,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/bolt"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -135,7 +135,7 @@ func TestGetTasks(t *testing.T) {
 
 	// Create a worker so that we can claim tasks for it
 	wconf := worker.WorkerConf{
-		Id:      bson.NewObjectId(),
+		Id:      objectid.NewObjectId(),
 		Tags:    []string{},
 		Stopped: false,
 	}

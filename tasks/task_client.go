@@ -5,7 +5,7 @@ import (
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"net/http"
 	"net/url"
 )
@@ -67,7 +67,7 @@ func MarkAsFinished(t *Task, state string) error {
 }
 
 // Find the oldest task we are eligible to run
-func MarkAsClaimed(workerId bson.ObjectId) (Task, error) {
+func MarkAsClaimed(workerId objectid.ObjectId) (Task, error) {
 	// Call the REST api and get a task with the required tags
 	// The worker needs to make sure it has all the tags of whatever task it requests
 	reqURL := fmt.Sprintf("http://localhost:%d/task/claim/%s", viper.GetInt("port"), workerId.Hex())

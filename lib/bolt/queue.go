@@ -8,7 +8,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/queue"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"log"
 	"time"
 )
@@ -101,8 +101,8 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 		ReverseSort:   true,
 		MaxTags:       worker.Tags,
 		JustUnclaimed: true,
-		SmallestId:    bson.NewObjectIdWithTime(time.Unix(0, 0)),
-		LargestId:     bson.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),
+		SmallestId:    objectid.NewObjectIdWithTime(time.Unix(0, 0)),
+		LargestId:     objectid.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),
 	}
 	ts, _, err := FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
 	if err != nil {
@@ -165,7 +165,7 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 
 			// Modify
 			task.LastUpdatedTs = time.Now().Unix()
-			task.WorkerId = *new(bson.ObjectId)
+			task.WorkerId = *new(objectid.ObjectId)
 
 			// Serilalize and save
 			bts, err := json.Marshal(task)

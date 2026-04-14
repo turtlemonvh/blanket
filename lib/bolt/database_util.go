@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/tasks"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"time"
 )
 
@@ -31,7 +31,7 @@ func MustOpenBoltDatabase() *bolt.DB {
 // WORKERS
 
 // Get a single worler in a transaction
-func fetchWorkerBytes(workerId bson.ObjectId, tx *bolt.Tx) ([]byte, error) {
+func fetchWorkerBytes(workerId objectid.ObjectId, tx *bolt.Tx) ([]byte, error) {
 	var result []byte
 	b := tx.Bucket([]byte(BOLTDB_WORKER_BUCKET))
 	if b == nil {
@@ -54,7 +54,7 @@ func fetchTaskBucket(tx *bolt.Tx) (b *bolt.Bucket, err error) {
 	return
 }
 
-func fetchTaskFromBucket(taskId *bson.ObjectId, b *bolt.Bucket) (t tasks.Task, err error) {
+func fetchTaskFromBucket(taskId *objectid.ObjectId, b *bolt.Bucket) (t tasks.Task, err error) {
 	result := b.Get(IdBytes(*taskId))
 	if result == nil {
 		err = database.ItemNotFoundError(fmt.Sprintf("No item for id %v", taskId))
@@ -121,7 +121,7 @@ func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *database.TaskSearchCo
 			json.Unmarshal(v, &t)
 
 			// Filter results
-			if tc.JustUnclaimed && t.WorkerId.Valid() {
+			if tc.JustUnclaimed && !t.WorkerId.IsZero() {
 				continue
 			}
 
@@ -195,7 +195,7 @@ func saveTaskToBucket(t *tasks.Task, b *bolt.Bucket) (err error) {
 	return b.Put(IdBytes(t.Id), bts)
 }
 
-func ModifyTaskInBoltTransaction(db *bolt.DB, taskId *bson.ObjectId, f func(t *tasks.Task) error) error {
+func ModifyTaskInBoltTransaction(db *bolt.DB, taskId *objectid.ObjectId, f func(t *tasks.Task) error) error {
 	err := db.Update(func(tx *bolt.Tx) error {
 		bucket, err := fetchTaskBucket(tx)
 		if err != nil {

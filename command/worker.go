@@ -4,7 +4,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/turtlemonvh/blanket/worker"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"strings"
 )
 
@@ -25,12 +25,12 @@ var workerCmd = &cobra.Command{
 
 		workerConf.Tags = strings.Split(workerRawTags, ",")
 		if workerId != "" {
-			if !bson.IsObjectIdHex(workerId) {
+			if !objectid.IsObjectIdHex(workerId) {
 				log.WithFields(log.Fields{
 					"id": workerId,
 				}).Fatal("The id passed for a worker must be a valid mongo id")
 			}
-			workerConf.Id = bson.ObjectIdHex(workerId)
+			workerConf.Id = objectid.ObjectIdHex(workerId)
 		}
 
 		log.WithFields(log.Fields{

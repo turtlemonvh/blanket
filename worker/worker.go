@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib"
 	"github.com/turtlemonvh/blanket/tasks"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"net/http"
 	"os"
 	"os/exec"
@@ -31,7 +31,7 @@ const (
 // CLean up id and parsed tags' parse these in cli
 
 type WorkerConf struct {
-	Id            bson.ObjectId `json:"id"`
+	Id            objectid.ObjectId `json:"id"`
 	Tags          []string      `json:"tags"`
 	Logfile       string        `json:"logfile"`
 	Daemon        bool          `json:"daemon"`
@@ -49,9 +49,9 @@ func (c *WorkerConf) Run() error {
 
 	// Initialize
 	c.StartedTs = time.Now().Unix()
-	if c.Id == "" {
+	if c.Id.IsZero() {
 		// Allow users to pass in existing ids to re-use old worker configs
-		c.Id = bson.NewObjectId()
+		c.Id = objectid.NewObjectId()
 	}
 
 	if c.Daemon {
@@ -72,7 +72,7 @@ func (c *WorkerConf) Run() error {
 			cmd.Args = append(cmd.Args, "--tags")
 			cmd.Args = append(cmd.Args, strings.Join(c.Tags, ","))
 		}
-		if c.Id != "" {
+		if !c.Id.IsZero() {
 			cmd.Args = append(cmd.Args, "--id")
 			cmd.Args = append(cmd.Args, c.Id.Hex())
 		}
@@ -309,7 +309,7 @@ func (c *WorkerConf) ProcessTasks() {
 				"retryDelay": c.CheckIntervalMs(),
 			}).Errorf("error finding task for this worker")
 			continue
-		} else if !t.Id.Valid() {
+		} else if t.Id.IsZero() {
 			log.WithFields(log.Fields{
 				"retryDelay": c.CheckIntervalMs(),
 			}).Debug("found no matching tasks")

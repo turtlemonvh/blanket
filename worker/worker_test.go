@@ -39,7 +39,7 @@ import (
 	"github.com/turtlemonvh/blanket/server"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 )
 
 // testTaskTypeToml is a minimal bash task with no required env vars.
@@ -115,7 +115,7 @@ func TestProcessOne(t *testing.T) {
 	}()
 
 	// Register a worker via the API (worker.UpdateInDatabase uses PUT /worker/:id)
-	workerID := bson.NewObjectId()
+	workerID := objectid.NewObjectId()
 	wConf := worker.WorkerConf{
 		Id:            workerID,
 		Tags:          []string{"bash", "unix"},

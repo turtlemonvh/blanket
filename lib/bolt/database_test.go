@@ -3,7 +3,7 @@ package bolt
 import (
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/worker"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"testing"
 	"time"
 )
@@ -22,7 +22,7 @@ func TestWorkers(t *testing.T) {
 	// Add some workers
 	// Usually workers interact over http, that is done in the worker tests
 	w1 := &worker.WorkerConf{
-		Id:            bson.NewObjectId(),
+		Id:            objectid.NewObjectId(),
 		Stopped:       false,
 		Pid:           1,
 		Tags:          []string{"bash", "unix"},
@@ -35,7 +35,7 @@ func TestWorkers(t *testing.T) {
 	assert.Equal(t, err, nil)
 
 	w2 := &worker.WorkerConf{
-		Id:            bson.NewObjectId(),
+		Id:            objectid.NewObjectId(),
 		Stopped:       false,
 		Pid:           1,
 		Tags:          []string{"python", "python27"},
@@ -64,7 +64,7 @@ func TestWorkers(t *testing.T) {
 	assert.Equal(t, len(workers), 2)
 
 	// Check that DeleteWorker with an invalid id does not error, but does not change count
-	err = DB.DeleteWorker(bson.NewObjectId())
+	err = DB.DeleteWorker(objectid.NewObjectId())
 	assert.Equal(t, err, nil)
 	workers, err = DB.GetWorkers()
 	assert.Equal(t, err, nil)

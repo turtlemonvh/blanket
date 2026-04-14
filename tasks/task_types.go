@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"io"
 	"io/ioutil"
 	"os"
@@ -192,7 +192,7 @@ func (t *TaskType) RequiredEnv() map[string]string {
 // Tasks inherit all the environment params of a tasktype + more
 func (t *TaskType) NewTask(childEnv map[string]string) (Task, error) {
 	taskType := t.Config.GetString("name")
-	taskId := bson.NewObjectId()
+	taskId := objectid.NewObjectId()
 
 	// Merge environment variables
 	// FIXME: Take any files and copy them into directory

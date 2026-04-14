@@ -2,7 +2,7 @@ package server
 
 import (
 	"fmt"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 )
 
 const (
@@ -25,12 +25,12 @@ func MapKeys(m map[string]bool) []string {
 }
 
 // Safely convert a string to an object id
-func SafeObjectId(workerIdStr string) (bson.ObjectId, error) {
-	oid := bson.NewObjectId()
-	if !bson.IsObjectIdHex(workerIdStr) {
+func SafeObjectId(workerIdStr string) (objectid.ObjectId, error) {
+	oid := objectid.NewObjectId()
+	if !objectid.IsObjectIdHex(workerIdStr) {
 		return oid, fmt.Errorf("Invalid worker id")
 	}
-	return bson.ObjectIdHex(workerIdStr), nil
+	return objectid.ObjectIdHex(workerIdStr), nil
 }
 
 // Error types

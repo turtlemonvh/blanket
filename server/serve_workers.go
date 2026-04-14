@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/worker"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"net/http"
 	"time"
 )
@@ -231,7 +231,7 @@ func (s *ServerConfig) getWorkerLogfile(c *gin.Context) {
 // Stream out worker log
 func (s *ServerConfig) streamWorkerLog(c *gin.Context) {
 	var err error
-	var workerId bson.ObjectId
+	var workerId objectid.ObjectId
 
 	workerId, err = SafeObjectId(c.Param("id"))
 	if err != nil {

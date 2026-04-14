@@ -9,7 +9,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/tasks"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -25,16 +25,16 @@ import (
 
 // Either gets the task id from a context object or returns an error
 // Will also set the response for the request if there was a problem
-func (s *ServerConfig) getTaskId(c *gin.Context) (bson.ObjectId, error) {
+func (s *ServerConfig) getTaskId(c *gin.Context) (objectid.ObjectId, error) {
 	var err error
-	var tid bson.ObjectId
+	var tid objectid.ObjectId
 
 	taskIdStr := c.Param("id")
-	if !bson.IsObjectIdHex(taskIdStr) {
+	if !objectid.IsObjectIdHex(taskIdStr) {
 		err = fmt.Errorf("'%s' is not not a valid objectid", taskIdStr)
 		c.String(http.StatusInternalServerError, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
 	} else {
-		tid = bson.ObjectIdHex(taskIdStr)
+		tid = objectid.ObjectIdHex(taskIdStr)
 	}
 
 	return tid, err
@@ -78,7 +78,7 @@ func (s *ServerConfig) getTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
-	var taskId bson.ObjectId
+	var taskId objectid.ObjectId
 
 	taskId, err = s.getTaskId(c)
 	if err != nil {
@@ -208,7 +208,7 @@ func (s *ServerConfig) markTaskAsRunning(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
-	var taskId bson.ObjectId
+	var taskId objectid.ObjectId
 	taskId, err = s.getTaskId(c)
 	if err != nil {
 		return
@@ -242,7 +242,7 @@ func (s *ServerConfig) cancelTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
-	var taskId bson.ObjectId
+	var taskId objectid.ObjectId
 	taskId, err = s.getTaskId(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
@@ -277,7 +277,7 @@ func (s *ServerConfig) markTaskAsFinished(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
-	var taskId bson.ObjectId
+	var taskId objectid.ObjectId
 	taskId, err = s.getTaskId(c)
 	if err != nil {
 		return
@@ -311,7 +311,7 @@ func (s *ServerConfig) updateTaskProgress(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
-	var taskId bson.ObjectId
+	var taskId objectid.ObjectId
 	taskId, err = s.getTaskId(c)
 	if err != nil {
 		return
@@ -473,7 +473,7 @@ func (s *ServerConfig) removeTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var err error
-	var taskId bson.ObjectId
+	var taskId objectid.ObjectId
 
 	taskId, err = s.getTaskId(c)
 	if err != nil {
@@ -502,7 +502,7 @@ func (s *ServerConfig) removeTask(c *gin.Context) {
 // Stream out task log
 func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 	var err error
-	var taskId bson.ObjectId
+	var taskId objectid.ObjectId
 
 	taskId, err = s.getTaskId(c)
 	if err != nil {

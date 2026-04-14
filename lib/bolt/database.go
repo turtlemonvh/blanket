@@ -9,7 +9,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"time"
 )
 
@@ -84,7 +84,7 @@ func (DB *BlanketBoltDB) GetWorkers() ([]worker.WorkerConf, error) {
 	return ws, err
 }
 
-func (DB *BlanketBoltDB) GetWorker(workerId bson.ObjectId) (worker.WorkerConf, error) {
+func (DB *BlanketBoltDB) GetWorker(workerId objectid.ObjectId) (worker.WorkerConf, error) {
 	w := worker.WorkerConf{}
 	err := DB.db.View(func(tx *bolt.Tx) error {
 		result, err := fetchWorkerBytes(workerId, tx)
@@ -113,7 +113,7 @@ func (DB *BlanketBoltDB) UpdateWorker(w *worker.WorkerConf) error {
 	})
 }
 
-func (DB *BlanketBoltDB) DeleteWorker(workerId bson.ObjectId) error {
+func (DB *BlanketBoltDB) DeleteWorker(workerId objectid.ObjectId) error {
 	return DB.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(BOLTDB_WORKER_BUCKET))
 		if b == nil {
@@ -134,7 +134,7 @@ func (DB *BlanketBoltDB) CleanupStalledWorkers() error {
 
 // Tasks
 
-func (DB *BlanketBoltDB) GetTask(taskId bson.ObjectId) (tasks.Task, error) {
+func (DB *BlanketBoltDB) GetTask(taskId objectid.ObjectId) (tasks.Task, error) {
 	var err error
 	task := tasks.Task{}
 	err = DB.db.View(func(tx *bolt.Tx) error {
@@ -152,7 +152,7 @@ func (DB *BlanketBoltDB) GetTasks(tc *database.TaskSearchConf) ([]tasks.Task, in
 	return FindTasksInBoltDB(DB.db, BOLTDB_TASK_BUCKET, tc)
 }
 
-func (DB *BlanketBoltDB) DeleteTask(taskId bson.ObjectId) error {
+func (DB *BlanketBoltDB) DeleteTask(taskId objectid.ObjectId) error {
 	return DB.db.Update(func(tx *bolt.Tx) error {
 		b, err := fetchTaskBucket(tx)
 		if err != nil {
@@ -164,7 +164,7 @@ func (DB *BlanketBoltDB) DeleteTask(taskId bson.ObjectId) error {
 
 // progress is a number [0:100]
 // Should also update task.LastUpdatedTs
-func (DB *BlanketBoltDB) UpdateTaskProgress(taskId bson.ObjectId, progress int) error {
+func (DB *BlanketBoltDB) UpdateTaskProgress(taskId objectid.ObjectId, progress int) error {
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
 		t.Progress = progress
 		return nil
@@ -194,7 +194,7 @@ func (DB *BlanketBoltDB) SaveTask(t *tasks.Task) error {
 }
 
 // This should be done as an upsert or within a transaction
-func (DB *BlanketBoltDB) RunTask(taskId bson.ObjectId, fields *database.TaskRunConfig) error {
+func (DB *BlanketBoltDB) RunTask(taskId objectid.ObjectId, fields *database.TaskRunConfig) error {
 	// Set lots of fields
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
 		if t.State != "CLAIMED" {
@@ -213,7 +213,7 @@ func (DB *BlanketBoltDB) RunTask(taskId bson.ObjectId, fields *database.TaskRunC
 // Set task to a terminal state
 // Checks that task is currently in the RUNNING state
 // Sets progress to 100 if the state is SUCCESS
-func (DB *BlanketBoltDB) FinishTask(taskId bson.ObjectId, newState string) error {
+func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, newState string) error {
 	// Set lots of fields
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
 		if t.State != "RUNNING" && t.State != "WAITING" {
