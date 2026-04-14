@@ -90,8 +90,8 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	// Make the result dir browseable
 	r.StaticFS("/results", gin.Dir(s.ResultsPath, true))
 
-	// Serve ui from bindata
-	r.StaticFS("/ui", assetFS())
+	// Serve ui from embedded filesystem (server/ui_dist)
+	r.StaticFS("/ui", uiHTTPFS())
 
 	// Redirect to ui
 	r.GET("/", func(c *gin.Context) {

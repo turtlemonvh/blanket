@@ -24,11 +24,6 @@ all: clean test vet linux darwin windows
 setup:
 	bash scripts/setup.sh
 
-# Setup for bindata
-setup-bindata:
-	go get github.com/jteeuwen/go-bindata/...
-	go get github.com/elazarl/go-bindata-assetfs/...
-
 setup-ui-dev:
 	cd ui; \
 	npm install; \
@@ -36,20 +31,13 @@ setup-ui-dev:
 	npm install --save-dev jshint gulp-jshint; \
 	bower install
 
-update-bindata:
-	# WARNING: We get an `unknown provider` warning when trying to use this version
-	# FIX: https://stackoverflow.com/questions/20340644/angular-unknown-provider-error-after-minification-with-grunt-build-in-yeoman-a
-	# Exit early to force using `dev` instead until this is fixed
-	exit 1
-	cd ui && gulp build
-	cd ui && go-bindata-assetfs -pkg=server public/...
-	mv ui/bindata.go server/
-
-update-bindata-dev:
-	# Change 'dev' to 'public' for un-minified code
+# Rebuild the embedded UI assets. UI source lives in ui/src; running `gulp
+# build-dev` produces ui/dev/, which we sync into server/ui_dist/ — that
+# directory is embedded at compile time via //go:embed in server/ui.go.
+update-ui-dist:
 	cd ui && gulp build-dev
-	cd ui && go-bindata-assetfs -pkg=server dev/...
-	mv ui/bindata.go server/
+	rm -rf server/ui_dist
+	cp -R ui/dev server/ui_dist
 
 linux: 
 	GOOS=linux GOARCH=${GOARCH} go build ${LDFLAGS} -o ${BINARY}-linux-${GOARCH} .
@@ -92,4 +80,4 @@ clean:
 	-rm -f ${VET_REPORT}
 	-rm -f ${BINARY}-*
 
-.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e install-playwright vet fmt clean update-bindata
+.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e install-playwright vet fmt clean update-ui-dist setup-ui-dev

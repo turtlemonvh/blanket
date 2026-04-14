@@ -3,7 +3,6 @@ module github.com/turtlemonvh/blanket
 go 1.23
 
 require (
-	github.com/elazarl/go-bindata-assetfs v1.0.1
 	github.com/gin-gonic/gin v1.9.1
 	github.com/hpcloud/tail v1.0.0
 	github.com/kardianos/osext v0.0.0-20190222173326-2bc1f35cddc0
