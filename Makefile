@@ -71,4 +71,41 @@ clean:
 	-rm -f ${VET_REPORT}
 	-rm -f ${BINARY}-*
 
-.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e test-smoke install-playwright vet fmt clean
+# ---------------------------------------------------------------------------
+# Docker — reproducible toolchain image. Same image CI will run.
+# ---------------------------------------------------------------------------
+
+DOCKER_IMAGE ?= blanket-dev:latest
+
+# Base run command: mount the checkout at /src and drop caches on a named
+# volume so go mod / build / npm installs survive across invocations.
+DOCKER_RUN = docker run --rm \
+	-v $(CURDIR):/src \
+	-v blanket-dev-cache:/go \
+	-w /src \
+	$(DOCKER_IMAGE)
+
+docker-image:
+	docker build -t $(DOCKER_IMAGE) .
+
+docker-test: docker-image
+	$(DOCKER_RUN) make test
+
+docker-test-browser: docker-image
+	$(DOCKER_RUN) make linux test-browser
+
+docker-test-smoke: docker-image
+	$(DOCKER_RUN) make linux test-smoke
+
+docker-build: docker-image
+	$(DOCKER_RUN) make linux darwin windows
+
+# Interactive shell in the toolchain image for ad-hoc work.
+docker-shell: docker-image
+	docker run --rm -it \
+		-v $(CURDIR):/src \
+		-v blanket-dev-cache:/go \
+		-w /src \
+		$(DOCKER_IMAGE) bash
+
+.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e test-smoke install-playwright vet fmt clean docker-image docker-test docker-test-browser docker-test-smoke docker-build docker-shell

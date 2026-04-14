@@ -48,11 +48,11 @@ effort than a normal test add.
 
 ## Build & CI
 
-- **Replace Vagrant with Docker + GitHub Actions** — drop the `Vagrantfile`
-  and `/provision` scripts (neither is exercised anymore now that
-  `scripts/setup.sh` handles dev setup). Add a `Dockerfile` that reproduces
-  the Go + Node + Playwright toolchain, and a GitHub Actions workflow that
-  runs `make test` and `make test-browser` against it on each push/PR.
+- **GitHub Actions CI on the toolchain image** — `Dockerfile` lands the
+  reproducible Go + Node + Playwright env (see `make docker-*` targets);
+  next step is a GHA workflow that runs `make test`, `make test-browser`,
+  and `make test-smoke` inside that container on each push/PR. Vagrant +
+  `/provision` are gone.
 - **Cross-compile release binaries in CI** — the `Makefile` already has
   `linux`, `darwin`, `windows` targets (all amd64). The CI workflow should
   build all three on every push/PR and attach the artifacts on tagged

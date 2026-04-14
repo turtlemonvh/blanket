@@ -2,15 +2,28 @@
 
 Blanket is a RESTy wrapper for long running tasks.
 
-## Development setup (Ubuntu / WSL2)
+## Development setup
 
-One-shot install of Go, Node, and Playwright (uses `sudo` for apt + `/usr/local/go`):
+Two options — pick one.
+
+**Native (Ubuntu / WSL2)** — installs Go, Node, and Playwright locally
+(uses `sudo` for apt + `/usr/local/go`). See `scripts/setup.sh`:
 
 ```bash
 make setup
 ```
 
-See `scripts/setup.sh` for what it installs.
+**Docker** — reproducible toolchain image; the same image CI will run. No
+local Go or Node install needed:
+
+```bash
+make docker-test           # Go unit tests in the container
+make docker-test-browser   # Playwright suite
+make docker-test-smoke     # binary smoke test
+make docker-shell          # interactive shell, source mounted at /src
+```
+
+See `Dockerfile` for what the image carries.
 
 ## Quick Start
 

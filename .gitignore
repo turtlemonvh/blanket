@@ -8,7 +8,6 @@ blanket.toml
 blanket.yml
 blanket.yaml
 worker.*.log
-.vagrant
 tests.xml
 tests/e2e/node_modules
 tests/e2e/test-results

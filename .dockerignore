@@ -1,0 +1,30 @@
+.git
+.gitignore
+
+# Build outputs
+blanket
+blanket-*
+vet.report
+tests.xml
+
+# Runtime artifacts
+*.db
+results/
+worker.*.log
+
+# Node / Playwright state — we reinstall fresh inside the image
+tests/e2e/node_modules
+tests/e2e/test-results
+tests/e2e/playwright-report
+
+# Editor / OS scratch
+.vscode
+.idea
+.DS_Store
+
+# Docs aren't needed in the image
+docs/
+
+# Don't copy the Dockerfile into itself
+Dockerfile
+.dockerignore
