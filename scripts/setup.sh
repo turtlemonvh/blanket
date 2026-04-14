@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-GO_VERSION="${GO_VERSION:-1.22.4}"        # override: GO_VERSION=1.23.0 bash scripts/setup.sh
+GO_VERSION="${GO_VERSION:-1.23.4}"        # must be >= go directive in go.mod; override: GO_VERSION=1.24.0 bash scripts/setup.sh
 NODE_VERSION="${NODE_VERSION:---lts}"     # nvm install arg: --lts, 20, 22, etc.
 NVM_VERSION="${NVM_VERSION:-v0.40.1}"     # https://github.com/nvm-sh/nvm/releases
 

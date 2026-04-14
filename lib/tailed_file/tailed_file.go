@@ -330,8 +330,13 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 			"subId": sub.Id,
 		}).Info("Subscribed")
 
+		// Ring buffer backfill: walk all N slots starting from the oldest
+		// (FileOffset+1) and ending at the newest (FileOffset). The original
+		// loop bound excluded the newest slot, silently dropping the most
+		// recent line whenever Subscribe landed after the tailer had already
+		// written to PastLines[FileOffset].
 		nlines := 0
-		for i := tf.FileOffset + 1; i < tf.FileOffset+int64(len(tf.PastLines)); i++ {
+		for i := tf.FileOffset + 1; i <= tf.FileOffset+int64(len(tf.PastLines)); i++ {
 			item := tf.PastLines[i%int64(len(tf.PastLines))]
 			if item != "" {
 				sub.NewLines <- item
