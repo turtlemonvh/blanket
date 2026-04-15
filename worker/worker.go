@@ -24,7 +24,16 @@ import (
 
 const (
 	DEFAULT_CHECK_INTERVAL_SECONDS = 2
+	// MIN_CHECK_INTERVAL_SECONDS is the lowest check interval a worker can
+	// be configured with. Below this, the claim/refresh loop hammers the
+	// server with no useful work — see ProcessTasks.
+	MIN_CHECK_INTERVAL_SECONDS = 0.5
 )
+
+// ErrCheckIntervalTooLow is returned by Run when CheckInterval is set to
+// a positive value below MIN_CHECK_INTERVAL_SECONDS. Callers (HTTP handlers,
+// CLI) should surface it to the user instead of silently clamping.
+var ErrCheckIntervalTooLow = fmt.Errorf("checkInterval must be >= %.1fs", MIN_CHECK_INTERVAL_SECONDS)
 
 // Worker
 
@@ -52,6 +61,15 @@ func (c *WorkerConf) Run() error {
 	if c.Id.IsZero() {
 		// Allow users to pass in existing ids to re-use old worker configs
 		c.Id = objectid.NewObjectId()
+	}
+
+	// Treat 0 as "use default", but reject anything below the minimum to
+	// keep the claim loop from hammering the server.
+	if c.CheckInterval == 0 {
+		c.CheckInterval = DEFAULT_CHECK_INTERVAL_SECONDS
+	}
+	if c.CheckInterval < MIN_CHECK_INTERVAL_SECONDS {
+		return ErrCheckIntervalTooLow
 	}
 
 	if c.Daemon {
@@ -98,11 +116,6 @@ func (c *WorkerConf) Run() error {
 		}).Info("Starting daemonized executable")
 
 	} else {
-		// Calculate adjusted check time, in seconds
-		if c.CheckInterval < 0.5 {
-			c.CheckInterval = 0.5
-		}
-
 		// Handle clean shutdown
 		shutdownChan := make(chan os.Signal, 1)
 		signal.Notify(shutdownChan, os.Interrupt)
@@ -176,7 +189,10 @@ func (c *WorkerConf) Run() error {
 		}()
 
 		c.MustRegister()
-		c.ProcessTasks()
+		if err := c.ProcessTasks(); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 	return nil
 }
@@ -271,29 +287,32 @@ func (c *WorkerConf) CheckIntervalMs() time.Duration {
 	return time.Duration(c.CheckInterval*1000*viper.GetFloat64("timeMultiplier")) * time.Millisecond
 }
 
+// ProcessTasks is the worker's main loop: refresh state, claim a task, run
+// it, repeat — until the worker is marked Stopped (typically by the SIGTERM
+// handler updating the DB record). Sleeps c.CheckIntervalMs() whenever an
+// iteration ends without processing a task (empty queue, refresh error,
+// claim error). Returns the last error seen, or nil on clean shutdown.
+//
 // FIXME: Once working on a task, send some logs of errors into that task's logfiles
-func (c *WorkerConf) ProcessTasks() {
-	var err error
+func (c *WorkerConf) ProcessTasks() error {
+	var lastErr error
 	var t tasks.Task
 
 	for !c.Stopped {
-		if err != nil {
-			// Only pause if we didn't just successfully run a task
-			time.Sleep(c.CheckIntervalMs())
-		}
-
 		// Update the worker config
-		err = c.Refetch()
+		err := c.Refetch()
 		if err != nil {
 			log.WithFields(log.Fields{
 				"id":    c.Id,
 				"error": err.Error(),
 			}).Error("error refreshing worker state")
-		} else {
-			log.WithFields(log.Fields{
-				"id": c.Id,
-			}).Info("successfully refreshed worker state")
+			lastErr = err
+			time.Sleep(c.CheckIntervalMs())
+			continue
 		}
+		log.WithFields(log.Fields{
+			"id": c.Id,
+		}).Info("successfully refreshed worker state")
 
 		t, err = tasks.MarkAsClaimed(c.Id)
 		if err != nil {
@@ -301,11 +320,17 @@ func (c *WorkerConf) ProcessTasks() {
 				"err":        err.Error(),
 				"retryDelay": c.CheckIntervalMs(),
 			}).Errorf("error finding task for this worker")
+			lastErr = err
+			time.Sleep(c.CheckIntervalMs())
 			continue
-		} else if t.Id.IsZero() {
+		}
+		if t.Id.IsZero() {
+			// Empty queue — back off before polling again. (Pre-fix this
+			// branch fell through with no sleep, hot-spinning the loop.)
 			log.WithFields(log.Fields{
 				"retryDelay": c.CheckIntervalMs(),
 			}).Debug("found no matching tasks")
+			time.Sleep(c.CheckIntervalMs())
 			continue
 		}
 
@@ -319,12 +344,15 @@ func (c *WorkerConf) ProcessTasks() {
 			log.WithFields(log.Fields{
 				"task": t,
 			}).Infof("processed task successfully")
+			lastErr = nil
 		} else {
 			log.WithFields(log.Fields{
 				"err":        err.Error(),
 				"retryDelay": c.CheckIntervalMs(),
 			}).Errorf("error processing task")
+			lastErr = err
 		}
+		// No sleep after a task — drain the queue if more is waiting.
 	}
 
 	log.WithFields(log.Fields{
@@ -333,11 +361,7 @@ func (c *WorkerConf) ProcessTasks() {
 		"id":      c.Id.Hex(),
 	}).Info("Finished final task, shutting down")
 
-	if err != nil {
-		os.Exit(1)
-	} else {
-		os.Exit(0)
-	}
+	return lastErr
 }
 
 func (c *WorkerConf) ProcessOne(t *tasks.Task) error {

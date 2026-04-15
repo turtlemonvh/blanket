@@ -28,6 +28,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,11 +54,12 @@ executor = "bash"
 // test needs: in-memory DB+queue, a live HTTP server, a types dir a caller
 // can add task types into, and a registered worker.
 type workerHarness struct {
-	t         *testing.T
-	srv       *httptest.Server
-	typesDir  string
-	work      worker.WorkerConf
-	cleanupFn func()
+	t          *testing.T
+	srv        *httptest.Server
+	typesDir   string
+	work       worker.WorkerConf
+	claimCount *atomic.Int64
+	cleanupFn  func()
 }
 
 func (h *workerHarness) writeTaskType(name, toml string) {
@@ -158,7 +161,14 @@ func newWorkerHarness(t *testing.T) *workerHarness {
 		ResultsPath:    resultsDir,
 		TimeMultiplier: 1.0,
 	}
-	httpSrv := httptest.NewServer(sc.GetRouter())
+	claimCount := &atomic.Int64{}
+	router := sc.GetRouter()
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/task/claim/") {
+			claimCount.Add(1)
+		}
+		router.ServeHTTP(w, r)
+	}))
 
 	u, _ := url.Parse(httpSrv.URL)
 	port, _ := strconv.Atoi(u.Port())
@@ -193,10 +203,11 @@ func newWorkerHarness(t *testing.T) *workerHarness {
 	}
 
 	h := &workerHarness{
-		t:        t,
-		srv:      httpSrv,
-		typesDir: typesDir,
-		work:     wConf,
+		t:          t,
+		srv:        httpSrv,
+		typesDir:   typesDir,
+		work:       wConf,
+		claimCount: claimCount,
 		cleanupFn: func() {
 			httpSrv.Close()
 			dbCleanup()
@@ -349,6 +360,70 @@ func TestProcessOne_StoppedMidFlight(t *testing.T) {
 
 	final := h.fetch(claimed.Id)
 	assert.Equal(t, "STOPPED", final.State)
+}
+
+// stopWorkerViaAPI marks the worker stopped in the DB so that the
+// ProcessTasks loop exits at its next Refetch.
+func (h *workerHarness) stopWorkerViaAPI() {
+	h.t.Helper()
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("%s/worker/%s/stop", h.srv.URL, h.work.Id.Hex()), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.t.Fatalf("stop worker: %v", err)
+	}
+	resp.Body.Close()
+}
+
+// TestProcessTasks_DoesNotHotSpinOnEmptyQueue is the regression test for the
+// claim-loop hot-spin: pre-fix, the empty-queue branch (MarkAsClaimed →
+// Task{},nil) hit `continue` with err==nil, skipping the loop's only sleep
+// and pegging the server with thousands of POST /task/claim/ requests per
+// second. With CheckInterval=0.5s and a 2s window, expect ~4 attempts; we
+// allow a generous ceiling of 50 to absorb scheduling jitter.
+func TestProcessTasks_DoesNotHotSpinOnEmptyQueue(t *testing.T) {
+	h := newWorkerHarness(t)
+	defer h.cleanup()
+
+	h.work.CheckInterval = worker.MIN_CHECK_INTERVAL_SECONDS
+
+	done := make(chan error, 1)
+	go func() { done <- h.work.ProcessTasks() }()
+
+	time.Sleep(2 * time.Second)
+	h.stopWorkerViaAPI()
+
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("ProcessTasks did not exit after stop")
+	}
+
+	got := h.claimCount.Load()
+	if got > 50 {
+		t.Fatalf("hot-spin detected: %d POST /task/claim/ in 2s (expected <=50; pre-fix was ~thousands)", got)
+	}
+	if got == 0 {
+		t.Fatalf("expected at least one claim attempt; got 0 — loop never ran?")
+	}
+}
+
+// TestRun_RejectsLowCheckInterval covers the defensive limit: WorkerConf.Run
+// must refuse a CheckInterval below MIN_CHECK_INTERVAL_SECONDS rather than
+// silently clamping. This is the second guard rail behind the loop fix; if
+// the loop ever regresses, this rejects creation up-front.
+func TestRun_RejectsLowCheckInterval(t *testing.T) {
+	for _, iv := range []float64{0.1, 0.4, 0.49} {
+		w := worker.WorkerConf{
+			Id:            objectid.NewObjectId(),
+			Tags:          []string{"bash"},
+			CheckInterval: iv,
+		}
+		err := w.Run()
+		if err == nil {
+			t.Errorf("CheckInterval=%v: expected error, got nil", iv)
+		}
+	}
 }
 
 // TestProcessOne_ProducesLogs asserts both the task stdout log and the

@@ -179,3 +179,24 @@ func TestUI_SubmitTask_MergesCustomEnv(t *testing.T) {
 		assert.False(t, blankExists, "blank-named custom env row should be dropped")
 	}
 }
+
+// --- POST /ui/workers ---
+
+// TestUI_SubmitWorker_RejectsLowCheckInterval is the UI side of the
+// hot-spin guard: a checkInterval below MIN_CHECK_INTERVAL_SECONDS must
+// fail with 400 instead of silently launching a worker that would then
+// hammer /task/claim/.
+func TestUI_SubmitWorker_RejectsLowCheckInterval(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	form := url.Values{}
+	form.Set("tags", "bash,unix")
+	form.Set("checkInterval", "0.1")
+
+	w := postForm(r, "/ui/workers", form)
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"sub-minimum checkInterval should return 400; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "checkInterval")
+}
