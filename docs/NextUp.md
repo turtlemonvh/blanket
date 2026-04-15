@@ -74,18 +74,6 @@ effort than a normal test add.
   machine (`WAITING → CLAIMED → RUNNING → SUCCESS/ERROR/STOPPED/TIMEDOUT`),
   the worker claim loop, and the `tailed_file` subscribe/backfill flow.
 
-## Examples
-
-- **Ship more example task types** — `testdata/types/echo_task.toml` is
-  the only fixture today, and it's intentionally minimal (so smoke tests
-  stay fast). Add a couple of realistic examples the README already
-  hints at: a `bash_task` that accepts `DEFAULT_COMMAND` via env, and a
-  `python_hello` that shells out to `python3 -c`. Drop them under
-  `examples/types/` (not `testdata/`, so the smoke suite isn't affected)
-  and point the README's curl snippets at that directory. Helps first-run
-  users feel out the type-definition schema without writing one from
-  scratch.
-
 ## Branding
 
 - **Project branding pass** — pick a logo, color palette, and tagline for

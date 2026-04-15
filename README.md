@@ -32,9 +32,10 @@ See `Dockerfile` for what the image carries.
 # `make darwin` → ./blanket-darwin-amd64, `make windows` → .exe.
 make linux
 
-# Copy the shipped echo_task fixture so there's a type to exercise. Point
-# your own task-type directory at `./types` for production use.
-cp -r testdata/types ./types
+# Copy the shipped example task types so there's something to exercise.
+# Drop your own TOML files in this directory (or any directory listed in
+# `tasks.typesPaths`) as you build up your own types.
+cp -r examples/types ./types
 
 # Create a config file
 cat > blanket.json <<'EOF'
@@ -60,23 +61,34 @@ curl -s -X GET localhost:8773/task/ | jq .
 ./blanket-linux-amd64 ps
 ```
 
-Submit a task of the shipped `echo_task` type:
+Submit a task of the shipped `echo_task` type (the minimal one — just
+writes a string to stdout):
 
 ```bash
 curl -s -X POST localhost:8773/task/ \
-    -d '{"type": "echo_task", "environment": {"GREETING": "hello"}}'
+    -d '{"type": "echo_task"}'
 ```
 
-Once you've defined your own task types (drop TOML files into `./types/` —
-see `testdata/types/echo_task.toml` for the schema), submit them the same
-way. Environment values are passed through as env vars to the task's command:
+The `bash_task` example takes a `DEFAULT_COMMAND` env var and runs it
+through bash — the generic escape hatch for ad-hoc commands:
 
 ```bash
 curl -s -X POST localhost:8773/task/ \
-    -d '{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2}}'
+    -d '{"type": "bash_task", "environment": {"DEFAULT_COMMAND": "echo $(date)"}}'
 curl -X POST localhost:8773/task/ \
     -d '{"type": "bash_task", "environment": {"DEFAULT_COMMAND": "cd ~ && ls -lah"}}'
 ```
+
+The `python_hello` example shells out to `python3` and has an optional
+`NAME` env var with a default:
+
+```bash
+curl -s -X POST localhost:8773/task/ \
+    -d '{"type": "python_hello", "environment": {"NAME": "blanket"}}'
+```
+
+See `examples/types/*.toml` for the schema; drop your own TOML files
+into `./types/` and submit them the same way.
 
 Add a task and upload some data files with it. Files will be placed at the root of the directory where the task runs.
 
