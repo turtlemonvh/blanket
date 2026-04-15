@@ -8,6 +8,17 @@ reader (or a future AI session) can pick them up without conversation history.
 
 Small, known-scope items to clear before the next big refactor.
 
+- **Windows cross-compile is broken** (`worker/worker.go:89`, `:92`) —
+  `cmd.SysProcAttr.Setpgid = true` is unix-only. Windows `syscall.SysProcAttr`
+  has no `Setpgid` field, so `GOOS=windows go build` fails with
+  `type *syscall.SysProcAttr has no field or method Setpgid`. Pre-existing
+  latent bug the new CI surfaced on the first post-merge master run. Fix:
+  split the daemon-attrs block into `worker/daemon_unix.go` (with the
+  existing body) and `worker/daemon_windows.go` (no-op — windows has no
+  process groups; the shell already detaches) behind `//go:build` tags,
+  and call a `setDaemonAttrs(cmd)` helper from `Run()`. After this lands,
+  `cross-compile` on master will go green and the release-automation
+  follow-up below can produce all three binaries.
 - **Normalize task-handler error status codes** (`server/serve_tasks.go`) —
   `updateTaskProgress` returns 500 for a missing task id; `markTaskAsFinished`
   returns 400; `claimTask` returns 500 when the worker isn't in the DB.
