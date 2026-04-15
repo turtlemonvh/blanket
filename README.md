@@ -28,11 +28,16 @@ See `Dockerfile` for what the image carries.
 ## Quick Start
 
 ```bash
-# Or windows, or linux
-make darwin
+# Build the binary. `make linux` → ./blanket-linux-amd64,
+# `make darwin` → ./blanket-darwin-amd64, `make windows` → .exe.
+make linux
+
+# Copy the shipped echo_task fixture so there's a type to exercise. Point
+# your own task-type directory at `./types` for production use.
+cp -r testdata/types ./types
 
 # Create a config file
-cat > blanket.json << EOF
+cat > blanket.json <<'EOF'
 {
   "port": 8773,
   "tasks": {
@@ -44,39 +49,49 @@ cat > blanket.json << EOF
 EOF
 
 # Run server
-./blanket
+./blanket-linux-amd64
 ```
 
-Once the server is running, you can view the web ui at [http://localhost:8773/](http://localhost:8773/).  You can also interact with blanket via curl and the command line.  For example, you can list tasks
+Once the server is running, you can view the web UI at [http://localhost:8773/](http://localhost:8773/).  You can also interact with blanket via curl and the command line.  For example, you can list tasks
 
 ```bash
 curl -s -X GET localhost:8773/task/ | jq .
 # OR
-./blanket ps
+./blanket-linux-amd64 ps
 ```
 
-Add a new task
+Submit a task of the shipped `echo_task` type:
 
 ```bash
-# Add 3 different tasks with different params
-curl -s -X POST localhost:8773/task/ -d'{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2}}'
-curl -X POST localhost:8773/task/ -d'{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2, "DEFAULT_COMMAND": "cd ~ && ls -lah"}}'
-curl -X POST localhost:8773/task/ -d'{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}'
+curl -s -X POST localhost:8773/task/ \
+    -d '{"type": "echo_task", "environment": {"GREETING": "hello"}}'
+```
+
+Once you've defined your own task types (drop TOML files into `./types/` —
+see `testdata/types/echo_task.toml` for the schema), submit them the same
+way. Environment values are passed through as env vars to the task's command:
+
+```bash
+curl -s -X POST localhost:8773/task/ \
+    -d '{"type": "bash_task", "environment": {"PANDAS": "four", "Frogs": 5, "CATS": 2}}'
+curl -X POST localhost:8773/task/ \
+    -d '{"type": "bash_task", "environment": {"DEFAULT_COMMAND": "cd ~ && ls -lah"}}'
 ```
 
 Add a task and upload some data files with it. Files will be placed at the root of the directory where the task runs.
 
 ```bash
 # Send task as a form field named data with multiple files
-curl -X POST localhost:8773/task/ -F data='{"type": "python_hello", "environment": {"frogs": 5, "CATS": 2}}' -F blanket.json=@blanket.json
+curl -X POST localhost:8773/task/ \
+    -F data='{"type": "echo_task", "environment": {"GREETING": "hi"}}' \
+    -F blanket.json=@blanket.json
 
 # Send task data as another file named "data"
-cat > data.json << EOF
+cat > data.json <<'EOF'
 {
-    "type": "python_hello", 
+    "type": "echo_task",
     "environment": {
-        "frogs": 5, 
-        "CATS": 2
+        "GREETING": "hi"
     }
 }
 EOF
@@ -86,12 +101,12 @@ curl -X POST localhost:8773/task/ -F data=@data.json -F blanket.json=@blanket.js
 Add lots of tasks
 
 ```bash
-while true; do 
+while true; do
     curl -X POST localhost:8773/task/ \
         -F data=@data.json \
-        -F blanket.json=@blanket.json; 
-    echo "$(date)"; 
-    sleep 5; 
+        -F blanket.json=@blanket.json
+    echo "$(date)"
+    sleep 5
 done
 ```
 
@@ -99,30 +114,30 @@ There is also limited functionality for sending tasks via the command line.
 
 ```
 # Send in a single task
-./blanket submit -t python_hello -e '{"frogs": 5}'
-python_hello 5955c9e26b3c65257abc1e32 [1498794466]
+$ ./blanket-linux-amd64 submit -t echo_task -e '{"GREETING": "hi"}'
+echo_task 69ded2acce42aa8a11ac9ddc [1744748400]
 
 # Send in a single task, printing only the id of the task once it is submitted
-./blanket submit -t python_hello -e '{"frogs": 5}' -q
-5955c9df6b3c65257abc1e31
+$ ./blanket-linux-amd64 submit -t echo_task -e '{"GREETING": "hi"}' -q
+69ded2adce42aa8a11ac9de0
 ```
 
 Delete a task
 
 ```bash
-curl -s -X DELETE localhost:8773/task/b200f6de-0453-46c9-9c70-5dad63db3ebb | jq . 
+curl -s -X DELETE localhost:8773/task/69ded2acce42aa8a11ac9ddc | jq .
 # OR
-./blanket ps -q | tail -n1 | xargs ./blanket rm
+./blanket-linux-amd64 ps -q | tail -n1 | xargs ./blanket-linux-amd64 rm
 
 # Remove all tasks
-./blanket ps -q | xargs -I {} ./blanket rm {}
+./blanket-linux-amd64 ps -q | xargs -I {} ./blanket-linux-amd64 rm {}
 ```
 
 Run worker with certain capabilities
 
 ```bash
 # You can also launch from the web UI or via an api call
-./blanket worker -t unix,bash,python,python2,python27
+./blanket-linux-amd64 worker -t unix,bash,python
 ```
 
 ## Single-binary distribution
@@ -145,7 +160,7 @@ curl -sSfL https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js \
 ## Command line API
 
 ```bash
-$ ./blanket-darwin-amd64 -h
+$ ./blanket-linux-amd64 -h
 A fast and easy way to wrap applications and make them available via nice clean REST interfaces with built in UI, command line tools, and queuing, all in a single binary!
 
 Usage:
@@ -153,6 +168,8 @@ Usage:
   blanket [command]
 
 Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  help        Help about any command
   ps          List active and queued tasks
   rm          Remove tasks
   submit      Submit a task to be executed.
@@ -161,6 +178,7 @@ Available Commands:
 
 Flags:
   -c, --config string     config file (default is blanket.yaml|json|toml)
+  -h, --help              help for blanket
       --logLevel string   the logging level to use (default "info")
   -p, --port int32        Port the server will run on (default 8773)
 
@@ -169,7 +187,7 @@ Use "blanket [command] --help" for more information about a command.
 
 ## Specs
 
-See [the docs directory](https://github.com/turtlemonvh/blanket-api/tree/master/docs) for more detailed information about the design of blanket.
+See [the docs directory](https://github.com/turtlemonvh/blanket/tree/master/docs) for more detailed information about the design of blanket.
 
 ### Origin
 
@@ -184,7 +202,7 @@ The first draft of blanket was written in python and used celery for queuing. It
 
 This was my first major project in Go, and the code base is still recovering from some early "experiments".  It is still a bit rough around the edges, but I do use blanket almost every day at work to manage long running tasks that I'd like to keep a record of, like code deployments.  In this regard, it's a bit like a light-weight [jenkins](https://jenkins.io/).  I plan to continue working on blanket, and I expect it will become a major component of many of my future side projects.
 
-If you are interested in using blanket for a project and want to ask whether blanket may be a good match, you can either [submit a github issue with your question](https://github.com/turtlemonvh/blanket-api/issues) or find me on twitter [@turtlemonvh](https://twitter.com/turtlemonvh).
+If you are interested in using blanket for a project and want to ask whether blanket may be a good match, you can either [submit a github issue with your question](https://github.com/turtlemonvh/blanket/issues) or find me on twitter [@turtlemonvh](https://twitter.com/turtlemonvh).
 
 ### Design Goals
 
