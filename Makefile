@@ -66,6 +66,16 @@ vet:
 fmt:
 	go fmt $$(go list ./... | grep -v /vendor/)
 
+# Fails if any Go file isn't gofmt-clean. Wired into CI so formatting drift
+# gets caught at review time instead of piling up.
+check-fmt:
+	@out=$$(gofmt -l $$(find . -name '*.go' -not -path './tests/e2e/*' -not -path './vendor/*')); \
+	if [ -n "$$out" ]; then \
+		echo "gofmt would reformat these files (run 'make fmt'):"; \
+		echo "$$out"; \
+		exit 1; \
+	fi
+
 clean:
 	-rm -f ${TEST_REPORT}
 	-rm -f ${VET_REPORT}
@@ -77,16 +87,29 @@ clean:
 
 DOCKER_IMAGE ?= blanket-dev:latest
 
-# Base run command: mount the checkout at /src and drop caches on a named
-# volume so go mod / build / npm installs survive across invocations.
+# Base run command:
+#   -v $(CURDIR):/src                        — mount the checkout
+#   -v blanket-dev-cache:/go                 — persist Go module + build cache
+#   -v blanket-npm-cache:…/node_modules      — persist Playwright deps
+#
+# The node_modules volume is load-bearing: the Dockerfile `npm ci`s at build
+# time, but the bind mount above would otherwise shadow that pre-warmed
+# node_modules with the host's (absent on a fresh CI checkout). Docker
+# populates a named volume from the image layer on first use, so subsequent
+# runs reuse it. If you bump tests/e2e/package-lock.json, run
+# `make docker-clean` to drop the stale volume.
 DOCKER_RUN = docker run --rm \
 	-v $(CURDIR):/src \
 	-v blanket-dev-cache:/go \
+	-v blanket-npm-cache:/src/tests/e2e/node_modules \
 	-w /src \
 	$(DOCKER_IMAGE)
 
 docker-image:
 	docker build -t $(DOCKER_IMAGE) .
+
+docker-check-fmt: docker-image
+	$(DOCKER_RUN) make check-fmt
 
 docker-test: docker-image
 	$(DOCKER_RUN) make test
@@ -105,7 +128,14 @@ docker-shell: docker-image
 	docker run --rm -it \
 		-v $(CURDIR):/src \
 		-v blanket-dev-cache:/go \
+		-v blanket-npm-cache:/src/tests/e2e/node_modules \
 		-w /src \
 		$(DOCKER_IMAGE) bash
 
-.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e test-smoke install-playwright vet fmt clean docker-image docker-test docker-test-browser docker-test-smoke docker-build docker-shell
+# Drop the persisted Go + npm caches. Run this after bumping go.sum or
+# tests/e2e/package-lock.json so the next docker-* run repopulates from the
+# freshly built image.
+docker-clean:
+	-docker volume rm blanket-dev-cache blanket-npm-cache
+
+.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e test-smoke install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-browser docker-test-smoke docker-build docker-shell docker-clean

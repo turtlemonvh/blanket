@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/gin-gonic/gin"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/database"
@@ -34,8 +34,8 @@ func uiNextStaticFS() http.FileSystem {
 
 // Template funcs shared across all pages.
 var uiNextFuncs = template.FuncMap{
-	"add":   func(a, b int) int { return a + b },
-	"join":  strings.Join,
+	"add":  func(a, b int) int { return a + b },
+	"join": strings.Join,
 	"shortId": func(id objectid.ObjectId) string {
 		h := id.Hex()
 		if len(h) >= 8 {
@@ -459,4 +459,3 @@ func (s *ServerConfig) renderUINext(c *gin.Context, t *template.Template, data g
 		log.WithField("err", err).Warn("ui-next: render page")
 	}
 }
-

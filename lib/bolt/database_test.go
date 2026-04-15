@@ -2,8 +2,8 @@ package bolt
 
 import (
 	"github.com/stretchr/testify/assert"
-	"github.com/turtlemonvh/blanket/worker"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/worker"
 	"testing"
 	"time"
 )

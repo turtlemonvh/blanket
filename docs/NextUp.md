@@ -48,17 +48,24 @@ effort than a normal test add.
 
 ## Build & CI
 
-- **GitHub Actions CI on the toolchain image** — `Dockerfile` lands the
-  reproducible Go + Node + Playwright env (see `make docker-*` targets);
-  next step is a GHA workflow that runs `make test`, `make test-browser`,
-  and `make test-smoke` inside that container on each push/PR. Vagrant +
-  `/provision` are gone.
-- **Cross-compile release binaries in CI** — the `Makefile` already has
-  `linux`, `darwin`, `windows` targets (all amd64). The CI workflow should
-  build all three on every push/PR and attach the artifacts on tagged
-  releases, so contributors and users can pull a binary without a local
-  Go toolchain. "Single binary that drops on any host" is a load-bearing
-  promise of the project — CI should verify it on every commit.
+- **Tagged-release automation in CI** — `.github/workflows/ci.yml` already
+  runs Go tests, smoke, Playwright, and cross-compile (the cross-compile
+  job runs on `push: master` only). Next step is a tag-triggered workflow
+  (`on: push: tags: ['v*']`) that runs `make docker-build` and attaches
+  the three binaries to a GitHub Release via
+  `softprops/action-gh-release@v2`. "Single binary that drops on any host"
+  is a load-bearing promise of the project — release tags should publish
+  it automatically.
+- **Branch protection on master** — once the first CI run is green, wire
+  the `test` check as required via `gh api -X PUT
+  repos/turtlemonvh/blanket/branches/master/protection`. See the CI plan
+  for the exact payload.
+- **GHCR push of `blanket-dev:latest`** — currently every CI run rebuilds
+  the toolchain image from scratch (GHA layer cache helps, but full cache
+  misses cost ~5m). Pushing the image to `ghcr.io/turtlemonvh/blanket-dev`
+  from master would let future parallel jobs pull instead of rebuild, and
+  would give local developers a fast path (`docker pull …` instead of
+  `make docker-image`).
 
 ## Docs
 
@@ -66,6 +73,18 @@ effort than a normal test add.
   components (server ↔ worker ↔ DB ↔ queue), the task lifecycle state
   machine (`WAITING → CLAIMED → RUNNING → SUCCESS/ERROR/STOPPED/TIMEDOUT`),
   the worker claim loop, and the `tailed_file` subscribe/backfill flow.
+
+## Examples
+
+- **Ship more example task types** — `testdata/types/echo_task.toml` is
+  the only fixture today, and it's intentionally minimal (so smoke tests
+  stay fast). Add a couple of realistic examples the README already
+  hints at: a `bash_task` that accepts `DEFAULT_COMMAND` via env, and a
+  `python_hello` that shells out to `python3 -c`. Drop them under
+  `examples/types/` (not `testdata/`, so the smoke suite isn't affected)
+  and point the README's curl snippets at that directory. Helps first-run
+  users feel out the type-definition schema without writing one from
+  scratch.
 
 ## Branding
 

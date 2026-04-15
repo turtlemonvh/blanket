@@ -13,9 +13,9 @@ package server
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
+	log "github.com/sirupsen/logrus"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/queue"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"

@@ -1,0 +1,9 @@
+tags = ["bash", "unix"]
+
+# short timeout for tests
+timeout = 10
+
+# write a known string to stdout so tests can assert on it
+command = "echo 'hello from blanket test'"
+
+executor = "bash"

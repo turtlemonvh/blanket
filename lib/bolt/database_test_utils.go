@@ -2,8 +2,8 @@ package bolt
 
 import (
 	"fmt"
-	bolt "go.etcd.io/bbolt"
 	"github.com/turtlemonvh/blanket/lib/database"
+	bolt "go.etcd.io/bbolt"
 	"io/ioutil"
 	"os"
 	"time"

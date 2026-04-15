@@ -1,9 +1,9 @@
 package server
 
 import (
-	log "github.com/sirupsen/logrus"
 	"github.com/gin-gonic/gin"
 	"github.com/kardianos/osext"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"net/http"
 	"path"

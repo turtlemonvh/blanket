@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	log "github.com/sirupsen/logrus"
-	bolt "go.etcd.io/bbolt"
 	"github.com/turtlemonvh/blanket/lib"
 	"github.com/turtlemonvh/blanket/lib/database"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
-	"github.com/turtlemonvh/blanket/lib/objectid"
+	bolt "go.etcd.io/bbolt"
 	"time"
 )
 
@@ -173,8 +173,8 @@ func (DB *BlanketBoltDB) UpdateTaskProgress(taskId objectid.ObjectId, progress i
 
 // Things to clean up
 // - tasks still in state `CLAIMED` X min after StartedTs because:
-//  - worker failed to parse worker object
-//  - worker crashed trying to run the task
+//   - worker failed to parse worker object
+//   - worker crashed trying to run the task
 func (DB *BlanketBoltDB) CleanupStalledTasks() error {
 	// FIXME: Implement me
 	return nil

@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"github.com/kardianos/osext"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib"
-	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/tasks"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,13 +32,13 @@ const (
 
 type WorkerConf struct {
 	Id            objectid.ObjectId `json:"id"`
-	Tags          []string      `json:"tags"`
-	Logfile       string        `json:"logfile"`
-	Daemon        bool          `json:"daemon"`
-	Pid           int           `json:"pid"`
-	Stopped       bool          `json:"stopped"`
-	CheckInterval float64       `json:"checkInterval"` // seconds
-	StartedTs     int64         `json:"startedTs"`
+	Tags          []string          `json:"tags"`
+	Logfile       string            `json:"logfile"`
+	Daemon        bool              `json:"daemon"`
+	Pid           int               `json:"pid"`
+	Stopped       bool              `json:"stopped"`
+	CheckInterval float64           `json:"checkInterval"` // seconds
+	StartedTs     int64             `json:"startedTs"`
 }
 
 // FIXME: Ensure this works ok on windows: https://golang.org/pkg/os/#Signal

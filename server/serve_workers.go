@@ -2,11 +2,11 @@ package server
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"github.com/gin-gonic/gin"
+	log "github.com/sirupsen/logrus"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/worker"
-	"github.com/turtlemonvh/blanket/lib/objectid"
 	"net/http"
 	"time"
 )
