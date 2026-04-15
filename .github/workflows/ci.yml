@@ -42,6 +42,9 @@ jobs:
 
       # Reuse the Makefile targets verbatim — Dockerfile is the single
       # source of truth, same locally and in CI.
+      - name: gofmt
+        run: make docker-check-fmt
+
       - name: Go tests
         run: make docker-test
 

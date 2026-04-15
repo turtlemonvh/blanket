@@ -66,6 +66,16 @@ vet:
 fmt:
 	go fmt $$(go list ./... | grep -v /vendor/)
 
+# Fails if any Go file isn't gofmt-clean. Wired into CI so formatting drift
+# gets caught at review time instead of piling up.
+check-fmt:
+	@out=$$(gofmt -l $$(find . -name '*.go' -not -path './tests/e2e/*' -not -path './vendor/*')); \
+	if [ -n "$$out" ]; then \
+		echo "gofmt would reformat these files (run 'make fmt'):"; \
+		echo "$$out"; \
+		exit 1; \
+	fi
+
 clean:
 	-rm -f ${TEST_REPORT}
 	-rm -f ${VET_REPORT}
@@ -98,6 +108,9 @@ DOCKER_RUN = docker run --rm \
 docker-image:
 	docker build -t $(DOCKER_IMAGE) .
 
+docker-check-fmt: docker-image
+	$(DOCKER_RUN) make check-fmt
+
 docker-test: docker-image
 	$(DOCKER_RUN) make test
 
@@ -125,4 +138,4 @@ docker-shell: docker-image
 docker-clean:
 	-docker volume rm blanket-dev-cache blanket-npm-cache
 
-.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e test-smoke install-playwright vet fmt clean docker-image docker-test docker-test-browser docker-test-smoke docker-build docker-shell docker-clean
+.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e test-smoke install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-browser docker-test-smoke docker-build docker-shell docker-clean
