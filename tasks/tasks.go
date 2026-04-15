@@ -17,7 +17,7 @@ var (
 
 // FIXME: Reason field for why a task was stopped? audit trail of actions?
 type Task struct {
-	Id            objectid.ObjectId     `json:"id"`            // time sortable id
+	Id            objectid.ObjectId `json:"id"`            // time sortable id
 	Pid           int               `json:"pid"`           // the process id used to run the task on disk
 	CreatedTs     int64             `json:"createdTs"`     // when it was first added to the queue
 	StartedTs     int64             `json:"startedTs"`     // when it was pulled from the queue
@@ -27,7 +27,7 @@ type Task struct {
 	TypeDigest    string            `json:"typeDigest"`    // version hash of config file
 	Timeout       int64             `json:"timeout"`       // The max time the task is allowed to run
 	State         string            `json:"state"`         // See ValidTaskStates
-	WorkerId      objectid.ObjectId     `json:"workerId"`      // Id of the worker that processed this task; set when CLAIMED
+	WorkerId      objectid.ObjectId `json:"workerId"`      // Id of the worker that processed this task; set when CLAIMED
 	Progress      int               `json:"progress"`      // 0-100
 	ExecEnv       map[string]string `json:"defaultEnv"`    // Combined with default env
 	Tags          []string          `json:"tags"`          // tags for capabilities of workers

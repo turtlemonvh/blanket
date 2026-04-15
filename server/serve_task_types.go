@@ -1,8 +1,8 @@
 package server
 
 import (
-	log "github.com/sirupsen/logrus"
 	"github.com/gin-gonic/gin"
+	log "github.com/sirupsen/logrus"
 	"github.com/turtlemonvh/blanket/tasks"
 	"net/http"
 )

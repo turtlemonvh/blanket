@@ -2,8 +2,8 @@ package tailed_file
 
 import (
 	"expvar"
-	log "github.com/sirupsen/logrus"
 	"github.com/hpcloud/tail"
+	log "github.com/sirupsen/logrus"
 	"gopkg.in/tomb.v1"
 	"math/rand"
 	"os"

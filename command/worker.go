@@ -3,8 +3,8 @@ package command
 import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"github.com/turtlemonvh/blanket/worker"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/worker"
 	"strings"
 )
 

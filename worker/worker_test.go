@@ -1,5 +1,6 @@
 // External test package to avoid the import cycle:
-//   worker → lib/bolt → worker
+//
+//	worker → lib/bolt → worker
 //
 // Integration tests for the worker package.
 //

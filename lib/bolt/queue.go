@@ -2,12 +2,12 @@ package bolt
 
 import (
 	"encoding/json"
-	bolt "go.etcd.io/bbolt"
 	"github.com/turtlemonvh/blanket/lib/database"
+	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/queue"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
-	"github.com/turtlemonvh/blanket/lib/objectid"
+	bolt "go.etcd.io/bbolt"
 	"log"
 	"time"
 )
