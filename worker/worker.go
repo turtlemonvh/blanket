@@ -85,13 +85,7 @@ func (c *WorkerConf) Run() error {
 			cmd.Args = append(cmd.Args, fmt.Sprintf("%f", c.CheckInterval))
 		}
 
-		if cmd.SysProcAttr != nil {
-			cmd.SysProcAttr.Setpgid = true
-		} else {
-			cmdAttrs := &syscall.SysProcAttr{}
-			cmdAttrs.Setpgid = true
-			cmd.SysProcAttr = cmdAttrs
-		}
+		setDaemonAttrs(cmd)
 
 		// FIXME: Redirect the first couple seconds of stdout here to check that process started ok
 		cmd.Start()
