@@ -1,0 +1,8 @@
+# Minimal task type — writes a fixed string to stdout, exits 0. Useful as
+# a first-run sanity check ("does my server/worker pair actually run a
+# task?") and as a template for copy-pasting into your own types.
+
+tags = ["bash", "unix"]
+timeout = 10
+command = "echo 'hello from blanket'"
+executor = "bash"

@@ -1,0 +1,20 @@
+# Generic bash escape hatch — submitter supplies the command to run in
+# DEFAULT_COMMAND. Good for ad-hoc one-offs (builds, deploys, file
+# munging) where writing a dedicated task type isn't worth it.
+#
+# The {{.VAR}} template syntax references task environment variables at
+# submit time; blanket also exports them as real env vars to the shell,
+# so `$DEFAULT_COMMAND` would work too.
+
+tags = ["bash", "unix"]
+timeout = 300
+
+command = '''
+{{.DEFAULT_COMMAND}}
+'''
+
+executor = "bash"
+
+  [[environment.required]]
+  name = "DEFAULT_COMMAND"
+  description = "The bash command to run. E.g. 'echo $(date)'"

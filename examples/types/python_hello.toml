@@ -1,0 +1,19 @@
+# Shells out to python3 — a realistic "run a script from the repo"
+# pattern. Shows an optional env var (NAME) with a default, so the task
+# can be submitted with no environment at all.
+#
+# Requires python3 on $PATH; tag "python" keeps it off workers that
+# don't advertise that capability.
+
+tags = ["python", "unix"]
+timeout = 60
+
+command = '''
+python3 -c "print('hello, {{.NAME}}!')"
+'''
+
+executor = "bash"
+
+  [[environment.default]]
+  name = "NAME"
+  value = "world"
