@@ -20,6 +20,20 @@ Small, known-scope items to clear before the next big refactor.
 - **`updateTaskProgress` doesn't check task state** — a progress update on a
   terminal (SUCCESS/STOPPED) task silently succeeds. Add a state guard that
   rejects progress updates on non-RUNNING tasks, then add a regression test.
+- **Worker claim loop spins without delay (UI-launched workers)** — observed:
+  a worker started via the "Launch Worker" button on the Workers page polls
+  the queue with no measurable backoff (visible as a flood of
+  `POST /task/claim/...` log lines). CLI-launched workers (`./blanket worker
+  -t ...`) appear fine. Likely culprit: `worker/worker.go:467` computes the
+  loop timeout as `c.CheckInterval * 1000 * viper.GetFloat64("timeMultiplier")`
+  ms — if `timeMultiplier` resolves to `0` in the daemonized child (the UI
+  launches with `Daemon: true`, which re-execs blanket via `os.Exec`), the
+  timer fires immediately and the loop hot-spins. `command/root.go:59` sets
+  the default to the *string* `"1.0"`; verify that the re-execed child
+  actually inherits that default and that `GetFloat64` returns 1.0 (not 0).
+  Reproduce by launching from the UI and tailing the server log; fix the
+  timeMultiplier propagation, and add a regression test that asserts the
+  daemon child sees a non-zero CheckIntervalMs.
 
 ## Test Coverage Expansion
 
@@ -91,6 +105,22 @@ The HTMX + Go-template UI is now the only UI (Phase C complete — Angular,
   - Update `lastHeardTs` on stop
   - Allow a `force` option that sends signals on supported platforms
   - `deleteWorker` should validate the worker is stopped before deleting
+- **Auto-refresh the workers + tasks list pages** — after submitting a
+  task or launching a worker, the new row doesn't appear until the user
+  manually reloads. The worker already polls; the UI should too. HTMX
+  has a built-in pattern: add `hx-trigger="every 2s"` (or load + sse
+  for push) to the `#workers-rows` and `#tasks-rows` partials so the
+  list re-fetches itself. Keep the interval generous (≥2s) to avoid
+  hammering the server when many tabs are open. Templates to touch:
+  `server/ui_next/templates/{workers,tasks}.html` (and possibly the
+  `_rows` partials they swap into).
+- **No way to view worker logs in the UI** — the server already exposes
+  `GET /worker/:id/logs` (`server/serve_workers.go:205`, `server.go:150`),
+  so the file is reachable, but there's no template that surfaces it.
+  Add a worker-detail page (mirror of `task_detail.html` with its SSE
+  log stream — see `serve_logs.go` for the streaming endpoint pattern)
+  and link to it from the Workers list. Useful for debugging the worker
+  polling bug above without having to ssh into the host.
 - **Rename `server/ui_next/` → `server/ui/`** and the `uiNext*` funcs to
   drop the migration-era suffix. Pure cosmetic; safe to do any time.
 
