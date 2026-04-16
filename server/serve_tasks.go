@@ -142,14 +142,14 @@ func (s *ServerConfig) claimTask(c *gin.Context) {
 	dbt, err := s.DB.GetTask(t.Id)
 	if err != nil {
 		if _, ok := err.(database.ItemNotFoundError); ok {
-			// Not found: ack task, return message saying task was probably deleted from db
 			status := http.StatusNotFound
-			errMsg = fmt.Sprintf("Could not find task in database, it was likely stopped and deleted")
-			if err = ackCb(); err != nil {
-				errMsg = "%s: Encountered error while trying to ack task :: %s"
+			errMsg = "Could not find task in database, it was likely stopped and deleted"
+			if ackErr := ackCb(); ackErr != nil {
+				errMsg = fmt.Sprintf("%s: Encountered error while trying to ack task :: %s", errMsg, ackErr.Error())
 				status = http.StatusInternalServerError
 			}
 			c.String(status, MakeErrorString(errMsg))
+			return
 		}
 
 		errMsg = fmt.Sprintf("Could not fetch task from database to ensure it was not stopped :: %s", err.Error())
