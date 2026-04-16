@@ -166,3 +166,22 @@ func TestGetTasks(t *testing.T) {
 	assertResponseLength(t, r, req, 5)
 
 }
+
+// TestLaunchWorker_RejectsLowCheckInterval: the JSON API mirror of
+// TestUI_SubmitWorker_RejectsLowCheckInterval. Both creation paths must
+// reject sub-minimum intervals to keep the claim loop from hot-spinning.
+func TestLaunchWorker_RejectsLowCheckInterval(t *testing.T) {
+	gin.SetMode(gin.ReleaseMode)
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	body := []byte(`{"tags": ["bash"], "checkInterval": 0.1}`)
+	req, _ := http.NewRequest("POST", "/worker/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"sub-minimum checkInterval should return 400; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "checkInterval")
+}

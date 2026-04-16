@@ -11,7 +11,7 @@
     </div>
     <div style="margin-bottom:0.75rem;">
         <label for="newWorkerInterval">Check Interval (seconds)</label><br>
-        <input id="newWorkerInterval" type="number" name="checkInterval" step="0.1" min="0.1" placeholder="2" aria-label="check interval">
+        <input id="newWorkerInterval" type="number" name="checkInterval" step="0.1" min="0.5" placeholder="2" aria-label="check interval">
     </div>
     <button type="submit" class="primary" aria-label="launch worker">Launch Worker</button>
     <button type="button" hx-get="/ui/partials/blank" hx-target="#new-worker-form" hx-swap="innerHTML">
