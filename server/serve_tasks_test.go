@@ -576,7 +576,9 @@ func TestClaim_DeletedTaskDoesNotPanic(t *testing.T) {
 
 	created := postTask(r, "echo_task")
 	assert.Equal(t, http.StatusCreated, created.Code)
-	var body struct{ ID string `json:"id"` }
+	var body struct {
+		ID string `json:"id"`
+	}
 	json.NewDecoder(created.Body).Decode(&body)
 
 	taskId := objectid.ObjectIdHex(body.ID)
