@@ -351,11 +351,11 @@ test.describe('Worker detail page', () => {
     ).toBeVisible();
   });
 
-  test('stopped worker shows streaming-disabled message', async ({ page, request }) => {
+  test('stopped worker loads final log output', async ({ page, request }) => {
     await request.put(`/worker/${workerId}/stop`);
     await page.goto(`/ui/workers/${workerId}`);
-    await expect(
-      page.getByText('Worker is stopped', { exact: false }),
-    ).toBeVisible();
+    // Stopped workers show a static log pre-load instead of SSE streaming.
+    const logPre = page.locator('pre[aria-label="worker log output"]');
+    await expect(logPre).toBeVisible();
   });
 });
