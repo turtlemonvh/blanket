@@ -169,6 +169,10 @@ func (s *ServerConfig) launchWorker(c *gin.Context, w *worker.WorkerConf) {
 	if w.CheckInterval == 0 {
 		w.CheckInterval = worker.DEFAULT_CHECK_INTERVAL_SECONDS
 	}
+	if w.CheckInterval < worker.MIN_CHECK_INTERVAL_SECONDS {
+		c.String(http.StatusBadRequest, MakeErrorString(worker.ErrCheckIntervalTooLow.Error()))
+		return
+	}
 
 	err = w.Run()
 	if err != nil {

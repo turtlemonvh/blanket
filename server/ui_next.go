@@ -241,6 +241,10 @@ func (s *ServerConfig) uiNextSubmitWorker(c *gin.Context) {
 	if interval <= 0 {
 		interval = worker.DEFAULT_CHECK_INTERVAL_SECONDS
 	}
+	if interval < worker.MIN_CHECK_INTERVAL_SECONDS {
+		c.String(http.StatusBadRequest, worker.ErrCheckIntervalTooLow.Error())
+		return
+	}
 
 	w := worker.WorkerConf{
 		Id:            objectid.NewObjectId(),

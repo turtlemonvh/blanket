@@ -91,6 +91,15 @@ The HTMX + Go-template UI is now the only UI (Phase C complete — Angular,
   - Update `lastHeardTs` on stop
   - Allow a `force` option that sends signals on supported platforms
   - `deleteWorker` should validate the worker is stopped before deleting
+- **Consider SSE-based push for workers + tasks lists** — both tbodies
+  currently auto-refresh via `hx-trigger="every 2s"`. Polling is fine
+  for low traffic but every open tab fires a request whether or not
+  anything changed. If this ever becomes a bottleneck (many tabs, slow
+  DB, noisy access logs), swap to an SSE channel that fires a "list
+  changed" event from the mutation paths and have htmx-sse trigger the
+  re-fetch. The streaming endpoint pattern in `server/serve_logs.go` is
+  the reference. Cost: a long-lived connection per tab, plus fan-out on
+  the mutation paths. Polling stays cheaper while open-tab count is small.
 - **Rename `server/ui_next/` → `server/ui/`** and the `uiNext*` funcs to
   drop the migration-era suffix. Pure cosmetic; safe to do any time.
 
