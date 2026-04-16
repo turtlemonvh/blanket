@@ -29,7 +29,11 @@
                 <th>Actions</th>
             </tr>
         </thead>
-        <tbody id="workers-rows">
+        <tbody id="workers-rows"
+               hx-get="/ui/partials/workers-rows"
+               hx-trigger="every 2s"
+               hx-target="this"
+               hx-swap="innerHTML">
             {{template "workers-rows" .}}
         </tbody>
     </table>

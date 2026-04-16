@@ -83,7 +83,12 @@
                 <th>Actions</th>
             </tr>
         </thead>
-        <tbody id="tasks-rows">
+        <tbody id="tasks-rows"
+               hx-get="/ui/partials/tasks-rows"
+               hx-trigger="every 2s"
+               hx-include="#task-filter"
+               hx-target="this"
+               hx-swap="innerHTML">
             {{template "tasks-rows" .}}
         </tbody>
     </table>
