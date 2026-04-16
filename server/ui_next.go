@@ -199,6 +199,22 @@ func (s *ServerConfig) uiNextWorkersPage(c *gin.Context) {
 	s.renderUINext(c, t, gin.H{"Title": "Workers", "Workers": ws})
 }
 
+// uiNextWorkerDetailPage renders one worker's metadata and log stream.
+func (s *ServerConfig) uiNextWorkerDetailPage(c *gin.Context) {
+	workerId, err := SafeObjectId(c.Param("id"))
+	if err != nil {
+		c.String(http.StatusBadRequest, err.Error())
+		return
+	}
+	w, err := s.DB.GetWorker(workerId)
+	if err != nil {
+		c.String(http.StatusNotFound, err.Error())
+		return
+	}
+	t := mustParseUINextPage("worker-detail", "ui_next/templates/worker_detail.html")
+	s.renderUINext(c, t, gin.H{"Title": "Worker " + workerId.Hex()[:8], "Worker": w})
+}
+
 // uiNextNewWorkerPartial returns the "new worker" form.
 func (s *ServerConfig) uiNextNewWorkerPartial(c *gin.Context) {
 	t := mustParsePartial("new-worker-form", "new_worker_form.html")

@@ -95,6 +95,7 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/ui/", s.uiNextTasksPage)
 	r.GET("/ui/tasks/:id", s.uiNextTaskDetailPage)
 	r.GET("/ui/workers", s.uiNextWorkersPage)
+	r.GET("/ui/workers/:id", s.uiNextWorkerDetailPage)
 	r.GET("/ui/task-types", s.uiNextTaskTypesPage)
 	r.GET("/ui/about", s.uiNextAboutPage)
 	r.POST("/ui/tasks", s.uiNextSubmitTask)
@@ -147,7 +148,8 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.PUT("/worker/:id/restart", s.restartWorker) // re-start an existing worker
 	r.PUT("/worker/:id", s.updateWorker)          // used for initial creation + status updates
 	r.DELETE("/worker/:id", s.deleteWorker)       // remove from database; can only be called on a stopped worker
-	r.GET("/worker/:id/logs", s.getWorkerLogfile) // server sent events
+	r.GET("/worker/:id/logs", s.getWorkerLogfile) // full logfile download
+	r.GET("/worker/:id/log", s.streamWorkerLog)   // SSE stream of worker log
 
 	return r
 }
