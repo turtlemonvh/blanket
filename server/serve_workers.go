@@ -258,9 +258,25 @@ func (s *ServerConfig) streamWorkerLog(c *gin.Context) {
 	}
 	defer sub.Stop()
 
-	// Worker is done if it is stopped
 	isComplete := func() bool {
-		return true
+		w, err = s.DB.GetWorker(workerId)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"workerId":       workerId,
+				"subscriptionId": sub.Id,
+				"tailedFile":     sub.TailedFile.Filepath,
+			}).Error("error refreshing worker state while processing logstreaming request")
+			return true
+		}
+		if w.Stopped {
+			log.WithFields(log.Fields{
+				"workerId":       workerId,
+				"subscriptionId": sub.Id,
+				"tailedFile":     sub.TailedFile.Filepath,
+			}).Info("stopping logstreaming request because worker is stopped")
+			return true
+		}
+		return false
 	}
 	s.streamLog(c, sub, isComplete)
 }

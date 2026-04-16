@@ -28,13 +28,12 @@ func (s *ServerConfig) streamLog(c *gin.Context, sub *tailed_file.TailedFileSubs
 
 		select {
 		case logline := <-sub.NewLines:
-			// Send event with message content
 			timer.Stop()
 			c.Writer.Header()["Content-Type"] = []string{"text/event-stream"}
 			sse.Encode(c.Writer, sse.Event{
 				Id:    strconv.Itoa(lineno),
 				Event: "message",
-				Data:  logline,
+				Data:  logline + "\n",
 			})
 			lineno++
 			loglineChannelIsEmpty = false

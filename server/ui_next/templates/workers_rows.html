@@ -2,7 +2,7 @@
 {{range $i, $w := .Workers}}
 <tr>
     <th scope="row">{{add $i 1}}</th>
-    <td>{{$w.Pid}}</td>
+    <td><a href="/ui/workers/{{hex $w.Id}}">{{$w.Pid}}</a></td>
     <td>{{join $w.Tags ", "}}</td>
     <td>{{fmtTs $w.StartedTs}}</td>
     <td class="muted">{{$w.Logfile}}</td>

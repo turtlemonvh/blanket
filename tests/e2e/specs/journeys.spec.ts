@@ -240,7 +240,6 @@ test.describe('Workers view', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Auto-refresh — tasks/workers tbody polls every 2s, so a row submitted via
 // the API while the page is open should appear WITHOUT clicking Refresh.
 // ---------------------------------------------------------------------------
@@ -279,5 +278,84 @@ test.describe('Auto-refresh', () => {
     const tbody = page.locator('#workers-rows');
     await expect(tbody).toHaveAttribute('hx-trigger', 'every 2s');
     await expect(tbody).toHaveAttribute('hx-get', '/ui/partials/workers-rows');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Worker detail page — metadata table and Live Log section
+// ---------------------------------------------------------------------------
+
+test.describe('Worker detail page', () => {
+  test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
+
+  let workerId: string;
+
+  test.beforeEach(async ({ request }) => {
+    // Register a fake worker via the API so the detail page has data.
+    workerId = require('crypto').randomBytes(12).toString('hex');
+    const res = await request.put(`/worker/${workerId}`, {
+      data: {
+        id: workerId,
+        tags: ['bash', 'unix'],
+        pid: 99999,
+        stopped: false,
+        checkInterval: 2,
+        logfile: '/tmp/test-worker.log',
+        startedTs: Math.floor(Date.now() / 1000),
+      },
+    });
+    expect(res.status()).toBe(200);
+  });
+
+  test.afterEach(async ({ request }) => {
+    // Stop then delete the worker.
+    await request.put(`/worker/${workerId}/stop`);
+    await request.delete(`/worker/${workerId}`);
+  });
+
+  test('shows worker metadata and Live Log heading', async ({ page }) => {
+    await page.goto(`/ui/workers/${workerId}`);
+    await expect(
+      page.getByRole('heading', { name: 'Worker Detail', exact: true }),
+    ).toBeVisible();
+
+    // Metadata table contains the worker ID.
+    await expect(page.getByRole('cell', { name: workerId })).toBeVisible();
+
+    // Tags appear.
+    await expect(page.getByText('bash, unix')).toBeVisible();
+
+    // Live Log section heading is present.
+    await expect(
+      page.getByRole('heading', { name: /Live Log/i }),
+    ).toBeVisible();
+
+    // Back link navigates to workers list.
+    await page.getByRole('link', { name: /Back to Workers/i }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Workers', exact: true }),
+    ).toBeVisible();
+  });
+
+  test('workers list links to detail page', async ({ page }) => {
+    await page.goto('/ui/workers');
+    await page.getByRole('button', { name: /refresh list/i }).click();
+
+    // The PID cell is a link to the detail page.
+    const pidLink = page.getByRole('link', { name: '99999' });
+    await expect(pidLink).toBeVisible();
+    await pidLink.click();
+
+    await expect(
+      page.getByRole('heading', { name: 'Worker Detail', exact: true }),
+    ).toBeVisible();
+  });
+
+  test('stopped worker shows streaming-disabled message', async ({ page, request }) => {
+    await request.put(`/worker/${workerId}/stop`);
+    await page.goto(`/ui/workers/${workerId}`);
+    await expect(
+      page.getByText('Worker is stopped', { exact: false }),
+    ).toBeVisible();
   });
 });
