@@ -47,7 +47,7 @@
     </script>
     {{else}}
     <pre id="worker-log"
-         hx-get="/worker/{{hex .Worker.Id}}/logs"
+         hx-get="/worker/{{hex .Worker.Id}}/log/tail"
          hx-trigger="load"
          hx-swap="innerHTML"
          style="max-height:420px;overflow:auto;background:#0e1014;color:#d4d4d4;padding:0.75rem;border-radius:6px;"

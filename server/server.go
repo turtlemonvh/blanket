@@ -128,12 +128,13 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/task_type/:name", s.getTaskType)
 
 	// Called by user
-	r.GET("/task/", s.getTasks)             // list tasks in db
-	r.GET("/task/:id", s.getTask)           // fetch just 1 by id
-	r.POST("/task/", s.postTask)            // add a new task to the queue
-	r.DELETE("/task/:id", s.removeTask)     // delete all information from db, including killing if running
-	r.GET("/task/:id/log", s.streamTaskLog) // stream stdout log
-	r.PUT("/task/:id/cancel", s.cancelTask) // stop execution of a task; will be moved to state STOPPED
+	r.GET("/task/", s.getTasks)                // list tasks in db
+	r.GET("/task/:id", s.getTask)              // fetch just 1 by id
+	r.POST("/task/", s.postTask)               // add a new task to the queue
+	r.DELETE("/task/:id", s.removeTask)        // delete all information from db, including killing if running
+	r.GET("/task/:id/log", s.streamTaskLog)    // stream stdout log
+	r.GET("/task/:id/log/tail", s.tailTaskLog) // last N lines of stdout
+	r.PUT("/task/:id/cancel", s.cancelTask)    // stop execution of a task; will be moved to state STOPPED
 
 	// Called by worker
 	r.POST("/task/claim/:workerid", s.claimTask)      // claim a task
@@ -143,13 +144,14 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 
 	r.GET("/worker/:id", s.getWorker)
 	r.GET("/worker/", s.getWorkers)
-	r.POST("/worker/", s.launchNewWorker)         // called from front end, doesn't actually hit database
-	r.PUT("/worker/:id/stop", s.stopWorker)       // stop/pause worker; will stop after current task stops
-	r.PUT("/worker/:id/restart", s.restartWorker) // re-start an existing worker
-	r.PUT("/worker/:id", s.updateWorker)          // used for initial creation + status updates
-	r.DELETE("/worker/:id", s.deleteWorker)       // remove from database; can only be called on a stopped worker
-	r.GET("/worker/:id/logs", s.getWorkerLogfile) // full logfile download
-	r.GET("/worker/:id/log", s.streamWorkerLog)   // SSE stream of worker log
+	r.POST("/worker/", s.launchNewWorker)          // called from front end, doesn't actually hit database
+	r.PUT("/worker/:id/stop", s.stopWorker)        // stop/pause worker; will stop after current task stops
+	r.PUT("/worker/:id/restart", s.restartWorker)  // re-start an existing worker
+	r.PUT("/worker/:id", s.updateWorker)           // used for initial creation + status updates
+	r.DELETE("/worker/:id", s.deleteWorker)        // remove from database; can only be called on a stopped worker
+	r.GET("/worker/:id/logs", s.getWorkerLogfile)  // full logfile download
+	r.GET("/worker/:id/log", s.streamWorkerLog)    // SSE stream of worker log
+	r.GET("/worker/:id/log/tail", s.tailWorkerLog) // last N lines of worker log
 
 	return r
 }
