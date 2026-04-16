@@ -46,9 +46,22 @@
     })();
     </script>
     {{else}}
-    <p class="muted">Worker is stopped — streaming is disabled. Use the
-        <a href="/worker/{{hex .Worker.Id}}/logs">logfile download</a>
-        link above for the final output.</p>
+    <pre id="worker-log"
+         hx-get="/worker/{{hex .Worker.Id}}/log/tail"
+         hx-trigger="load"
+         hx-swap="innerHTML"
+         style="max-height:420px;overflow:auto;background:#0e1014;color:#d4d4d4;padding:0.75rem;border-radius:6px;"
+         aria-label="worker log output"><span class="muted">Loading…</span></pre>
+    <script>
+    (function () {
+      var el = document.getElementById('worker-log');
+      var pin = document.getElementById('pin-bottom');
+      if (!el) return;
+      el.addEventListener('htmx:afterSwap', function () {
+        if (pin.checked) el.scrollTop = el.scrollHeight;
+      });
+    })();
+    </script>
     {{end}}
 </section>
 {{end}}
