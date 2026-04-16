@@ -83,12 +83,21 @@ func MarkAsClaimed(workerId objectid.ObjectId) (Task, error) {
 		return Task{}, nil
 	}
 
-	if res.StatusCode != 200 {
-		// FIXME: Get the error content from the JSON response
+	if res.StatusCode == http.StatusNotFound {
 		errMsg := make(map[string]interface{})
 		dec.Decode(&errMsg)
 		log.WithFields(log.Fields{
 			"resp": errMsg["error"],
+		}).Warn("Claimed task was deleted or stopped before we could process it; will retry")
+		return Task{}, nil
+	}
+
+	if res.StatusCode != 200 {
+		errMsg := make(map[string]interface{})
+		dec.Decode(&errMsg)
+		log.WithFields(log.Fields{
+			"resp":       errMsg["error"],
+			"statusCode": res.StatusCode,
 		}).Error("Problem claiming task")
 		return Task{}, fmt.Errorf("Problem claiming task; status code :: %s", res.Status)
 	}
