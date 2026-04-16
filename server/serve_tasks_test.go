@@ -13,7 +13,7 @@
 //   - PUT /task/:id/finish: TestFinishTask_Valid, TestFinishTask_MissingTask,
 //     TestFinishTask_WrongState, TestFinishTask_InvalidState
 //   - POST /task/claim/:workerid edges: TestClaim_MissingWorker,
-//     TestClaim_NoMatchingTask
+//     TestClaim_NoMatchingTask, TestClaim_DeletedTaskDoesNotPanic
 //   - claim-task happy path: covered by worker integration test TestProcessOne
 //
 // Not yet covered:
@@ -558,6 +558,40 @@ func TestClaim_NoMatchingTask(t *testing.T) {
 	// Empty queue is a normal polling state — handler returns 204 No Content
 	// so idle workers don't spam error logs.
 	assert.Equal(t, http.StatusNoContent, w.Code)
+}
+
+func TestClaim_DeletedTaskDoesNotPanic(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	wconf := worker.WorkerConf{
+		Id:   objectid.NewObjectId(),
+		Tags: []string{"bash", "unix"},
+	}
+	assert.NoError(t, s.DB.UpdateWorker(&wconf))
+
+	created := postTask(r, "echo_task")
+	assert.Equal(t, http.StatusCreated, created.Code)
+	var body struct {
+		ID string `json:"id"`
+	}
+	json.NewDecoder(created.Body).Decode(&body)
+
+	taskId := objectid.ObjectIdHex(body.ID)
+	assert.NoError(t, s.DB.DeleteTask(taskId))
+
+	url := fmt.Sprintf("/task/claim/%s", wconf.Id.Hex())
+	req, _ := http.NewRequest("POST", url, nil)
+	w := httptest.NewRecorder()
+
+	assert.NotPanics(t, func() {
+		r.ServeHTTP(w, req)
+	})
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 // --- GET /task/ with additional filters ---
