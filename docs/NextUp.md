@@ -48,14 +48,6 @@ effort than a normal test add.
 
 ## Build & CI
 
-- **Tagged-release automation in CI** — `.github/workflows/ci.yml` already
-  runs Go tests, smoke, Playwright, and cross-compile (the cross-compile
-  job runs on `push: master` only). Next step is a tag-triggered workflow
-  (`on: push: tags: ['v*']`) that runs `make docker-build` and attaches
-  the three binaries to a GitHub Release via
-  `softprops/action-gh-release@v2`. "Single binary that drops on any host"
-  is a load-bearing promise of the project — release tags should publish
-  it automatically.
 - **GHCR push of `blanket-dev:latest`** — currently every CI run rebuilds
   the toolchain image from scratch (GHA layer cache helps, but full cache
   misses cost ~5m). Pushing the image to `ghcr.io/turtlemonvh/blanket-dev`
