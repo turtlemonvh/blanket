@@ -240,11 +240,11 @@ test.describe('Workers view', () => {
   });
 });
 
-// Auto-refresh — tasks/workers tbody polls every 2s, so a row submitted via
-// the API while the page is open should appear WITHOUT clicking Refresh.
+// SSE push — tasks/workers tables connect to SSE endpoints. A mutation
+// (e.g. API-submitted task) fires an event that triggers an htmx re-fetch.
 // ---------------------------------------------------------------------------
 
-test.describe('Auto-refresh', () => {
+test.describe('SSE push', () => {
   test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
 
   test.beforeEach(async ({ request }) => {
@@ -254,29 +254,32 @@ test.describe('Auto-refresh', () => {
     await purgeTasks(request);
   });
 
-  test('tasks page picks up an API-submitted task within the poll window', async ({
+  test('tasks page picks up an API-submitted task via SSE', async ({
     page,
     request,
   }) => {
     await page.goto('/ui/');
-    // Confirm the tbody has the polling attributes wired up.
+    const table = page.locator('table[sse-connect="/ui/sse/tasks"]');
+    await expect(table).toBeVisible();
     const tbody = page.locator('#tasks-rows');
-    await expect(tbody).toHaveAttribute('hx-trigger', 'every 2s');
+    await expect(tbody).toHaveAttribute('hx-trigger', 'sse:tasks-changed');
 
     const taskId = await createTask(request, 'echo_task');
     const idPrefix = taskId.slice(0, 8);
 
-    // Default polling cadence is 2s; allow up to 5s for the swap to land.
+    // SSE push should deliver the update within a few seconds.
     await expect(page.getByText(idPrefix, { exact: false })).toBeVisible({
       timeout: 5000,
     });
   });
 
-  test('workers tbody is wired for polling', async ({ page }) => {
+  test('workers table is wired for SSE push', async ({ page }) => {
     await page.goto('/ui/');
     await page.getByRole('link', { name: 'Workers' }).click();
+    const table = page.locator('table[sse-connect="/ui/sse/workers"]');
+    await expect(table).toBeVisible();
     const tbody = page.locator('#workers-rows');
-    await expect(tbody).toHaveAttribute('hx-trigger', 'every 2s');
+    await expect(tbody).toHaveAttribute('hx-trigger', 'sse:workers-changed');
     await expect(tbody).toHaveAttribute('hx-get', '/ui/partials/workers-rows');
   });
 });

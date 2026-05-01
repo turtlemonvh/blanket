@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/manucorporat/sse"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
@@ -267,6 +269,7 @@ func (s *ServerConfig) uiNextSubmitWorker(c *gin.Context) {
 		}
 		time.Sleep(time.Duration(250*s.TimeMultiplier) * time.Millisecond)
 	}
+	s.WorkerEvents.Notify()
 	s.uiNextWorkersRowsPartial(c)
 }
 
@@ -469,6 +472,7 @@ func (s *ServerConfig) uiNextSubmitTask(c *gin.Context) {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.TaskEvents.Notify()
 	s.uiNextTasksRowsPartial(c)
 }
 
@@ -478,4 +482,42 @@ func (s *ServerConfig) renderUINext(c *gin.Context, t *template.Template, data g
 	if err := t.ExecuteTemplate(c.Writer, "layout", data); err != nil {
 		log.WithField("err", err).Warn("ui-next: render page")
 	}
+}
+
+func (s *ServerConfig) sseStream(c *gin.Context, hub *EventHub, eventName string) {
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	seq := 0
+	send := func(w io.Writer) {
+		c.Writer.Header()["Content-Type"] = []string{"text/event-stream"}
+		sse.Encode(c.Writer, sse.Event{
+			Event: eventName,
+			Data:  "refresh",
+		})
+		seq++
+	}
+
+	// Send an initial event so the client catches up immediately.
+	c.Stream(func(w io.Writer) bool {
+		if seq == 0 {
+			send(w)
+			return true
+		}
+		select {
+		case <-ch:
+			send(w)
+		case <-time.After(30 * time.Second):
+			fmt.Fprintf(w, ": keepalive\n\n")
+		}
+		return true
+	})
+}
+
+func (s *ServerConfig) sseTaskEvents(c *gin.Context) {
+	s.sseStream(c, s.TaskEvents, "tasks-changed")
+}
+
+func (s *ServerConfig) sseWorkerEvents(c *gin.Context) {
+	s.sseStream(c, s.WorkerEvents, "workers-changed")
 }

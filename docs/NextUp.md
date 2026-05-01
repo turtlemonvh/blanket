@@ -56,10 +56,6 @@ effort than a normal test add.
   `softprops/action-gh-release@v2`. "Single binary that drops on any host"
   is a load-bearing promise of the project — release tags should publish
   it automatically.
-- **Branch protection on master** — once the first CI run is green, wire
-  the `test` check as required via `gh api -X PUT
-  repos/turtlemonvh/blanket/branches/master/protection`. See the CI plan
-  for the exact payload.
 - **GHCR push of `blanket-dev:latest`** — currently every CI run rebuilds
   the toolchain image from scratch (GHA layer cache helps, but full cache
   misses cost ~5m). Pushing the image to `ghcr.io/turtlemonvh/blanket-dev`
@@ -91,15 +87,6 @@ The HTMX + Go-template UI is now the only UI (Phase C complete — Angular,
   - Update `lastHeardTs` on stop
   - Allow a `force` option that sends signals on supported platforms
   - `deleteWorker` should validate the worker is stopped before deleting
-- **Consider SSE-based push for workers + tasks lists** — both tbodies
-  currently auto-refresh via `hx-trigger="every 2s"`. Polling is fine
-  for low traffic but every open tab fires a request whether or not
-  anything changed. If this ever becomes a bottleneck (many tabs, slow
-  DB, noisy access logs), swap to an SSE channel that fires a "list
-  changed" event from the mutation paths and have htmx-sse trigger the
-  re-fetch. The streaming endpoint pattern in `server/serve_logs.go` is
-  the reference. Cost: a long-lived connection per tab, plus fan-out on
-  the mutation paths. Polling stays cheaper while open-tab count is small.
 - **Rename `server/ui_next/` → `server/ui/`** and the `uiNext*` funcs to
   drop the migration-era suffix. Pure cosmetic; safe to do any time.
 
@@ -118,5 +105,3 @@ Bigger bodies of work. Pick one when Phase 1 cleanup and test expansion wrap.
 - **Context propagation** — no `context.Context` plumbing anywhere; blocking
   operations can't be cancelled cleanly and timeouts are ad-hoc. Medium-sized
   sweep that touches most handlers and the worker loop.
-- **UI modernization** — listed above under Deferred; also belongs here as a
-  phase candidate if we want to prioritize it.

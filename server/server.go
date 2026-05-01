@@ -57,9 +57,18 @@ type ServerConfig struct {
 	ResultsPath    string
 	Port           int
 	TimeMultiplier float64
+	TaskEvents     *EventHub
+	WorkerEvents   *EventHub
 }
 
 func (s *ServerConfig) GetRouter() *gin.Engine {
+	if s.TaskEvents == nil {
+		s.TaskEvents = NewEventHub()
+	}
+	if s.WorkerEvents == nil {
+		s.WorkerEvents = NewEventHub()
+	}
+
 	// https://godoc.org/github.com/rs/cors
 	c := cors.New(cors.Options{
 		AllowedOrigins:     []string{"*"},
@@ -108,6 +117,8 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/ui/partials/custom-env-row", s.uiNextCustomEnvRowPartial)
 	r.GET("/ui/partials/new-worker", s.uiNextNewWorkerPartial)
 	r.GET("/ui/partials/blank", s.uiNextBlankPartial)
+	r.GET("/ui/sse/tasks", s.sseTaskEvents)
+	r.GET("/ui/sse/workers", s.sseWorkerEvents)
 
 	// Redirect to ui
 	r.GET("/", func(c *gin.Context) {
