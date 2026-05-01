@@ -2,6 +2,27 @@
 
 Blanket is a RESTy wrapper for long running tasks.
 
+## Installation
+
+Download a pre-built binary from [GitHub Releases](https://github.com/turtlemonvh/blanket/releases), or use one of the one-liner installers below.
+
+**Linux / macOS:**
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/install.ps1 | iex
+```
+
+Both scripts download the latest release to the current directory. Set
+`INSTALL_DIR` to install elsewhere (e.g. `INSTALL_DIR=/usr/local/bin`
+on Linux/macOS, `$env:INSTALL_DIR = "C:\Tools"` on Windows). Pin a
+specific version with `VERSION=v0.1.0`.
+
 ## Development setup
 
 Two options — pick one.
