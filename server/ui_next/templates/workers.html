@@ -16,7 +16,7 @@
         </button>
     </div>
     <div id="new-worker-form"></div>
-    <table>
+    <table hx-ext="sse" sse-connect="/ui/sse/workers">
         <thead>
             <tr>
                 <th>#</th>
@@ -31,7 +31,7 @@
         </thead>
         <tbody id="workers-rows"
                hx-get="/ui/partials/workers-rows"
-               hx-trigger="every 2s"
+               hx-trigger="sse:workers-changed"
                hx-target="this"
                hx-swap="innerHTML">
             {{template "workers-rows" .}}

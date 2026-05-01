@@ -199,6 +199,7 @@ func (s *ServerConfig) claimTask(c *gin.Context) {
 			c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
 		} else {
 			// Everything is fine
+			s.TaskEvents.Notify()
 			c.JSON(http.StatusOK, t)
 		}
 	}
@@ -238,6 +239,7 @@ func (s *ServerConfig) markTaskAsRunning(c *gin.Context) {
 		return
 	}
 
+	s.TaskEvents.Notify()
 	c.JSON(http.StatusOK, "{}")
 }
 
@@ -268,6 +270,7 @@ func (s *ServerConfig) cancelTask(c *gin.Context) {
 			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 			return
 		} else {
+			s.TaskEvents.Notify()
 			c.String(http.StatusOK, `{}`)
 			return
 		}
@@ -309,6 +312,7 @@ func (s *ServerConfig) markTaskAsFinished(c *gin.Context) {
 		return
 	}
 
+	s.TaskEvents.Notify()
 	c.JSON(http.StatusOK, "{}")
 }
 
@@ -469,6 +473,7 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 		return
 	}
 
+	s.TaskEvents.Notify()
 	c.JSON(http.StatusCreated, t)
 }
 
@@ -501,6 +506,7 @@ func (s *ServerConfig) removeTask(c *gin.Context) {
 		return
 	}
 
+	s.TaskEvents.Notify()
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
 }
 

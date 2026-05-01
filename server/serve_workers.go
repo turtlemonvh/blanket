@@ -100,6 +100,7 @@ func (s *ServerConfig) stopWorker(c *gin.Context) {
 		return
 	}
 
+	s.WorkerEvents.Notify()
 	c.String(http.StatusOK, `{}`)
 }
 
@@ -145,6 +146,7 @@ func (s *ServerConfig) deleteWorker(c *gin.Context) {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
+	s.WorkerEvents.Notify()
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId.Hex()))
 }
 
@@ -186,6 +188,7 @@ func (s *ServerConfig) launchWorker(c *gin.Context, w *worker.WorkerConf) {
 	for {
 		w, _ := s.DB.GetWorker(w.Id)
 		if w.Pid != 0 {
+			s.WorkerEvents.Notify()
 			c.JSON(http.StatusOK, w)
 			return
 		}

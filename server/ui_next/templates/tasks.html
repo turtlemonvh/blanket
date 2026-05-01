@@ -69,7 +69,7 @@
         </form>
     </details>
 
-    <table>
+    <table hx-ext="sse" sse-connect="/ui/sse/tasks">
         <thead>
             <tr>
                 <th>#</th>
@@ -85,7 +85,7 @@
         </thead>
         <tbody id="tasks-rows"
                hx-get="/ui/partials/tasks-rows"
-               hx-trigger="every 2s"
+               hx-trigger="sse:tasks-changed"
                hx-include="#task-filter"
                hx-target="this"
                hx-swap="innerHTML">
