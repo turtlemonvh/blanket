@@ -1,0 +1,8 @@
+# Windows-native task type — runs via cmd.exe, no bash/WSL needed.
+# Always runnable on Windows so there's at least one working example
+# out of the box.
+
+tags = ["windows"]
+executor = "cmd"
+command = "echo hello from blanket"
+timeout = 10

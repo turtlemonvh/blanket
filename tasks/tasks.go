@@ -62,8 +62,18 @@ func (t *Task) GetCmd(tt *TaskType) (*exec.Cmd, error) {
 		return cmd, err
 	}
 
-	// FIXME: Don't just use bash; use python, zsh, etc
-	cmd = exec.Command("bash", "-c", cmdString.String())
+	executor := tt.Config.GetString("executor")
+	if executor == "" {
+		executor = "bash"
+	}
+	switch executor {
+	case "cmd":
+		cmd = exec.Command("cmd", "/c", cmdString.String())
+	case "powershell":
+		cmd = exec.Command("powershell", "-Command", cmdString.String())
+	default:
+		cmd = exec.Command(executor, "-c", cmdString.String())
+	}
 
 	// Modify execution environment with env variables
 	// e.g. http://craigwickesser.com/2015/02/golang-cmd-with-custom-environment/

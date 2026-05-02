@@ -13,6 +13,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"os"
+	"path/filepath"
+	"runtime"
 )
 
 var blanketCmdV *cobra.Command
@@ -22,11 +24,11 @@ var (
 	Version  string
 )
 
-func Run(VERSION string, BRANCH string, COMMIT string) {
+func Run(VERSION string, BRANCH string, COMMIT string, BUILD_DATE string) {
 	if VERSION != "" {
-		Version = fmt.Sprintf("Blanket v%s", VERSION)
+		Version = fmt.Sprintf("blanket %s (built %s)", VERSION, BUILD_DATE)
 	} else {
-		Version = fmt.Sprintf("Blanket v? (branch=%s, commit=%s)", BRANCH, COMMIT)
+		Version = fmt.Sprintf("blanket (dev) branch=%s commit=%s (built %s)", BRANCH, COMMIT, BUILD_DATE)
 	}
 	RootCmd.Execute()
 }
@@ -37,6 +39,7 @@ func init() {
 	RootCmd.PersistentFlags().StringVar(&LogLevel, "logLevel", "info", "the logging level to use")
 	RootCmd.PersistentFlags().StringVarP(&CfgFile, "config", "c", "", "config file (default is blanket.yaml|json|toml)")
 	RootCmd.AddCommand(versionCmd)
+	RootCmd.AddCommand(taskValidateCmd)
 	blanketCmdV = RootCmd
 
 	// FIXME: Add support for multiple outputs and handling log levels via command line or env variable
@@ -59,6 +62,21 @@ func InitializeConfig() {
 	viper.SetDefault("timeMultiplier", "1.0")
 
 	viper.SetConfigName("blanket")
+	if runtime.GOOS == "windows" {
+		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+			viper.AddConfigPath(filepath.Join(localAppData, "blanket"))
+		}
+	} else {
+		configHome := os.Getenv("XDG_CONFIG_HOME")
+		if configHome == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				configHome = filepath.Join(home, ".config")
+			}
+		}
+		if configHome != "" {
+			viper.AddConfigPath(filepath.Join(configHome, "blanket"))
+		}
+	}
 	viper.AddConfigPath("/etc/blanket/")
 	viper.AddConfigPath("$HOME/.blanket")
 	viper.AddConfigPath(".")

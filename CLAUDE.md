@@ -39,84 +39,28 @@ binary invoked with different subcommands.
 ## Build & test
 
 Docker is the reproducible path — same image locally and in CI.
+See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full target list, CI
+details, and release process.
 
 ```
 make docker-test           # Go unit tests
 make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh)
 make docker-test-browser   # Playwright suite
-make docker-shell          # interactive container for ad-hoc work
 make docker-build          # cross-compile linux/darwin/windows
-make docker-clean          # drop persisted Go + npm cache volumes
 ```
 
-Native targets (`make test`, `make linux`, etc.) work if you ran
-`make setup` first; the docker targets are the authoritative CI path.
-
-**After bumping `go.sum` or `tests/e2e/package-lock.json`:** run
-`make docker-clean` so the next `make docker-*` rebuilds the named
-volumes from the freshly built image layer.
-
-## CI
-
-`.github/workflows/ci.yml` runs on PRs and master pushes.
-
-- `test` (required check): builds the image, then runs `docker-check-fmt`,
-  `docker-test`, `docker-test-smoke`, `docker-test-browser` in sequence.
-  Uploads Playwright HTML report as an artifact on failure.
-- `cross-compile` (master pushes only): `make docker-build` — catches
-  platform-only breakage without spending minutes on every PR.
-
-Branch protection on master requires `test` green and up-to-date with
-master (`strict: true`). Admins can bypass; the user's normal workflow is
-still PR → merge, not direct push.
-
-**Test adds must keep all three surfaces green.** The suites overlap
-intentionally: unit tests hit handlers directly, smoke exercises the
-built binary over real HTTP, Playwright drives the UI.
+Test adds must keep all three surfaces green (unit, smoke, Playwright).
 
 ## Code conventions
 
-- **Run `go fmt` before committing.** `make check-fmt` fails CI if any
-  file isn't gofmt-clean.
+See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list. Key points
+for AI sessions:
+
+- **Run `go fmt` before committing.** `make check-fmt` fails CI.
 - **Platform-specific code uses `//go:build` tags, not runtime switches.**
-  See `worker/daemon_unix.go` / `worker/daemon_windows.go` for the
-  pattern: one file per platform, tagged at the top, implementing a
-  shared function signature. Do NOT import unix-only syscall fields in a
-  file compiled on all platforms.
-- **Logging is mixed** (`log.Printf` stdlib + logrus). New code should
-  prefer `log "github.com/sirupsen/logrus"` to match the dominant style.
-  Unifying is a tracked phase candidate in NextUp.
-- **IDs are `lib/objectid.ObjectId`** — a 24-char hex MongoDB-style id.
-  Do not hand-roll UUIDs. The tracked refactor to `TaskID`/`WorkerID`
-  newtypes is intentionally deferred (breaks wire format + on-disk state).
-- **Error status codes on `server/` handlers are inconsistent** — there's
-  an active NextUp item to normalize missing-id → 404 via
-  `lib/database.ItemNotFoundError`. Don't add new handlers that return
-  500 for missing-resource cases; use the 404 pattern.
-
-## Task type schema
-
-TOML files under any directory in `tasks.typesPaths` (config). Loader
-is `tasks/task_types.go`; the name is the filename stem.
-
-```
-tags = ["bash", "unix"]   # worker-capability match; worker must advertise all
-timeout = 300             # seconds; default 3600
-command = "..."           # Go text/template, .ExecEnv is the env map
-executor = "bash"         # declared but UNUSED — everything shells via bash -c
-
-  [[environment.required]]
-  name = "DEFAULT_COMMAND"
-  description = "..."
-
-  [[environment.default]]
-  name = "NAME"
-  value = "world"
-```
-
-`{{.VAR}}` substitutes at submit time AND `$VAR` works at exec time
-(blanket sets them both). See `examples/types/*.toml` for copy-paste
-starters; `testdata/types/echo_task.toml` stays minimal for smoke.
+- **Logging:** prefer `log "github.com/sirupsen/logrus"`.
+- **IDs are `lib/objectid.ObjectId`** — don't hand-roll UUIDs.
+- **Error status codes:** missing-id → 404 via `ItemNotFoundError`.
 
 ## Commit style
 
