@@ -2,16 +2,19 @@
 set -e
 
 # Install blanket — downloads the latest (or pinned) release binary for
-# Linux or macOS.
+# Linux or macOS, creates XDG-compliant config/data directories, and
+# downloads example task types.
 #
 # Usage:
 #   curl -sSfL https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/install.sh | bash
 #
 # Environment variables:
 #   VERSION      — tag to install (default: latest release, e.g. v0.1.0)
-#   INSTALL_DIR  — directory to place the binary (default: current directory)
+#   INSTALL_DIR  — directory to place the binary (default: ~/.local/bin)
 
 REPO="turtlemonvh/blanket"
+RAW_BASE="https://raw.githubusercontent.com/$REPO/master"
+EXAMPLE_TYPES="echo_task.toml bash_task.toml python_hello.toml windows_echo.toml"
 
 # Detect OS
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -47,11 +50,21 @@ if [ -z "$VERSION" ]; then
   fi
 fi
 
-INSTALL_DIR="${INSTALL_DIR:-.}"
+# Resolve directories
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/blanket"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/blanket"
+
 URL="https://github.com/$REPO/releases/download/$VERSION/$BINARY"
 
-echo "Installing blanket $VERSION ($OS/amd64) to $INSTALL_DIR/blanket ..."
+echo "Installing blanket $VERSION ($OS/amd64) ..."
+echo "  binary:  $INSTALL_DIR/blanket"
+echo "  config:  $CONFIG_DIR/"
+echo "  data:    $DATA_DIR/"
+echo
 
+# Download binary
 mkdir -p "$INSTALL_DIR"
 
 HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$INSTALL_DIR/blanket" "$URL")
@@ -64,4 +77,67 @@ fi
 
 chmod +x "$INSTALL_DIR/blanket"
 
-echo "Done. Run '$INSTALL_DIR/blanket --help' to get started."
+# Create config and data directories
+mkdir -p "$CONFIG_DIR" "$DATA_DIR/types" "$DATA_DIR/results"
+
+# Write default config if not present
+if [ ! -f "$CONFIG_DIR/config.json" ]; then
+  TYPES_ABS=$(cd "$DATA_DIR/types" && pwd)
+  RESULTS_ABS=$(cd "$DATA_DIR/results" && pwd)
+  cat > "$CONFIG_DIR/config.json" <<CONF
+{
+  "port": 8773,
+  "tasks": {
+    "typesPaths": ["$TYPES_ABS"],
+    "resultsPath": "$RESULTS_ABS"
+  },
+  "logLevel": "info"
+}
+CONF
+  echo "Created default config: $CONFIG_DIR/config.json"
+else
+  echo "Config already exists, skipping: $CONFIG_DIR/config.json"
+fi
+
+# Download example task types (skip existing files)
+echo
+for TYPE_FILE in $EXAMPLE_TYPES; do
+  DEST="$DATA_DIR/types/$TYPE_FILE"
+  if [ -f "$DEST" ]; then
+    echo "  skip (exists): $TYPE_FILE"
+    continue
+  fi
+
+  TYPE_URL="$RAW_BASE/examples/types/$TYPE_FILE"
+  HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$DEST" "$TYPE_URL")
+  if [ "$HTTP_CODE" -ne 200 ]; then
+    rm -f "$DEST"
+    echo "  warn: could not download $TYPE_FILE (HTTP $HTTP_CODE)"
+    continue
+  fi
+
+  # Check if executor is available
+  EXECUTOR=$(grep '^executor' "$DEST" | head -1 | sed 's/.*=.*"\(.*\)".*/\1/')
+  if [ -z "$EXECUTOR" ]; then
+    EXECUTOR="bash"
+  fi
+  if command -v "$EXECUTOR" >/dev/null 2>&1; then
+    echo "  installed: $TYPE_FILE (executor: $EXECUTOR)"
+  else
+    echo "  installed: $TYPE_FILE (warning: executor '$EXECUTOR' not found on PATH)"
+  fi
+done
+
+# PATH hint
+echo
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*) ;;
+  *)
+    echo "Note: $INSTALL_DIR is not on your PATH. Add it with:"
+    echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+    echo
+    ;;
+esac
+
+echo "Done! Run 'blanket --help' to get started."
+echo "The server will use config from: $CONFIG_DIR/config.json"

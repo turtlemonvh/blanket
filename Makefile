@@ -9,12 +9,14 @@ GOARCH = amd64
 
 COMMIT=$(shell git rev-parse HEAD)
 BRANCH=$(shell git rev-parse --abbrev-ref HEAD)
+VERSION ?=
+BUILD_DATE = $(shell date +"%Y-%m-%d %-I:%M %p %Z")
 
 # Symlink into GOPATH
 GITHUB_USERNAME=turtlemonvh
 
 # Setup the -ldflags option for go build here, interpolate the variable values
-LDFLAGS = -ldflags "-X main.COMMIT=${COMMIT} -X main.BRANCH=${BRANCH}"
+LDFLAGS = -ldflags "-X main.COMMIT=${COMMIT} -X main.BRANCH=${BRANCH} -X 'main.VERSION=${VERSION}' -X 'main.BUILD_DATE=${BUILD_DATE}'"
 
 # Build the project
 all: clean test vet linux darwin windows
@@ -121,7 +123,7 @@ docker-test-smoke: docker-image
 	$(DOCKER_RUN) make linux test-smoke
 
 docker-build: docker-image
-	$(DOCKER_RUN) make linux darwin windows
+	$(DOCKER_RUN) make linux darwin windows VERSION=$(VERSION)
 
 # Interactive shell in the toolchain image for ad-hoc work.
 docker-shell: docker-image
