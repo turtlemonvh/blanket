@@ -51,3 +51,53 @@ some Windows users to install. Go was chosen for the rewrite since:
 * Single binary — server and worker are the same binary invoked with different subcommands
 
 See [the docs directory](https://github.com/turtlemonvh/blanket/tree/master/docs) for more detailed information.
+
+## State Machines
+
+### Task lifecycle
+
+A task moves through one of two terminal paths: it is claimed and run
+to completion (`SUCCESS` / `ERROR` / `TIMEDOUT`), or it is cancelled
+(`STOPPED`) — either before a worker claims it, or after the worker
+sees the cancellation tombstone and aborts.
+
+Valid states are listed in `tasks.ValidTaskStates` (`tasks/tasks.go`);
+terminal states in `ValidTerminalTaskStates`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> WAITING: POST /task/
+    WAITING --> CLAIMED: POST /task/claim/:workerId
+    WAITING --> STOPPED: DELETE /task/:id (cancel)
+    CLAIMED --> RUNNING: PUT /task/:id/start
+    RUNNING --> SUCCESS: PUT /task/:id/finish (exit 0)
+    RUNNING --> ERROR: PUT /task/:id/finish (exit non-zero)
+    RUNNING --> TIMEDOUT: timeout exceeded
+    RUNNING --> STOPPED: cancel + worker aborts
+    SUCCESS --> [*]
+    ERROR --> [*]
+    TIMEDOUT --> [*]
+    STOPPED --> [*]
+```
+
+### Worker lifecycle
+
+Workers have a simpler model: a single `Stopped` boolean on the
+`WorkerConf` (`worker/worker.go`). A running worker polls the queue
+on its `CheckInterval`; setting `Stopped = true` (via
+`POST /worker/:id/stop` or the worker process exiting) takes it out
+of the claim loop. Workers can only be deleted once stopped.
+
+```mermaid
+stateDiagram-v2
+    [*] --> RUNNING: blanket worker / POST /worker/
+    RUNNING --> RUNNING: claim loop tick
+    RUNNING --> STOPPED: POST /worker/:id/stop
+    RUNNING --> STOPPED: process exits (SIGTERM, crash)
+    STOPPED --> [*]: DELETE /worker/:id
+```
+
+A worker that has stopped reporting heartbeats (`lastHeardTs`) is
+considered "lost" by the UI but is not a distinct state in the data
+model — there is no automatic transition; an operator must stop or
+delete it explicitly.
