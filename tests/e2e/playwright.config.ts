@@ -4,7 +4,12 @@ const BASE_URL = process.env.BLANKET_URL ?? 'http://localhost:8773';
 
 export default defineConfig({
   testDir: './specs',
-  fullyParallel: false, // blanket is stateful; keep tests serial
+  // blanket talks to a single bolt DB shared by every test, so concurrent
+  // test runs step on each other's state. Run one worker; fullyParallel:
+  // false alone doesn't help because it only serializes within a single
+  // spec file, not across files.
+  fullyParallel: false,
+  workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
 
