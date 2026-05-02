@@ -58,9 +58,9 @@ effort than a normal test add.
 ## Docs
 
 - **Add mermaidjs diagrams** — current docs are text-heavy. Task and
-  worker state machines now live in `docs/design.md`. Still missing:
-  the component diagram (server ↔ worker ↔ DB ↔ queue), the worker
-  claim loop, and the `tailed_file` subscribe/backfill flow.
+  worker state machines now live in `docs/task_flow.md`. Still
+  missing: the component diagram (server ↔ worker ↔ DB ↔ queue), the
+  worker claim loop, and the `tailed_file` subscribe/backfill flow.
 
 ## Branding
 

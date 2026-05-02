@@ -33,8 +33,16 @@ binary invoked with different subcommands.
 - `examples/types/` — realistic task-type TOMLs users can copy.
 - `testdata/types/echo_task.toml` — the minimal smoke-test fixture.
   Kept tiny on purpose; don't add examples here.
-- `docs/NextUp.md` — the living backlog. Add/reorder items as priorities
-  shift. Entries must be self-contained so a cold reader can pick them up.
+- `docs/` — user and maintainer docs. Filenames are `snake_case.md`.
+  Index is `docs/README.md`.
+  - `docs/next_up.md` — the living backlog. Add/reorder items as priorities
+    shift. Entries must be self-contained so a cold reader can pick them up.
+  - `docs/api.md` — REST endpoint reference. **Keep in sync with
+    `server/server.go`** — when you add, remove, or change a route,
+    update `docs/api.md` in the same PR. Easy to drift; easy to catch
+    in review if the doc lives next to the code change.
+  - `docs/task_flow.md` — task + worker state machines and basic flow
+    narrative. Update when state transitions change.
 
 ## Build & test
 

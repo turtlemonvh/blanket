@@ -12,7 +12,7 @@
 //   - task api-stopped mid-flight: TestProcessOne_StoppedMidFlight
 //   - log production: TestProcessOne_ProducesLogs
 //
-// Not yet covered (tracked in docs/NextUp.md):
+// Not yet covered (tracked in docs/next_up.md):
 //   - worker shutdown: SIGTERM to `Run()` stops cleanly before task 2 runs.
 //     Requires spawning the worker as a subprocess; deferred.
 //   - goroutine-leak check across a run (use metrics API).
