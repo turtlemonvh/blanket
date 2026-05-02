@@ -111,6 +111,18 @@ The HTMX + Go-template UI is now the only UI (Phase C complete — Angular,
   Off by default; opt-in via `INSTALL_AUTOSTART=1` env var or
   interactive prompt. `blanket uninstall` (new) should remove the
   service entry.
+- **Docker task type** — a built-in executor (or a shipped example
+  type) that wraps `docker run` so users can specify an image, an
+  optional command, env vars, and volume mounts and let blanket
+  manage the container lifecycle as a task. Makes it easy to run
+  anything that has a published image without authoring a TOML per
+  tool. Open questions: should this be a new `executor = "docker"`
+  with first-class fields (`image`, `mounts`, etc.), or just an
+  example `bash` type that shells out to `docker run`? Built-in is
+  cleaner UX but adds a Docker dependency to the executor surface;
+  the bash-based version works today with no code changes. Probably
+  start with the example, promote to a real executor if usage
+  warrants.
 - **Task scheduling** — submit a task with a `notBefore` timestamp, or
   with a cron-style recurrence. Today every queued task is immediately
   eligible to be claimed; a scheduler would hold tasks until their
