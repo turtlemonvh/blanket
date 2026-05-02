@@ -7,11 +7,14 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/kardianos/osext"
 	"github.com/manucorporat/sse"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
@@ -301,15 +304,89 @@ func (s *ServerConfig) uiNextTaskTypesRowsPartial(c *gin.Context) {
 	}
 }
 
+// Settings keys hidden from the About page — internal/test-only knobs.
+var aboutHiddenKeys = map[string]bool{
+	"timemultiplier":  true, // test-time speedup
+	"tasks.typespath": true, // legacy singular; superseded by typesPaths
+}
+
+// Settings keys whose values should be rendered as absolute paths (or a
+// list of absolute paths for slice-valued keys).
+var aboutPathKeys = map[string]bool{
+	"database":          true,
+	"tasks.typespaths":  true,
+	"tasks.resultspath": true,
+}
+
+// Settings keys whose values are slices.
+var aboutSliceKeys = map[string]bool{
+	"tasks.typespaths":  true,
+	"tasks.resultspath": true,
+}
+
+func absPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return abs
+}
+
 func (s *ServerConfig) uiNextAboutPage(c *gin.Context) {
 	keys := viper.AllKeys()
 	sort.Strings(keys)
 	settings := make([]SettingView, 0, len(keys))
 	for _, k := range keys {
-		settings = append(settings, SettingView{Key: k, Value: viper.GetString(k)})
+		if aboutHiddenKeys[k] {
+			continue
+		}
+		var value string
+		switch {
+		case aboutSliceKeys[k]:
+			parts := viper.GetStringSlice(k)
+			if aboutPathKeys[k] {
+				for i, p := range parts {
+					parts[i] = absPath(p)
+				}
+			}
+			value = strings.Join(parts, ", ")
+		case aboutPathKeys[k]:
+			value = absPath(viper.GetString(k))
+		default:
+			value = viper.GetString(k)
+		}
+		settings = append(settings, SettingView{Key: k, Value: value})
 	}
+
+	binaryPath, err := osext.Executable()
+	if err != nil {
+		log.WithField("err", err).Warn("ui-next: resolve binary path")
+		binaryPath = "(unknown)"
+	}
+
+	configPath := viper.ConfigFileUsed()
+	configContents := ""
+	if configPath != "" {
+		if b, err := os.ReadFile(configPath); err == nil {
+			configContents = string(b)
+		} else {
+			configContents = fmt.Sprintf("(could not read: %s)", err)
+		}
+	}
+
 	t := mustParseUINextPage("about", "ui_next/templates/about.html")
-	s.renderUINext(c, t, gin.H{"Title": "About", "Settings": settings})
+	s.renderUINext(c, t, gin.H{
+		"Title":          "About",
+		"Version":        s.Version,
+		"BinaryPath":     binaryPath,
+		"PID":            os.Getpid(),
+		"ConfigPath":     configPath,
+		"ConfigContents": configContents,
+		"Settings":       settings,
+	})
 }
 
 // uiNextNewTaskPartial returns the "new task" form pre-populated with types.

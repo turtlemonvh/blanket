@@ -63,8 +63,10 @@ $ConfigFile = Join-Path $ConfigDir "config.json"
 if (-not (Test-Path $ConfigFile)) {
     $TypesAbs = (Resolve-Path $TypesDir).Path
     $ResultsAbs = (Resolve-Path $ResultsDir).Path
+    $DataAbs = (Resolve-Path $BlanketRoot).Path
     $config = @{
         port = 8773
+        database = (Join-Path $DataAbs "blanket.db")
         tasks = @{
             typesPaths = @($TypesAbs)
             resultsPath = $ResultsAbs

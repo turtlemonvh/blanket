@@ -57,6 +57,7 @@ type ServerConfig struct {
 	ResultsPath    string
 	Port           int
 	TimeMultiplier float64
+	Version        string
 	TaskEvents     *EventHub
 	WorkerEvents   *EventHub
 }
@@ -126,7 +127,7 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	})
 	r.GET("/version", func(c *gin.Context) {
 		c.JSON(200, gin.H{
-			"version": "0.1",
+			"version": s.Version,
 			"name":    "blanket",
 			"author":  "Timothy Van Heest <timothy.vanheest@gmail.com>",
 		})

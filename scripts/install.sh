@@ -84,9 +84,11 @@ mkdir -p "$CONFIG_DIR" "$DATA_DIR/types" "$DATA_DIR/results"
 if [ ! -f "$CONFIG_DIR/config.json" ]; then
   TYPES_ABS=$(cd "$DATA_DIR/types" && pwd)
   RESULTS_ABS=$(cd "$DATA_DIR/results" && pwd)
+  DATA_ABS=$(cd "$DATA_DIR" && pwd)
   cat > "$CONFIG_DIR/config.json" <<CONF
 {
   "port": 8773,
+  "database": "$DATA_ABS/blanket.db",
   "tasks": {
     "typesPaths": ["$TYPES_ABS"],
     "resultsPath": "$RESULTS_ABS"

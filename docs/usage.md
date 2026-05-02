@@ -20,7 +20,7 @@ Override the port with `-p 9000` or via the config file. Set
 To run a custom config explicitly:
 
 ```bash
-blanket --config /path/to/blanket.json
+blanket --config /path/to/config.json
 ```
 
 ## Submitting tasks
@@ -65,7 +65,7 @@ directory before the command runs.
 # Send task spec as a JSON form field, attach files alongside
 curl -X POST localhost:8773/task/ \
     -F data='{"type": "echo_task", "environment": {"GREETING": "hi"}}' \
-    -F blanket.json=@blanket.json
+    -F input.txt=@input.txt
 
 # Or send the task spec as a file too
 cat > data.json <<'EOF'
@@ -78,7 +78,7 @@ cat > data.json <<'EOF'
 EOF
 curl -X POST localhost:8773/task/ \
     -F data=@data.json \
-    -F blanket.json=@blanket.json
+    -F input.txt=@input.txt
 ```
 
 ### Submitting many tasks
@@ -87,7 +87,7 @@ curl -X POST localhost:8773/task/ \
 while true; do
     curl -X POST localhost:8773/task/ \
         -F data=@data.json \
-        -F blanket.json=@blanket.json
+        -F input.txt=@input.txt
     echo "$(date)"
     sleep 5
 done
@@ -184,7 +184,7 @@ Available Commands:
   worker        Run a worker with capabilities defined by tags
 
 Flags:
-  -c, --config string     config file (default is blanket.yaml|json|toml)
+  -c, --config string     config file (default is config.json|yaml|toml in the blanket config dir)
   -h, --help              help for blanket
       --logLevel string   the logging level to use (default "info")
   -p, --port int32        Port the server will run on (default 8773)
