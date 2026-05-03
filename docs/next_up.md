@@ -57,10 +57,10 @@ effort than a normal test add.
 
 ## Docs
 
-- **Add mermaidjs diagrams** — current docs are text-heavy. Cover key
-  components (server ↔ worker ↔ DB ↔ queue), the task lifecycle state
-  machine (`WAITING → CLAIMED → RUNNING → SUCCESS/ERROR/STOPPED/TIMEDOUT`),
-  the worker claim loop, and the `tailed_file` subscribe/backfill flow.
+- **Add mermaidjs diagrams** — current docs are text-heavy. Task and
+  worker state machines now live in `docs/task_flow.md`. Still
+  missing: the component diagram (server ↔ worker ↔ DB ↔ queue), the
+  worker claim loop, and the `tailed_file` subscribe/backfill flow.
 
 ## Branding
 
@@ -81,6 +81,55 @@ The HTMX + Go-template UI is now the only UI (Phase C complete — Angular,
   - `deleteWorker` should validate the worker is stopped before deleting
 - **Rename `server/ui_next/` → `server/ui/`** and the `uiNext*` funcs to
   drop the migration-era suffix. Pure cosmetic; safe to do any time.
+
+## Features
+
+- **Claude Code & Codex task wrappers** — ship example task types under
+  `examples/types/` that invoke the `claude` and `codex` CLIs, so users
+  can drive AI-coding agents through blanket. Pattern: a TOML type with
+  required env vars for the prompt + working directory, executor =
+  `bash` (or `claude` directly if installed), and tags like `["ai",
+  "claude"]` so workers can opt in. Useful for: long-running refactors,
+  scheduled audits, batch PR reviews, etc.
+- **MCP wrapper** — expose blanket as an MCP server so AI agents can
+  list/submit/inspect tasks as tools. Server lives alongside the REST
+  API (likely a new `blanket mcp` subcommand or a `/mcp` route). Tools
+  to surface: `submit_task`, `list_tasks`, `get_task`, `get_task_log`,
+  `cancel_task`, `list_task_types`. Auth and scoping TBD.
+- **AI tool instructions for authoring task types** — write a markdown
+  doc that AI agents can be pointed at (via Claude `CLAUDE.md`,
+  Cursor rules, or an MCP resource) to generate valid blanket task
+  type TOMLs. Should cover: the schema (tags, executor, command,
+  timeout, environment), the `{{.VAR}}` template language, the
+  difference between submit-time substitution and exec-time `$VAR`,
+  common patterns (file uploads, multi-step bash, python wrappers),
+  and how to validate with `blanket task-validate`.
+- **Auto-start on install** — option in the install scripts to register
+  blanket as a background service, so the server starts on login/boot.
+  Per-platform: systemd user unit on Linux, `launchctl` plist on macOS,
+  Task Scheduler entry (or `Start-Process` shortcut) on Windows.
+  Off by default; opt-in via `INSTALL_AUTOSTART=1` env var or
+  interactive prompt. `blanket uninstall` (new) should remove the
+  service entry.
+- **Docker task type** — a built-in executor (or a shipped example
+  type) that wraps `docker run` so users can specify an image, an
+  optional command, env vars, and volume mounts and let blanket
+  manage the container lifecycle as a task. Makes it easy to run
+  anything that has a published image without authoring a TOML per
+  tool. Open questions: should this be a new `executor = "docker"`
+  with first-class fields (`image`, `mounts`, etc.), or just an
+  example `bash` type that shells out to `docker run`? Built-in is
+  cleaner UX but adds a Docker dependency to the executor surface;
+  the bash-based version works today with no code changes. Probably
+  start with the example, promote to a real executor if usage
+  warrants.
+- **Task scheduling** — submit a task with a `notBefore` timestamp, or
+  with a cron-style recurrence. Today every queued task is immediately
+  eligible to be claimed; a scheduler would hold tasks until their
+  start time. Likely needs: a new `scheduledTs` column on Task, a
+  scheduler goroutine that promotes due tasks into the queue, and a
+  way to express recurrence (cron string vs. interval). Recurring tasks
+  spawn child tasks at each fire time so each run has its own log/result.
 
 ## Candidate Phases
 

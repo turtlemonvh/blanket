@@ -50,4 +50,4 @@ some Windows users to install. Go was chosen for the rewrite since:
 * Gin for HTTP routing
 * Single binary — server and worker are the same binary invoked with different subcommands
 
-See [the docs directory](https://github.com/turtlemonvh/blanket/tree/master/docs) for more detailed information.
+See the [docs index](./README.md) for more detailed information, including the [task flow and state machines](./task_flow.md).
