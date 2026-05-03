@@ -37,7 +37,7 @@ func init() {
 	//cobra.OnInitialize(initConfig)
 	RootCmd.PersistentFlags().Int32P("port", "p", 8773, "Port the server will run on")
 	RootCmd.PersistentFlags().StringVar(&LogLevel, "logLevel", "info", "the logging level to use")
-	RootCmd.PersistentFlags().StringVarP(&CfgFile, "config", "c", "", "config file (default is blanket.yaml|json|toml)")
+	RootCmd.PersistentFlags().StringVarP(&CfgFile, "config", "c", "", "config file (default is config.json|yaml|toml in the blanket config dir)")
 	RootCmd.AddCommand(versionCmd)
 	RootCmd.AddCommand(taskValidateCmd)
 	blanketCmdV = RootCmd
@@ -53,7 +53,7 @@ func InitializeConfig() {
 	// https://github.com/spf13/viper#watching-and-re-reading-config-files
 	viper.SetDefault("port", 8773)
 	viper.SetDefault("database", "blanket.db")
-	viper.SetDefault("tasks.typesPath", "types")
+	viper.SetDefault("tasks.typesPaths", []string{"types"})
 	// FIXME: Why is this a slice? It makes sending a target result dir to a client pretty tough.
 	viper.SetDefault("tasks.resultsPath", []string{"results"})
 	viper.SetDefault("workers.logfileNameTemplate", "worker.{{.Id.Hex}}.log")
@@ -61,7 +61,7 @@ func InitializeConfig() {
 	// Time multiplier can be used in tests to speed up tests
 	viper.SetDefault("timeMultiplier", "1.0")
 
-	viper.SetConfigName("blanket")
+	viper.SetConfigName("config")
 	if runtime.GOOS == "windows" {
 		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
 			viper.AddConfigPath(filepath.Join(localAppData, "blanket"))

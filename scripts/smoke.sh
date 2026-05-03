@@ -57,7 +57,7 @@ trap cleanup EXIT INT TERM
 mkdir -p "$WORKDIR/types" "$WORKDIR/results"
 cp "$REPO_ROOT/testdata/types/echo_task.toml" "$WORKDIR/types/echo_task.toml"
 
-cat > "$WORKDIR/blanket.json" <<EOF
+cat > "$WORKDIR/config.json" <<EOF
 {
   "port": ${PORT},
   "database": "$WORKDIR/blanket.db",
@@ -72,7 +72,7 @@ EOF
 # Run the server from the workdir so relative paths resolve predictably.
 (
     cd "$WORKDIR"
-    "$REPO_ROOT/$BINARY" --config "$WORKDIR/blanket.json" > "$WORKDIR/server.log" 2>&1 &
+    "$REPO_ROOT/$BINARY" --config "$WORKDIR/config.json" > "$WORKDIR/server.log" 2>&1 &
     echo $! > "$WORKDIR/server.pid"
 ) || true
 SERVER_PID="$(cat "$WORKDIR/server.pid")"

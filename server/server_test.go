@@ -61,6 +61,7 @@ func NewTestServer() (*ServerConfig, func()) {
 			DB:          DB,
 			Q:           Q,
 			ResultsPath: "/tmp/x", // FIMXE: Replace with temp dir and cleanup
+			Version:     "blanket (test)",
 		}, func() {
 			defer DBCloser()
 			defer QCloser()

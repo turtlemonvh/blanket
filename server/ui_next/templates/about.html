@@ -3,7 +3,35 @@
     <div class="list-header">
         <h2>About</h2>
     </div>
-    <h3>Settings</h3>
+
+    <p>
+        <strong>Blanket</strong> is a RESTy wrapper for long-running tasks.
+        Define task types as TOML files, submit them via REST API or CLI,
+        and let workers execute them — all from a single binary with this
+        web UI baked in.
+    </p>
+    <p>
+        See the <a href="https://github.com/turtlemonvh/blanket" target="_blank" rel="noopener">project on GitHub</a>
+        for documentation, releases, and source. Currently registered
+        workers are listed on the <a href="/ui/workers">Workers</a> page.
+    </p>
+
+    <h3>Server</h3>
+    <table>
+        <tbody>
+            <tr><td>Version</td><td class="muted">{{.Version}}</td></tr>
+            <tr><td>Binary</td><td class="muted">{{.BinaryPath}}</td></tr>
+            <tr><td>PID</td><td class="muted">{{.PID}}</td></tr>
+            <tr><td>Config file</td><td class="muted">{{if .ConfigPath}}{{.ConfigPath}}{{else}}(none — running with defaults){{end}}</td></tr>
+        </tbody>
+    </table>
+
+    {{if .ConfigContents}}
+    <h3>Config file contents</h3>
+    <pre class="muted">{{.ConfigContents}}</pre>
+    {{end}}
+
+    <h3>Resolved settings</h3>
     <table>
         <thead>
             <tr><th>Key</th><th>Value</th></tr>

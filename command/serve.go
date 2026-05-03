@@ -29,6 +29,7 @@ var RootCmd = &cobra.Command{
 			Port:           viper.GetInt("port"),
 			ResultsPath:    viper.GetString("tasks.resultsPath"),
 			TimeMultiplier: viper.GetFloat64("timeMultiplier"),
+			Version:        Version,
 		}
 		s := c.Serve()
 		s.ListenAndServe()
