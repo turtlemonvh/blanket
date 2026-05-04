@@ -135,9 +135,6 @@ The HTMX + Go-template UI is now the only UI (Phase C complete — Angular,
 
 Bigger bodies of work. Pick one when Phase 1 cleanup and test expansion wrap.
 
-- **Logging hygiene** — codebase mixes `log.Printf` (stdlib) and
-  `log "github.com/sirupsen/logrus"`. Unify on one logger (likely logrus or
-  move to `log/slog` now that we're on Go 1.23). Low risk, good readability win.
 - **ID type refactor** — replace `objectid.ObjectId` with local `TaskID` /
   `WorkerID` newtypes. Removes the MongoDB-era leak and lets us change the
   underlying ID scheme without API churn. Caveat: breaks wire format and
