@@ -11,6 +11,8 @@ here go deeper.
 - [**Task type definitions**](task_type_definitions.md) — TOML
   schema for authoring your own task types.
 - [**API**](api.md) — full list of REST endpoints.
+- [**Offline install**](offline_install.md) — installing on machines
+  with no internet access and only local-user permissions.
 
 ## For maintainers
 

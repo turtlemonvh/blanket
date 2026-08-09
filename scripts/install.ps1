@@ -8,6 +8,11 @@
 # Environment variables:
 #   VERSION      — tag to install (default: latest release, e.g. v0.1.0)
 #   INSTALL_DIR  — directory to place the binary (default: %LOCALAPPDATA%\blanket\bin)
+#   BINARY_PATH  — path to an already-downloaded binary; skips the release
+#                  download entirely (for offline installs, see
+#                  docs/offline_install.md)
+#   TYPES_SRC    — local directory of *.toml task types to copy instead
+#                  of downloading examples/types/ from GitHub
 
 $ErrorActionPreference = "Stop"
 $Repo = "turtlemonvh/blanket"
@@ -16,7 +21,13 @@ $Binary = "blanket-windows-amd64.exe"
 $ExampleTypes = @("echo_task.toml", "bash_task.toml", "python_hello.toml", "windows_echo.toml")
 
 # Determine version
-if (-not $env:VERSION) {
+if ($env:BINARY_PATH) {
+    if (-not (Test-Path $env:BINARY_PATH)) {
+        Write-Error "BINARY_PATH '$($env:BINARY_PATH)' does not exist."
+        exit 1
+    }
+    $Version = "local"
+} elseif (-not $env:VERSION) {
     $release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
     $Version = $release.tag_name
     if (-not $Version) {
@@ -50,12 +61,16 @@ foreach ($dir in @($InstallDir, $TypesDir, $ResultsDir)) {
     }
 }
 
-try {
-    Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
-} catch {
-    Remove-Item -Path $OutFile -ErrorAction SilentlyContinue
-    Write-Error "Download failed. Check that release $Version exists: https://github.com/$Repo/releases"
-    exit 1
+if ($env:BINARY_PATH) {
+    Copy-Item -Path $env:BINARY_PATH -Destination $OutFile -Force
+} else {
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
+    } catch {
+        Remove-Item -Path $OutFile -ErrorAction SilentlyContinue
+        Write-Error "Download failed. Check that release $Version exists: https://github.com/$Repo/releases"
+        exit 1
+    }
 }
 
 # Write default config if not present
@@ -79,21 +94,35 @@ if (-not (Test-Path $ConfigFile)) {
     Write-Host "Config already exists, skipping: $ConfigFile"
 }
 
-# Download example task types (skip existing files)
+# Install example task types (skip existing files)
 Write-Host ""
-foreach ($typeFile in $ExampleTypes) {
+if ($env:TYPES_SRC) {
+    if (-not (Test-Path $env:TYPES_SRC -PathType Container)) {
+        Write-Error "TYPES_SRC '$($env:TYPES_SRC)' is not a directory."
+        exit 1
+    }
+    $typeFiles = (Get-ChildItem -Path $env:TYPES_SRC -Filter "*.toml").Name
+} else {
+    $typeFiles = $ExampleTypes
+}
+
+foreach ($typeFile in $typeFiles) {
     $dest = Join-Path $TypesDir $typeFile
     if (Test-Path $dest) {
         Write-Host "  skip (exists): $typeFile"
         continue
     }
 
-    $typeUrl = "$RawBase/examples/types/$typeFile"
-    try {
-        Invoke-WebRequest -Uri $typeUrl -OutFile $dest -UseBasicParsing
-    } catch {
-        Write-Host "  warn: could not download $typeFile"
-        continue
+    if ($env:TYPES_SRC) {
+        Copy-Item -Path (Join-Path $env:TYPES_SRC $typeFile) -Destination $dest
+    } else {
+        $typeUrl = "$RawBase/examples/types/$typeFile"
+        try {
+            Invoke-WebRequest -Uri $typeUrl -OutFile $dest -UseBasicParsing
+        } catch {
+            Write-Host "  warn: could not download $typeFile"
+            continue
+        }
     }
 
     # Check if executor is available

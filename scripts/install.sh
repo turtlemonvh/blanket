@@ -11,41 +11,55 @@ set -e
 # Environment variables:
 #   VERSION      — tag to install (default: latest release, e.g. v0.1.0)
 #   INSTALL_DIR  — directory to place the binary (default: ~/.local/bin)
+#   BINARY_PATH  — path to an already-downloaded binary; skips OS/arch
+#                  detection and the release download entirely (for
+#                  offline installs, see docs/offline_install.md)
+#   TYPES_SRC    — local directory of *.toml task types to copy instead
+#                  of downloading examples/types/ from GitHub
 
 REPO="turtlemonvh/blanket"
 RAW_BASE="https://raw.githubusercontent.com/$REPO/master"
 EXAMPLE_TYPES="echo_task.toml bash_task.toml python_hello.toml windows_echo.toml"
 
-# Detect OS
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-case "$OS" in
-  linux)  BINARY="blanket-linux-amd64" ;;
-  darwin) BINARY="blanket-darwin-amd64" ;;
-  *)
-    echo "Error: unsupported OS '$OS'. Use Linux or macOS, or download manually from"
-    echo "  https://github.com/$REPO/releases"
-    exit 1
-    ;;
-esac
+if [ -z "$BINARY_PATH" ]; then
+  # Detect OS
+  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+  case "$OS" in
+    linux)  BINARY="blanket-linux-amd64" ;;
+    darwin) BINARY="blanket-darwin-amd64" ;;
+    *)
+      echo "Error: unsupported OS '$OS'. Use Linux or macOS, or download manually from"
+      echo "  https://github.com/$REPO/releases"
+      exit 1
+      ;;
+  esac
 
-# Detect arch
-ARCH=$(uname -m)
-case "$ARCH" in
-  x86_64|amd64) ;; # supported
-  *)
-    echo "Error: unsupported architecture '$ARCH'. Only amd64/x86_64 binaries are available."
-    echo "  https://github.com/$REPO/releases"
-    exit 1
-    ;;
-esac
+  # Detect arch
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    x86_64|amd64) ;; # supported
+    *)
+      echo "Error: unsupported architecture '$ARCH'. Only amd64/x86_64 binaries are available."
+      echo "  https://github.com/$REPO/releases"
+      exit 1
+      ;;
+  esac
 
-# Determine version
-if [ -z "$VERSION" ]; then
-  VERSION=$(curl -sSf "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+  # Determine version
   if [ -z "$VERSION" ]; then
-    echo "Error: could not determine latest release. Set VERSION explicitly:"
-    echo "  VERSION=v0.1.0 curl -sSfL ... | bash"
+    VERSION=$(curl -sSf "https://api.github.com/repos/$REPO/releases/latest" \
+      | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    if [ -z "$VERSION" ]; then
+      echo "Error: could not determine latest release. Set VERSION explicitly:"
+      echo "  VERSION=v0.1.0 curl -sSfL ... | bash"
+      exit 1
+    fi
+  fi
+else
+  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+  VERSION="local"
+  if [ ! -f "$BINARY_PATH" ]; then
+    echo "Error: BINARY_PATH '$BINARY_PATH' does not exist."
     exit 1
   fi
 fi
@@ -56,7 +70,9 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/blanket"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/blanket"
 
-URL="https://github.com/$REPO/releases/download/$VERSION/$BINARY"
+if [ -z "$BINARY_PATH" ]; then
+  URL="https://github.com/$REPO/releases/download/$VERSION/$BINARY"
+fi
 
 echo "Installing blanket $VERSION ($OS/amd64) ..."
 echo "  binary:  $INSTALL_DIR/blanket"
@@ -64,15 +80,19 @@ echo "  config:  $CONFIG_DIR/"
 echo "  data:    $DATA_DIR/"
 echo
 
-# Download binary
+# Install binary
 mkdir -p "$INSTALL_DIR"
 
-HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$INSTALL_DIR/blanket" "$URL")
-if [ "$HTTP_CODE" -ne 200 ]; then
-  rm -f "$INSTALL_DIR/blanket"
-  echo "Error: download failed (HTTP $HTTP_CODE). Check that release $VERSION exists:"
-  echo "  https://github.com/$REPO/releases"
-  exit 1
+if [ -n "$BINARY_PATH" ]; then
+  cp "$BINARY_PATH" "$INSTALL_DIR/blanket"
+else
+  HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$INSTALL_DIR/blanket" "$URL")
+  if [ "$HTTP_CODE" -ne 200 ]; then
+    rm -f "$INSTALL_DIR/blanket"
+    echo "Error: download failed (HTTP $HTTP_CODE). Check that release $VERSION exists:"
+    echo "  https://github.com/$REPO/releases"
+    exit 1
+  fi
 fi
 
 chmod +x "$INSTALL_DIR/blanket"
@@ -101,21 +121,35 @@ else
   echo "Config already exists, skipping: $CONFIG_DIR/config.json"
 fi
 
-# Download example task types (skip existing files)
+# Install example task types (skip existing files)
 echo
-for TYPE_FILE in $EXAMPLE_TYPES; do
+if [ -n "$TYPES_SRC" ]; then
+  if [ ! -d "$TYPES_SRC" ]; then
+    echo "Error: TYPES_SRC '$TYPES_SRC' is not a directory."
+    exit 1
+  fi
+  TYPE_FILES=$(cd "$TYPES_SRC" && ls *.toml 2>/dev/null || true)
+else
+  TYPE_FILES="$EXAMPLE_TYPES"
+fi
+
+for TYPE_FILE in $TYPE_FILES; do
   DEST="$DATA_DIR/types/$TYPE_FILE"
   if [ -f "$DEST" ]; then
     echo "  skip (exists): $TYPE_FILE"
     continue
   fi
 
-  TYPE_URL="$RAW_BASE/examples/types/$TYPE_FILE"
-  HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$DEST" "$TYPE_URL")
-  if [ "$HTTP_CODE" -ne 200 ]; then
-    rm -f "$DEST"
-    echo "  warn: could not download $TYPE_FILE (HTTP $HTTP_CODE)"
-    continue
+  if [ -n "$TYPES_SRC" ]; then
+    cp "$TYPES_SRC/$TYPE_FILE" "$DEST"
+  else
+    TYPE_URL="$RAW_BASE/examples/types/$TYPE_FILE"
+    HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$DEST" "$TYPE_URL")
+    if [ "$HTTP_CODE" -ne 200 ]; then
+      rm -f "$DEST"
+      echo "  warn: could not download $TYPE_FILE (HTTP $HTTP_CODE)"
+      continue
+    fi
   fi
 
   # Check if executor is available
