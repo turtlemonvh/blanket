@@ -86,7 +86,7 @@ mkdir -p "$INSTALL_DIR"
 if [ -n "$BINARY_PATH" ]; then
   cp "$BINARY_PATH" "$INSTALL_DIR/blanket"
 else
-  HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$INSTALL_DIR/blanket" "$URL")
+  HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$INSTALL_DIR/blanket" "$URL") || HTTP_CODE="000"
   if [ "$HTTP_CODE" -ne 200 ]; then
     rm -f "$INSTALL_DIR/blanket"
     echo "Error: download failed (HTTP $HTTP_CODE). Check that release $VERSION exists:"
@@ -144,7 +144,7 @@ for TYPE_FILE in $TYPE_FILES; do
     cp "$TYPES_SRC/$TYPE_FILE" "$DEST"
   else
     TYPE_URL="$RAW_BASE/examples/types/$TYPE_FILE"
-    HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$DEST" "$TYPE_URL")
+    HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$DEST" "$TYPE_URL") || HTTP_CODE="000"
     if [ "$HTTP_CODE" -ne 200 ]; then
       rm -f "$DEST"
       echo "  warn: could not download $TYPE_FILE (HTTP $HTTP_CODE)"
