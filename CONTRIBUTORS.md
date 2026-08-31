@@ -88,7 +88,10 @@ along with `BUILD_DATE` (local time at minute precision). Tagged builds
 produce version output like `blanket v0.2.0 (built 2026-05-01 11:14 PM EDT)`.
 
 Install scripts (`scripts/install.sh`, `scripts/install.ps1`) fetch the
-latest release from the GitHub API.
+latest release from the GitHub API by default. They also accept
+`BINARY_PATH` and `TYPES_SRC` env vars to install from local files
+instead, for offline/local-user-only environments — see
+[`docs/offline_install.md`](docs/offline_install.md).
 
 ## Code Conventions
 
