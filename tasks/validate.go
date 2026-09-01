@@ -28,7 +28,7 @@ type Finding struct {
 
 // CheckDescriptions documents what each coded check means, keyed by code.
 // Used for --help text and docs/task_type_definitions.md. Codes 010+ are
-// reserved for the tag lint (see docs/tag_ontology.md).
+// the tag lint (see docs/tag_ontology.md and tasks/tag_lint.go).
 var CheckDescriptions = map[string]string{
 	"001": "command is present and non-empty",
 	"002": "executor resolves on $PATH",
@@ -38,6 +38,11 @@ var CheckDescriptions = map[string]string{
 	"006": "description is present and non-empty",
 	"007": "documentation is present and non-empty",
 	"008": "declared input count is in the healthy range (2-5)",
+	"010": "tag is a near-miss (edit distance <=2) of a known tag",
+	"011": "unnamespaced tag has a namespaced value-match (e.g. bash -> exec:bash)",
+	"012": "tag is new: not declared anywhere, not used by any other type (opt-in)",
+	"013": "tag isn't declared in the known-tags vocabulary (opt-in, stricter than 012)",
+	"014": "no registered worker advertises a superset of this type's tags (opt-in)",
 }
 
 // inputCountWarn and inputCountStrongWarn bound the healthy range for a

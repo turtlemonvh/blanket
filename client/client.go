@@ -63,6 +63,36 @@ func GetTasks(c *GetTasksConf, port int) ([]map[string]interface{}, error) {
 	return tasks, nil
 }
 
+// GetActiveWorkerTagSets fetches the tag set of every non-stopped worker
+// registered with the server at the given port. Used by
+// `blanket task-validate --check-workers` (code 014) to check whether any
+// worker could claim a given task type.
+func GetActiveWorkerTagSets(port int) ([][]string, error) {
+	reqURL := fmt.Sprintf("http://localhost:%d/worker/", port)
+	res, err := http.Get(reqURL)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	var workers []struct {
+		Tags    []string `json:"tags"`
+		Stopped bool     `json:"stopped"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&workers); err != nil {
+		return nil, err
+	}
+
+	sets := make([][]string, 0, len(workers))
+	for _, w := range workers {
+		if w.Stopped {
+			continue
+		}
+		sets = append(sets, w.Tags)
+	}
+	return sets, nil
+}
+
 func SubmitTask(taskType string, env map[string]interface{}, port int) (tasks.Task, error) {
 	var t tasks.Task
 
