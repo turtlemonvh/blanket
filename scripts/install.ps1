@@ -6,19 +6,37 @@
 #   irm https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/install.ps1 | iex
 #
 # Environment variables:
-#   VERSION      — tag to install (default: latest release, e.g. v0.1.0)
-#   INSTALL_DIR  — directory to place the binary (default: %LOCALAPPDATA%\blanket\bin)
-#   BINARY_PATH  — path to an already-downloaded binary; skips the release
-#                  download entirely (for offline installs, see
-#                  docs/offline_install.md)
-#   TYPES_SRC    — local directory of *.toml task types to copy instead
-#                  of downloading examples/types/ from GitHub
+#   VERSION        — tag to install (default: latest release, e.g. v0.1.0)
+#   INSTALL_DIR    — directory to place the binary (default: %LOCALAPPDATA%\blanket\bin)
+#   BINARY_PATH    — path to an already-downloaded binary; skips the release
+#                    download entirely (for offline installs, see
+#                    docs/offline_install.md)
+#   TYPES_SRC      — local directory of *.toml task types to copy instead
+#                    of downloading examples/types/ from GitHub
+#   INSTALL_SKILLS — 1 to install the blanket-task-type Claude Code skill
+#                    without asking, 0 to skip without asking. Unset means
+#                    "ask, but only in an interactive console" — see the
+#                    "AI agent skill" section below.
+#   SKILLS_SRC     — local directory containing a blanket-task-type\
+#                    subdirectory with SKILL.md, copied instead of
+#                    downloading it from GitHub (offline installs)
 
 $ErrorActionPreference = "Stop"
 $Repo = "turtlemonvh/blanket"
 $RawBase = "https://raw.githubusercontent.com/$Repo/master"
 $Binary = "blanket-windows-amd64.exe"
 $ExampleTypes = @("echo_task.toml", "bash_task.toml", "python_hello.toml", "windows_echo.toml")
+
+# Agent harnesses this script knows how to install the skill for, and
+# where each one looks for skills. Extend this as other harnesses' skill
+# directory conventions are confirmed — codex and others weren't wired up
+# here because their layout isn't verified yet.
+function Get-SkillDest {
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        return Join-Path $env:USERPROFILE ".claude\skills"
+    }
+    return $null
+}
 
 # Determine version
 if ($env:BINARY_PATH) {
@@ -138,6 +156,48 @@ foreach ($typeFile in $typeFiles) {
         Write-Host "  installed: $typeFile (executor: $executor)"
     } else {
         Write-Host "  installed: $typeFile (warning: executor '$executor' not found on PATH)"
+    }
+}
+
+# AI agent skill — only offered if a supported agent harness (currently
+# just Claude Code) is on PATH. `irm ... | iex` runs non-interactively, so
+# INSTALL_SKILLS lets a scripted install opt in or out explicitly;
+# otherwise we only prompt in a real interactive console, and default to
+# skipping if it isn't one.
+$SkillDestRoot = Get-SkillDest
+if ($SkillDestRoot) {
+    Write-Host ""
+    $doInstallSkill = $false
+    if ($env:INSTALL_SKILLS -eq "1") {
+        $doInstallSkill = $true
+    } elseif ($env:INSTALL_SKILLS -eq "0") {
+        $doInstallSkill = $false
+    } elseif (-not [Console]::IsInputRedirected) {
+        $reply = Read-Host "Install the blanket-task-type Claude Code skill (helps author task types)? [y/N]"
+        $doInstallSkill = ($reply -match '^(y|yes)$')
+    }
+
+    if ($doInstallSkill) {
+        $skillDest = Join-Path $SkillDestRoot "blanket-task-type"
+        if (Test-Path $skillDest) {
+            Write-Host "  skip (exists): blanket-task-type skill already at $skillDest"
+        } else {
+            New-Item -ItemType Directory -Path $skillDest -Force | Out-Null
+            $skillFile = Join-Path $skillDest "SKILL.md"
+            if ($env:SKILLS_SRC) {
+                Copy-Item -Path (Join-Path $env:SKILLS_SRC "blanket-task-type\SKILL.md") -Destination $skillFile
+                Write-Host "  installed: blanket-task-type skill -> $skillFile"
+            } else {
+                $skillUrl = "$RawBase/.claude/skills/blanket-task-type/SKILL.md"
+                try {
+                    Invoke-WebRequest -Uri $skillUrl -OutFile $skillFile -UseBasicParsing
+                    Write-Host "  installed: blanket-task-type skill -> $skillFile"
+                } catch {
+                    Remove-Item -Path $skillDest -Recurse -ErrorAction SilentlyContinue
+                    Write-Host "  warn: could not download blanket-task-type skill"
+                }
+            }
+        }
     }
 }
 

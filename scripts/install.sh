@@ -9,17 +9,36 @@ set -e
 #   curl -sSfL https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/install.sh | bash
 #
 # Environment variables:
-#   VERSION      — tag to install (default: latest release, e.g. v0.1.0)
-#   INSTALL_DIR  — directory to place the binary (default: ~/.local/bin)
-#   BINARY_PATH  — path to an already-downloaded binary; skips OS/arch
-#                  detection and the release download entirely (for
-#                  offline installs, see docs/offline_install.md)
-#   TYPES_SRC    — local directory of *.toml task types to copy instead
-#                  of downloading examples/types/ from GitHub
+#   VERSION        — tag to install (default: latest release, e.g. v0.1.0)
+#   INSTALL_DIR    — directory to place the binary (default: ~/.local/bin)
+#   BINARY_PATH    — path to an already-downloaded binary; skips OS/arch
+#                    detection and the release download entirely (for
+#                    offline installs, see docs/offline_install.md)
+#   TYPES_SRC      — local directory of *.toml task types to copy instead
+#                    of downloading examples/types/ from GitHub
+#   INSTALL_SKILLS — 1 to install the blanket-task-type Claude Code skill
+#                    without asking, 0 to skip without asking. Unset means
+#                    "ask, but only if there's a real terminal to ask on" —
+#                    see the "AI agent skill" section below.
+#   SKILLS_SRC     — local directory containing a blanket-task-type/
+#                    subdirectory with SKILL.md, copied instead of
+#                    downloading it from GitHub (offline installs)
 
 REPO="turtlemonvh/blanket"
 RAW_BASE="https://raw.githubusercontent.com/$REPO/master"
 EXAMPLE_TYPES="echo_task.toml bash_task.toml python_hello.toml windows_echo.toml"
+
+# Agent harnesses this script knows how to install the skill for, and
+# where each one looks for skills. Extend this as other harnesses'
+# skill-directory conventions are confirmed — codex and others weren't
+# wired up here because their layout isn't verified yet.
+detect_skill_dest() {
+  if command -v claude >/dev/null 2>&1; then
+    echo "$HOME/.claude/skills"
+    return 0
+  fi
+  return 1
+}
 
 if [ -z "$BINARY_PATH" ]; then
   # Detect OS
@@ -163,6 +182,57 @@ for TYPE_FILE in $TYPE_FILES; do
     echo "  installed: $TYPE_FILE (warning: executor '$EXECUTOR' not found on PATH)"
   fi
 done
+
+# AI agent skill — only offered if a supported agent harness (currently
+# just Claude Code) is on $PATH. This script is commonly run piped
+# (`curl ... | bash`), which makes stdin the pipe rather than a terminal,
+# so INSTALL_SKILLS lets a non-interactive install opt in or out
+# explicitly; otherwise we only prompt if /dev/tty is actually usable,
+# and default to skipping if it isn't.
+SKILL_DEST_ROOT=$(detect_skill_dest) || SKILL_DEST_ROOT=""
+if [ -n "$SKILL_DEST_ROOT" ]; then
+  echo
+  DO_INSTALL_SKILL=""
+  case "$INSTALL_SKILLS" in
+    1) DO_INSTALL_SKILL="yes" ;;
+    0) DO_INSTALL_SKILL="no" ;;
+    *)
+      if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        printf "Install the blanket-task-type Claude Code skill (helps author task types)? [y/N] " > /dev/tty
+        REPLY=""
+        read -r REPLY < /dev/tty || REPLY=""
+        case "$REPLY" in
+          y|Y|yes|YES) DO_INSTALL_SKILL="yes" ;;
+          *) DO_INSTALL_SKILL="no" ;;
+        esac
+      else
+        DO_INSTALL_SKILL="no"
+      fi
+      ;;
+  esac
+
+  if [ "$DO_INSTALL_SKILL" = "yes" ]; then
+    SKILL_DEST="$SKILL_DEST_ROOT/blanket-task-type"
+    if [ -d "$SKILL_DEST" ]; then
+      echo "  skip (exists): blanket-task-type skill already at $SKILL_DEST"
+    else
+      mkdir -p "$SKILL_DEST"
+      if [ -n "$SKILLS_SRC" ]; then
+        cp "$SKILLS_SRC/blanket-task-type/SKILL.md" "$SKILL_DEST/SKILL.md"
+        echo "  installed: blanket-task-type skill -> $SKILL_DEST/SKILL.md"
+      else
+        SKILL_URL="$RAW_BASE/.claude/skills/blanket-task-type/SKILL.md"
+        HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$SKILL_DEST/SKILL.md" "$SKILL_URL") || HTTP_CODE="000"
+        if [ "$HTTP_CODE" -ne 200 ]; then
+          rm -rf "$SKILL_DEST"
+          echo "  warn: could not download blanket-task-type skill (HTTP $HTTP_CODE)"
+        else
+          echo "  installed: blanket-task-type skill -> $SKILL_DEST/SKILL.md"
+        fi
+      fi
+    fi
+  fi
+fi
 
 # PATH hint
 echo

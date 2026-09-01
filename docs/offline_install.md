@@ -25,6 +25,12 @@ all from that same tag so they match:
    files under
    [`examples/types/`](../examples/types/) if you want them
    preinstalled.
+4. **The `blanket-task-type` skill (optional)** — if you use Claude
+   Code and want the task-type authoring skill, save
+   [`.claude/skills/blanket-task-type/SKILL.md`](../.claude/skills/blanket-task-type/SKILL.md)
+   at that same tag, keeping it under a `blanket-task-type/`
+   subdirectory locally (the installer copies the whole subdirectory,
+   matching where Claude Code expects to find it).
 
 ## 2. Move everything to the offline machine
 
@@ -41,11 +47,23 @@ calls in favor of local paths:
   detection, the GitHub releases API lookup, and the download.
 - `TYPES_SRC` — a local directory of `*.toml` files; copied in place
   of downloading `examples/types/` from GitHub.
+- `SKILLS_SRC` — a local directory containing a `blanket-task-type/`
+  subdirectory with `SKILL.md`; copied in place of downloading it from
+  GitHub. Only consulted if the installer detects a supported agent
+  harness (currently Claude Code) on `$PATH` and you opt into
+  installing the skill — see below.
+
+An offline machine also has no controlling terminal to prompt on in
+the usual case (or does, but you'd rather not be asked), so set
+`INSTALL_SKILLS=1` or `INSTALL_SKILLS=0` to decide up front instead of
+relying on the interactive prompt.
 
 **Linux / macOS:**
 
 ```bash
-BINARY_PATH=./blanket-linux-amd64 TYPES_SRC=./types sh install.sh
+BINARY_PATH=./blanket-linux-amd64 TYPES_SRC=./types \
+  INSTALL_SKILLS=1 SKILLS_SRC=./skills \
+  sh install.sh
 ```
 
 **Windows (PowerShell):**
@@ -53,6 +71,8 @@ BINARY_PATH=./blanket-linux-amd64 TYPES_SRC=./types sh install.sh
 ```powershell
 $env:BINARY_PATH = ".\blanket-windows-amd64.exe"
 $env:TYPES_SRC = ".\types"
+$env:INSTALL_SKILLS = "1"
+$env:SKILLS_SRC = ".\skills"
 .\install.ps1
 ```
 

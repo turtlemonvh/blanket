@@ -25,7 +25,9 @@ irm https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/install
 The installers download the binary, create config/data directories,
 write a default config file, and fetch the example task types. Set
 `INSTALL_DIR` to override the binary location, or `VERSION=v0.1.0`
-to pin a release.
+to pin a release. If Claude Code is on your `$PATH`, they'll also
+offer to install the `blanket-task-type` authoring skill — set
+`INSTALL_SKILLS=1` (or `0`) to decide without being prompted.
 
 No internet access, or only local-user permissions? See
 [**offline install**](docs/offline_install.md) for downloading
