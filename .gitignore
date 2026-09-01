@@ -15,5 +15,7 @@ tests/e2e/blanket.db
 tests/e2e/playwright-report
 
 # Per-developer Claude Code state — settings, scheduled-task locks, etc.
-.claude/
+# stays ignored; committed skills under .claude/skills/ are the exception.
+.claude/*
+!.claude/skills/
 
