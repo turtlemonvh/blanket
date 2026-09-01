@@ -103,14 +103,6 @@ The HTMX + Go-template UI is now the only UI (Phase C complete — Angular,
   API (likely a new `blanket mcp` subcommand or a `/mcp` route). Tools
   to surface: `submit_task`, `list_tasks`, `get_task`, `get_task_log`,
   `cancel_task`, `list_task_types`. Auth and scoping TBD.
-- **AI tool instructions for authoring task types** — write a markdown
-  doc that AI agents can be pointed at (via Claude `CLAUDE.md`,
-  Cursor rules, or an MCP resource) to generate valid blanket task
-  type TOMLs. Should cover: the schema (tags, executor, command,
-  timeout, environment), the `{{.VAR}}` template language, the
-  difference between submit-time substitution and exec-time `$VAR`,
-  common patterns (file uploads, multi-step bash, python wrappers),
-  and how to validate with `blanket task-validate`.
 - **Auto-start on install** — option in the install scripts to register
   blanket as a background service, so the server starts on login/boot.
   Per-platform: systemd user unit on Linux, `launchctl` plist on macOS,

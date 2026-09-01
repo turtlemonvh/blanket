@@ -10,6 +10,13 @@ here go deeper.
   managing tasks at scale, and the full set of curl/HTTP examples.
 - [**Task type definitions**](task_type_definitions.md) — TOML
   schema for authoring your own task types.
+- [**Authoring task types**](authoring_task_types.md) — practical
+  guide (and AI-agent reference) for writing a good task type: sizing,
+  the `{{.VAR}}` vs `$VAR` distinction, common patterns, the
+  validate-and-iterate loop.
+- [**Tag ontology**](tag_ontology.md) — the namespaced tag convention,
+  why tags are worker constraints rather than labels, and how to
+  extend the vocabulary.
 - [**API**](api.md) — full list of REST endpoints.
 - [**Offline install**](offline_install.md) — installing on machines
   with no internet access and only local-user permissions.
