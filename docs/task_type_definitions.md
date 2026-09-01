@@ -121,9 +121,29 @@ individual findings. Codes are stable once assigned.
 legitimately resolve to a variable inherited from the worker's own
 environment rather than one declared in this type's `environment` table.
 
-Codes 010+ are reserved for the tag lint (near-miss detection, strictness
-flags, worker-existence checks) — see
-[tag_ontology.md](tag_ontology.md).
+### Tag lint (codes 010-014)
+
+These check tags against the resolved vocabulary from
+[tag_ontology.md](tag_ontology.md). Extension stays frictionless by
+default — 010/011 nudge toward the convention, 012-014 are opt-in for
+deployments that want stricter enforcement.
+
+| Code | Check | Default |
+| --- | --- | --- |
+| 010 | tag is a near-miss (edit distance ≤2) of a known tag | warn |
+| 011 | unnamespaced tag has a namespaced value-match (`bash` → `exec:bash`) | warn |
+| 012 | tag is new — not declared anywhere, not used by any other type | off (`--warn-new-tag`) |
+| 013 | tag isn't declared in the known-tags vocabulary, even if used elsewhere | off (`--warn-undeclared-tag`) |
+| 014 | no registered worker advertises a superset of this type's tags | off (`--check-workers`) |
+
+Introducing a well-formed, novel namespaced tag (e.g. `team:platform` for
+the first time) never triggers 010 or 011 — those only fire on a tag that
+looks like a typo of something that already exists. 012 and 013 have
+matching `tasks.warnNewTag` / `tasks.warnUndeclaredTag` config keys, so a
+deployment can make either the default without passing the flag every
+time. 014 needs a running server (`GET /worker/`) to know what's
+registered; if it can't be reached, `--check-workers` degrades to a
+single "skipped" finding instead of failing the whole run.
 
 Flags:
 
@@ -136,7 +156,10 @@ Flags:
 * `--dump-known-tags` — print the resolved tag vocabulary instead of
   validating. See [tag_ontology.md](tag_ontology.md).
 * `--no-builtin-tags` — exclude the built-in seed vocabulary when
-  resolving known tags (only affects `--dump-known-tags` today).
+  resolving known tags.
+* `--warn-new-tag` — enable code 012.
+* `--warn-undeclared-tag` — enable code 013.
+* `--check-workers` — enable code 014.
 
 ## Examples
 

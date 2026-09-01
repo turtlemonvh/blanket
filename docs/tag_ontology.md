@@ -65,10 +65,10 @@ along with each tag's origin (`builtin`, `file`, or `observed`) — useful
 for checking what a given deployment actually recognizes, or for an
 authoring tool deciding what to recommend.
 
-## What's next
+## The tag lint
 
-The known-tag set feeds a lint pass (near-miss detection, strictness
-flags for new/undeclared tags, worker-existence checks) — see the
-task-validate check table in
-[task_type_definitions.md](task_type_definitions.md) for which codes are
-implemented today.
+The known-tag set feeds a lint pass in `blanket task-validate`: near-miss
+detection and unnamespaced-tag nudging are on by default, and stricter
+new/undeclared-tag and worker-existence checks are available opt-in. See
+the check table and flags in
+[task_type_definitions.md](task_type_definitions.md#tag-lint-codes-010-014).

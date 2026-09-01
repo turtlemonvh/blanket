@@ -10,14 +10,18 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/client"
 	"github.com/turtlemonvh/blanket/tasks"
 )
 
 var (
-	taskValidateJSON          bool
-	taskValidateStrict        bool
-	taskValidateDumpKnownTags bool
-	taskValidateNoBuiltinTags bool
+	taskValidateJSON              bool
+	taskValidateStrict            bool
+	taskValidateDumpKnownTags     bool
+	taskValidateNoBuiltinTags     bool
+	taskValidateWarnNewTag        bool
+	taskValidateWarnUndeclaredTag bool
+	taskValidateCheckWorkers      bool
 )
 
 var taskValidateCmd = &cobra.Command{
@@ -26,8 +30,11 @@ var taskValidateCmd = &cobra.Command{
 	Long: `Checks each task type against a set of coded rules: the command is
 present and parses as a Go template, the executor resolves on $PATH,
 template references match declared inputs, and description/documentation/
-input-count fall within the recommended range. See
-docs/task_type_definitions.md for what each code means.
+input-count fall within the recommended range (codes 001-008); plus a tag
+lint against the resolved vocabulary — near-miss and unnamespaced-tag
+detection are on by default, new/undeclared-tag and worker-existence
+checks are opt-in (codes 010-014). See docs/task_type_definitions.md for
+what each code means.
 
 Exit code is non-zero if any error-level finding exists, or (with
 --strict) if any warning exists either.
@@ -47,6 +54,32 @@ configured types directory, and tags observed in loaded task types.`,
 		}
 
 		tts, loadErrs := tasks.ReadTaskTypesForValidation(typesDirs)
+
+		// Build the tag index from every loaded type before any
+		// name-filtering below — "is this tag used elsewhere" (code 012)
+		// needs to see the full picture, not just the type(s) being
+		// printed.
+		tagIdx := tasks.BuildTagIndex(typesDirs, tts, tasks.KnownTagsOptions{
+			NoBuiltinTags: taskValidateNoBuiltinTags,
+		})
+		lintOpts := tasks.TagLintOptions{
+			WarnNewTag:        viper.GetBool("tasks.warnNewTag"),
+			WarnUndeclaredTag: viper.GetBool("tasks.warnUndeclaredTag"),
+		}
+
+		var allFindings []tasks.Finding
+		if taskValidateCheckWorkers {
+			sets, err := client.GetActiveWorkerTagSets(viper.GetInt("port"))
+			if err != nil {
+				allFindings = append(allFindings, tasks.Finding{
+					Code: "014", Level: tasks.LevelWarn,
+					Message: fmt.Sprintf("worker-existence check (014) skipped: could not reach server at http://localhost:%d (%s)", viper.GetInt("port"), err.Error()),
+				})
+			} else {
+				lintOpts.CheckWorkers = true
+				lintOpts.WorkerTagSets = sets
+			}
+		}
 
 		if len(args) > 0 {
 			name := args[0]
@@ -73,12 +106,12 @@ configured types directory, and tags observed in loaded task types.`,
 		}
 		sort.Slice(order, func(a, b int) bool { return tts[order[a]].GetName() < tts[order[b]].GetName() })
 
-		var allFindings []tasks.Finding
 		perType := map[string][]tasks.Finding{}
 		sortedTts := make([]tasks.TaskType, len(tts))
 		for i, idx := range order {
 			sortedTts[i] = tts[idx]
 			f := tasks.ValidateTaskType(&tts[idx], loadErrs[idx])
+			f = append(f, tasks.LintTags(&tts[idx], tagIdx, lintOpts)...)
 			allFindings = append(allFindings, f...)
 			perType[tts[idx].GetName()] = f
 		}
@@ -86,7 +119,7 @@ configured types directory, and tags observed in loaded task types.`,
 		if taskValidateJSON {
 			printFindingsJSON(allFindings)
 		} else {
-			printFindingsTable(sortedTts, perType)
+			printFindingsTable(sortedTts, perType, allFindings)
 		}
 
 		anyError, anyWarn := false, false
@@ -116,7 +149,18 @@ func printFindingsJSON(findings []tasks.Finding) {
 	}
 }
 
-func printFindingsTable(tts []tasks.TaskType, perType map[string][]tasks.Finding) {
+// printFindingsTable prints the per-type status table plus each finding
+// below it. allFindings additionally carries any finding not tied to a
+// specific type (Type == "") — currently just the 014-skipped notice when
+// --check-workers can't reach a server — printed in its own section since
+// it won't show up under any type in perType.
+func printFindingsTable(tts []tasks.TaskType, perType map[string][]tasks.Finding, allFindings []tasks.Finding) {
+	for _, f := range allFindings {
+		if f.Type == "" {
+			fmt.Printf("%s %s: %s\n", f.Code, f.Level, f.Message)
+		}
+	}
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tTAGS\tSTATUS")
 
@@ -193,4 +237,13 @@ func init() {
 	taskValidateCmd.Flags().BoolVar(&taskValidateStrict, "strict", false, "exit non-zero on warnings too, not just errors")
 	taskValidateCmd.Flags().BoolVar(&taskValidateDumpKnownTags, "dump-known-tags", false, "print the resolved tag vocabulary (built-in + .blanket files + observed) instead of validating")
 	taskValidateCmd.Flags().BoolVar(&taskValidateNoBuiltinTags, "no-builtin-tags", false, "exclude the built-in seed vocabulary when resolving known tags")
+	taskValidateCmd.Flags().BoolVar(&taskValidateWarnNewTag, "warn-new-tag", false, "warn (code 012) on a tag that's not declared anywhere and not used by any other task type")
+	taskValidateCmd.Flags().BoolVar(&taskValidateWarnUndeclaredTag, "warn-undeclared-tag", false, "warn (code 013) on a tag that isn't declared in a known-tags file, even if used elsewhere")
+	taskValidateCmd.Flags().BoolVar(&taskValidateCheckWorkers, "check-workers", false, "warn (code 014) when no registered worker could claim a type's tags; requires a reachable server")
+
+	// tasks.warnNewTag / tasks.warnUndeclaredTag can also be set in the
+	// blanket config file, so a deployment can make either check its
+	// default without every invocation needing the flag.
+	viper.BindPFlag("tasks.warnNewTag", taskValidateCmd.Flags().Lookup("warn-new-tag"))
+	viper.BindPFlag("tasks.warnUndeclaredTag", taskValidateCmd.Flags().Lookup("warn-undeclared-tag"))
 }
