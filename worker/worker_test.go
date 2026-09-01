@@ -44,7 +44,7 @@ import (
 
 // testTaskTypeToml is a minimal bash task with no required env vars.
 const testTaskTypeToml = `
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 timeout = 10
 command = "echo 'hello from blanket integration test'"
 executor = "bash"
@@ -135,7 +135,7 @@ func (h *workerHarness) cancel(id objectid.ObjectId) {
 }
 
 // newWorkerHarness stands up the in-memory server, points viper at it, and
-// registers a single worker tagged ["bash","unix"]. Caller is responsible
+// registers a single worker tagged ["exec:bash","os:unix"]. Caller is responsible
 // for installing task types via writeTaskType before submitting.
 func newWorkerHarness(t *testing.T) *workerHarness {
 	t.Helper()
@@ -180,7 +180,7 @@ func newWorkerHarness(t *testing.T) *workerHarness {
 	workerID := objectid.NewObjectId()
 	wConf := worker.WorkerConf{
 		Id:            workerID,
-		Tags:          []string{"bash", "unix"},
+		Tags:          []string{"exec:bash", "os:unix"},
 		Stopped:       false,
 		CheckInterval: 0.5,
 		Logfile:       filepath.Join(workDir, "worker.log"),
@@ -279,7 +279,7 @@ func TestProcessTwo(t *testing.T) {
 
 // timeoutTaskTypeToml sleeps longer than its timeout so the worker must kill it.
 const timeoutTaskTypeToml = `
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 timeout = 1
 command = "sleep 5"
 executor = "bash"
@@ -317,7 +317,7 @@ func TestProcessOne_Timeout(t *testing.T) {
 
 // longRunningTaskTypeToml gives us a window to cancel mid-flight.
 const longRunningTaskTypeToml = `
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 timeout = 30
 command = "sleep 10"
 executor = "bash"
@@ -416,7 +416,7 @@ func TestRun_RejectsLowCheckInterval(t *testing.T) {
 	for _, iv := range []float64{0.1, 0.4, 0.49} {
 		w := worker.WorkerConf{
 			Id:            objectid.NewObjectId(),
-			Tags:          []string{"bash"},
+			Tags:          []string{"exec:bash"},
 			CheckInterval: iv,
 		}
 		err := w.Run()

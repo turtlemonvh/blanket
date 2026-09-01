@@ -1,4 +1,4 @@
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 
 # short timeout for tests
 timeout = 10

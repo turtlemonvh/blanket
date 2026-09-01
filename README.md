@@ -51,7 +51,7 @@ curl -s -X POST localhost:8773/task/ -d '{"type": "echo_task"}'
 blanket submit -t echo_task
 
 # Run a worker that accepts bash/unix tasks
-blanket worker -t bash,unix
+blanket worker -t exec:bash,os:unix
 ```
 
 That's it. For curl examples, file uploads, scripting, custom task

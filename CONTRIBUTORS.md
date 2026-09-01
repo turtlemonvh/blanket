@@ -147,7 +147,7 @@ TOML files under any directory in `tasks.typesPaths` (config). Loader
 is `tasks/task_types.go`; the name is the filename stem.
 
 ```toml
-tags = ["bash", "unix"]   # worker-capability match; worker must advertise all
+tags = ["exec:bash", "os:unix"]  # worker-capability match; worker must advertise all
 timeout = 300             # seconds; default 3600
 command = "..."           # Go text/template, .ExecEnv is the env map
 executor = "bash"         # bash (default), cmd, powershell, or any -c executor

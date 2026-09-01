@@ -46,7 +46,10 @@ worker host. Writes artifacts to the task result dir.
 
 A list of strings. Defines the capabilities required of any worker
 that wants to execute this task. A worker only claims a task whose
-tags it satisfies.
+tags it satisfies — a tag is a constraint, not a label. See
+[tag_ontology.md](tag_ontology.md) for the namespaced `namespace:value`
+convention (`os:linux`, `exec:bash`, `team:data-eng`, ...) and how to
+extend it.
 
 ### timeout
 
@@ -145,7 +148,7 @@ copy-paste-ready starters: `echo_task` (minimal), `bash_task`
 ### A simple bash task that runs a user-supplied command
 
 ```toml
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 
 # timeout in seconds
 timeout = 200
@@ -180,7 +183,7 @@ executor="bash"
 ### A Windows-native task using cmd
 
 ```toml
-tags = ["windows"]
+tags = ["os:windows"]
 executor = "cmd"
 command = "echo hello from blanket"
 timeout = 10

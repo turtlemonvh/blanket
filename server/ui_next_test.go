@@ -195,7 +195,7 @@ func TestUI_SubmitWorker_RejectsLowCheckInterval(t *testing.T) {
 	r := s.GetRouter()
 
 	form := url.Values{}
-	form.Set("tags", "bash,unix")
+	form.Set("tags", "exec:bash,os:unix")
 	form.Set("checkInterval", "0.1")
 
 	w := postForm(r, "/ui/workers", form)
@@ -213,7 +213,7 @@ documentation = '''
 Requires nothing. Writes a greeting to stdout.
 '''
 
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 timeout = 10
 command = "echo 'hello from blanket'"
 executor = "bash"
@@ -280,7 +280,7 @@ func TestUI_TaskTypeDetailPage_RendersDescriptionAndDocumentation(t *testing.T) 
 
 	assert.Contains(t, body, "Say hello")
 	assert.Contains(t, body, "Requires nothing. Writes a greeting to stdout.")
-	assert.Contains(t, body, "bash, unix")
+	assert.Contains(t, body, "exec:bash, os:unix")
 }
 
 func TestUI_TaskTypeDetailPage_UnknownTypeReturns404(t *testing.T) {

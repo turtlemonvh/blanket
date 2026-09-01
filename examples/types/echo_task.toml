@@ -4,7 +4,7 @@
 
 description = "Write a fixed string to stdout and exit 0."
 
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 timeout = 10
 command = "echo 'hello from blanket'"
 executor = "bash"
