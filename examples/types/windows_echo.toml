@@ -2,6 +2,8 @@
 # Always runnable on Windows so there's at least one working example
 # out of the box.
 
+description = "Write a fixed string to stdout via cmd.exe."
+
 tags = ["windows"]
 executor = "cmd"
 command = "echo hello from blanket"

@@ -21,6 +21,27 @@ substitute environment variables at submit time.
 
 ## Field names
 
+### description
+
+A one-line summary of what the task type does. Shown on the task types
+list and on the new-task form.
+
+### documentation
+
+Multi-line free text for setup, prerequisites, and gotchas — the things
+a `description` is too short to hold. Rendered on the task type's detail
+page (`/ui/task-types/:name`). Optional; use a TOML triple-quoted string
+for multi-line content.
+
+```toml
+description = "Run a dbt build against the warehouse"
+
+documentation = '''
+Requires `dbt` on $PATH and a populated ~/.dbt/profiles.yml on the
+worker host. Writes artifacts to the task result dir.
+'''
+```
+
 ### tags
 
 A list of strings. Defines the capabilities required of any worker

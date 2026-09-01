@@ -107,6 +107,7 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/ui/workers", s.uiNextWorkersPage)
 	r.GET("/ui/workers/:id", s.uiNextWorkerDetailPage)
 	r.GET("/ui/task-types", s.uiNextTaskTypesPage)
+	r.GET("/ui/task-types/:name", s.uiNextTaskTypeDetailPage)
 	r.GET("/ui/about", s.uiNextAboutPage)
 	r.POST("/ui/tasks", s.uiNextSubmitTask)
 	r.POST("/ui/workers", s.uiNextSubmitWorker)

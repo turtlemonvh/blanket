@@ -108,17 +108,41 @@ func mustParsePartial(name string, files ...string) *template.Template {
 
 // TaskTypeView is the render-friendly projection of tasks.TaskType.
 type TaskTypeView struct {
-	Name        string
-	Tags        []string
-	LoadedTs    int64
-	ConfigFile  string
-	VersionHash string
+	Name          string
+	Description   string
+	Documentation string
+	Tags          []string
+	Executor      string
+	Timeout       int
+	LoadedTs      int64
+	ConfigFile    string
+	VersionHash   string
 }
 
 // SettingView is one row on the About page.
 type SettingView struct {
 	Key   string
 	Value string
+}
+
+// buildTaskTypeView projects a tasks.TaskType into its render-friendly view.
+func buildTaskTypeView(tt *tasks.TaskType) TaskTypeView {
+	cfg := tt.Config
+	executor := cfg.GetString("executor")
+	if executor == "" {
+		executor = "bash"
+	}
+	return TaskTypeView{
+		Name:          tt.GetName(),
+		Description:   tt.GetDescription(),
+		Documentation: tt.GetDocumentation(),
+		Tags:          cfg.GetStringSlice("tags"),
+		Executor:      executor,
+		Timeout:       cfg.GetInt("timeout"),
+		LoadedTs:      tt.LoadedTs,
+		ConfigFile:    tt.ConfigFile,
+		VersionHash:   tt.ConfigVersionHash,
+	}
 }
 
 func readTaskTypeViews() []TaskTypeView {
@@ -128,16 +152,8 @@ func readTaskTypeViews() []TaskTypeView {
 		return nil
 	}
 	views := make([]TaskTypeView, 0, len(tts))
-	for _, tt := range tts {
-		cfg := tt.Config
-		tags := cfg.GetStringSlice("tags")
-		views = append(views, TaskTypeView{
-			Name:        tt.GetName(),
-			Tags:        tags,
-			LoadedTs:    tt.LoadedTs,
-			ConfigFile:  tt.ConfigFile,
-			VersionHash: tt.ConfigVersionHash,
-		})
+	for i := range tts {
+		views = append(views, buildTaskTypeView(&tts[i]))
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].Name < views[j].Name })
 	return views
@@ -294,6 +310,20 @@ func (s *ServerConfig) uiNextTaskTypesPage(c *gin.Context) {
 		"ui_next/templates/task_types.html",
 		"ui_next/templates/task_types_rows.html")
 	s.renderUINext(c, t, gin.H{"Title": "Task Types", "TaskTypes": readTaskTypeViews()})
+}
+
+// uiNextTaskTypeDetailPage renders one task type's description, documentation,
+// and settings.
+func (s *ServerConfig) uiNextTaskTypeDetailPage(c *gin.Context) {
+	name := c.Param("name")
+	tt, err := tasks.FetchTaskType(name)
+	if err != nil {
+		c.String(http.StatusNotFound, err.Error())
+		return
+	}
+	t := mustParseUINextPage("task-type-detail", "ui_next/templates/task_type_detail.html")
+	view := buildTaskTypeView(tt)
+	s.renderUINext(c, t, gin.H{"Title": "Task Type " + view.Name, "TaskType": view})
 }
 
 func (s *ServerConfig) uiNextTaskTypesRowsPartial(c *gin.Context) {

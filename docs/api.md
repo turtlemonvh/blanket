@@ -42,6 +42,9 @@ GET /task_type/                 # list all loaded task types
 GET /task_type/:name            # fetch one by name
 ```
 
+The `description` and `documentation` fields (if set in the TOML) are
+included in both responses like any other config key.
+
 ## Workers
 
 Read.

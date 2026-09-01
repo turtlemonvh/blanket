@@ -2,6 +2,8 @@
 # a first-run sanity check ("does my server/worker pair actually run a
 # task?") and as a template for copy-pasting into your own types.
 
+description = "Write a fixed string to stdout and exit 0."
+
 tags = ["bash", "unix"]
 timeout = 10
 command = "echo 'hello from blanket'"
