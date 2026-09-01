@@ -20,6 +20,13 @@ Small, known-scope items to clear before the next big refactor.
 - **`updateTaskProgress` doesn't check task state** — a progress update on a
   terminal (SUCCESS/STOPPED) task silently succeeds. Add a state guard that
   rejects progress updates on non-RUNNING tasks, then add a regression test.
+- **`validConfigfileName` regex is too loose** (`tasks/task_types.go`) —
+  `(\w*).toml` is unanchored and the `.` matches any character, so a file
+  like `not-toml.txt` also matches (via `t` + any-char `-` + literal
+  `toml`). Anchor it (`^\w+\.toml$` against the basename) so only real
+  `.toml` files are picked up. Found while adding
+  `ReadTaskTypesForValidation`; not fixed there to avoid changing
+  `ReadTypes()` behavior inside an already-large PR.
 
 ## Test Coverage Expansion
 
