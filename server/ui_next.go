@@ -523,6 +523,29 @@ func (s *ServerConfig) uiNextSubmitTask(c *gin.Context) {
 		return
 	}
 
+	// Validate the backing task type before creating a task from it —
+	// blanket has no task-type authoring UI, so this is where a broken
+	// TOML (bad template, missing executor) first surfaces to a user
+	// rather than failing later at exec time. Errors block submission;
+	// warnings are logged but don't block, since there's no flash-message
+	// UI yet to surface them inline (tracked in docs/next_up.md).
+	findings := tasks.ValidateTaskType(tt, nil)
+	var errMsgs []string
+	for _, f := range findings {
+		if f.Level == tasks.LevelError {
+			errMsgs = append(errMsgs, fmt.Sprintf("%s %s", f.Code, f.Message))
+		} else {
+			log.WithFields(log.Fields{
+				"taskType": taskType,
+				"code":     f.Code,
+			}).Warn(f.Message)
+		}
+	}
+	if len(errMsgs) > 0 {
+		c.String(http.StatusBadRequest, "task type %q failed validation:\n%s", taskType, strings.Join(errMsgs, "\n"))
+		return
+	}
+
 	if err := c.Request.ParseForm(); err != nil {
 		c.String(http.StatusBadRequest, err.Error())
 		return

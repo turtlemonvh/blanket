@@ -129,3 +129,12 @@ grep -q '"state":"WAITING"' <<<"$create_resp" || fail "new task not WAITING: $cr
 # /task/ now returns the new task.
 tasks_body="$(curl -fsS "$BASE/task/")"
 grep -q '"type":"echo_task"' <<<"$tasks_body" || fail "/task/ missing submitted task: $tasks_body"
+
+# task-validate --json runs against the fixture type and produces a JSON
+# array (the fixture is intentionally minimal, so warnings are expected —
+# this only checks the command runs and emits well-formed JSON, not that
+# the fixture is warning-free).
+validate_json="$("$REPO_ROOT/$BINARY" --config "$WORKDIR/config.json" task-validate --json)" \
+    || fail "task-validate --json exited non-zero unexpectedly: $validate_json"
+echo "$validate_json" | jq -e 'type == "array"' > /dev/null \
+    || fail "task-validate --json did not produce a JSON array: $validate_json"

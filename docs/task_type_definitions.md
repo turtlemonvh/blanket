@@ -93,7 +93,47 @@ take a `value`. When submitting a task, you can always add additional
 env variables that are not part of the type definition.
 
 Environment variables are the main unit of configurability for tasks,
-so this is where most of the complexity ends up.
+so this is where most of the complexity ends up. As a rule of thumb, 2-5
+inputs is comfortable to use; more than 10 is a sign the type should
+probably be split (see check 008 below).
+
+## Validation
+
+`blanket task-validate [type-name]` checks every configured task type
+against a set of coded rules and prints a per-type status plus the
+individual findings. Codes are stable once assigned.
+
+| Code | Check | Level |
+| --- | --- | --- |
+| 001 | `command` is present and non-empty | error |
+| 002 | executor resolves on `$PATH` | error |
+| 003 | `command` parses as a Go template | error |
+| 004 | every `{{.VAR}}` reference is a declared input | warn |
+| 005 | a `required` input is never referenced by `command` | warn |
+| 006 | `description` is present and non-empty | warn |
+| 007 | `documentation` is present and non-empty | warn |
+| 008 | declared input count is in the healthy range (2-5) | warn |
+
+004 is deliberately a warning, not an error — a `{{.VAR}}` reference can
+legitimately resolve to a variable inherited from the worker's own
+environment rather than one declared in this type's `environment` table.
+
+Codes 010+ are reserved for the tag lint (near-miss detection, strictness
+flags, worker-existence checks) — see
+[tag_ontology.md](tag_ontology.md).
+
+Flags:
+
+* `--json` — print findings as a JSON array (`{type, code, level,
+  message, suggestion}`) instead of the table. This is what an authoring
+  tool should drive against.
+* `--strict` — exit non-zero on warnings too, not just errors. Default
+  behavior exits non-zero only on errors, so it stays usable as a
+  pre-flight check without failing on style nits.
+* `--dump-known-tags` — print the resolved tag vocabulary instead of
+  validating. See [tag_ontology.md](tag_ontology.md).
+* `--no-builtin-tags` — exclude the built-in seed vocabulary when
+  resolving known tags (only affects `--dump-known-tags` today).
 
 ## Examples
 

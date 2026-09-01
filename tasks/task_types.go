@@ -86,6 +86,42 @@ func ReadTypes() ([]TaskType, error) {
 	return taskTypes, nil
 }
 
+// ReadTaskTypesForValidation loads every *.toml file across typesDirs using
+// the lenient (ReadTaskTypeFromFilepathForValidation) path, so task-validate
+// can report on files ReadTypes() would silently skip (e.g. a missing
+// `command` field). Kept separate from ReadTypes() rather than sharing its
+// directory-walk loop: ReadTypes() treats an unreadable typesDir as a hard
+// server-startup error, while validation should keep going and report what
+// it can — different enough error semantics that merging them risked
+// changing ReadTypes()'s existing behavior for a modest DRY gain.
+//
+// Returns one TaskType per file plus its load error (nil on a clean load),
+// in directory order then filename order.
+func ReadTaskTypesForValidation(typesDirs []string) ([]TaskType, []error) {
+	var types []TaskType
+	var errs []error
+	for _, typesDir := range typesDirs {
+		dirEntries, err := ioutil.ReadDir(typesDir)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"error":    err.Error(),
+				"filepath": typesDir,
+			}).Warn("Problem reading task types directory location")
+			continue
+		}
+		for _, dirEntry := range dirEntries {
+			fp := path.Join(typesDir, dirEntry.Name())
+			if !validConfigfileName.MatchString(fp) {
+				continue
+			}
+			tt, err := ReadTaskTypeFromFilepathForValidation(fp)
+			types = append(types, tt)
+			errs = append(errs, err)
+		}
+	}
+	return types, errs
+}
+
 func ReadTaskTypeFromFilepath(filepath string) (TaskType, error) {
 	// Check that the file exists and is a TOML file
 	fi, err := os.Stat(filepath)
@@ -118,6 +154,37 @@ func ReadTaskTypeFromFilepath(filepath string) (TaskType, error) {
 		tt.ConfigVersionHash = cs
 	}
 	return tt, nil
+}
+
+// ReadTaskTypeFromFilepathForValidation loads a task type TOML file the way
+// ReadTaskTypeFromFilepath does, but tolerates a missing `command` field —
+// callers that validate task types (task-validate) need the
+// partially-parsed config to report on, not a silently discarded one, the
+// way ReadTypes() drops such files to keep them off the serving path.
+// Filesystem-level errors (file missing, unreadable, a directory) still
+// propagate as-is; ConfigFile and name are set even when readErr != nil.
+func ReadTaskTypeFromFilepathForValidation(filepath string) (TaskType, error) {
+	fi, err := os.Stat(filepath)
+	if err != nil {
+		return TaskType{}, err
+	}
+	if fi.IsDir() {
+		return TaskType{}, fmt.Errorf("Path points to a directory")
+	}
+
+	configFile, err := os.Open(filepath)
+	if err != nil {
+		return TaskType{}, err
+	}
+	defer configFile.Close()
+
+	tt, readErr := ReadTaskType(configFile)
+	tt.ConfigFile = filepath
+	tt.Config.Set("name", strings.Split(path.Base(filepath), ".toml")[0])
+	if cs, err := lib.Checksum(filepath); err == nil {
+		tt.ConfigVersionHash = cs
+	}
+	return tt, readErr
 }
 
 func ReadTaskType(configFile io.Reader) (TaskType, error) {
@@ -180,6 +247,27 @@ func (t *TaskType) DefaultEnv() map[string]string {
 		env[evName] = evValue
 	}
 	return env
+}
+
+// EnvNames returns the input names declared under
+// environment.<section> ("default", "required", or "optional"), in file
+// order, skipping any entry missing a name.
+func (t *TaskType) EnvNames(section string) []string {
+	raw, ok := t.Config.Get("environment." + section).([]interface{})
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if name, ok := m["name"].(string); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func (t *TaskType) HasRequiredEnv() bool {
