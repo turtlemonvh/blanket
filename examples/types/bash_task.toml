@@ -6,6 +6,18 @@
 # submit time; blanket also exports them as real env vars to the shell,
 # so `$DEFAULT_COMMAND` would work too.
 
+description = "Run an arbitrary bash command supplied at submit time."
+
+documentation = '''
+Escape hatch for ad-hoc one-offs (builds, deploys, file munging) where
+writing a dedicated task type isn't worth it. Requires bash on $PATH.
+
+The {{.VAR}} template syntax substitutes task environment variables at
+submit time; blanket also exports them as real env vars to the shell,
+so `$DEFAULT_COMMAND` works too — the difference matters when the value
+is set by the caller versus inherited from the worker's environment.
+'''
+
 tags = ["bash", "unix"]
 timeout = 300
 

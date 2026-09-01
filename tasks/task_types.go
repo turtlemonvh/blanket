@@ -149,6 +149,17 @@ func (t *TaskType) GetName() string {
 	return t.Config.GetString("name")
 }
 
+// GetDescription returns the one-line summary of what this task type does.
+func (t *TaskType) GetDescription() string {
+	return t.Config.GetString("description")
+}
+
+// GetDocumentation returns the long-form setup/prerequisites/gotchas text
+// for this task type.
+func (t *TaskType) GetDocumentation() string {
+	return t.Config.GetString("documentation")
+}
+
 // Implement Marshaler
 func (t *TaskType) MarshalJSON() ([]byte, error) {
 	ttSettings := t.Config.AllSettings()

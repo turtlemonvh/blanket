@@ -218,6 +218,24 @@ test.describe('Task types view', () => {
     ).toBeVisible();
     await expect(page.getByRole('link', { name: 'echo_task' })).toBeVisible();
   });
+
+  test('type name links to the UI detail page and renders its settings', async ({
+    page,
+  }) => {
+    await page.goto('/ui/task-types');
+    const link = page.getByRole('link', { name: 'echo_task' });
+    await expect(link).toHaveAttribute('href', '/ui/task-types/echo_task');
+    await link.click();
+
+    // Lands on the detail page (not the raw JSON API route) and renders
+    // the type's settings, including the env-var table via its partial.
+    await expect(page).toHaveURL(/\/ui\/task-types\/echo_task$/);
+    await expect(
+      page.getByRole('heading', { name: 'echo_task', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText('bash, unix')).toBeVisible();
+    await expect(page.getByText('Environment Variables')).toBeVisible();
+  });
 });
 
 // ---------------------------------------------------------------------------

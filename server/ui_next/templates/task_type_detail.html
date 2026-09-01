@@ -1,0 +1,35 @@
+{{define "content"}}
+<section>
+    <div class="list-header">
+        <h2>Task Type Detail</h2>
+        <a class="btn" href="/ui/task-types">← Back to Task Types</a>
+    </div>
+
+    <h3>{{.TaskType.Name}}</h3>
+
+    {{if .TaskType.Description}}
+    <p>{{.TaskType.Description}}</p>
+    {{end}}
+
+    {{if .TaskType.Documentation}}
+    <h4>Documentation</h4>
+    <pre style="white-space:pre-wrap;background:#f6f6f6;padding:0.75rem;border-radius:6px;">{{.TaskType.Documentation}}</pre>
+    {{end}}
+
+    <table>
+        <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+        <tbody>
+            <tr><td>Tags</td><td>{{join .TaskType.Tags ", "}}</td></tr>
+            <tr><td>Executor</td><td>{{.TaskType.Executor}}</td></tr>
+            <tr><td>Timeout</td><td>{{.TaskType.Timeout}}s</td></tr>
+            <tr><td>Loaded</td><td>{{fmtTs .TaskType.LoadedTs}}</td></tr>
+            <tr><td>Config File</td><td class="muted">{{.TaskType.ConfigFile}}</td></tr>
+            <tr><td>Version</td><td class="muted">{{.TaskType.VersionHash}}</td></tr>
+            <tr><td>JSON</td><td><a href="/task_type/{{.TaskType.Name}}">JSON representation</a></td></tr>
+        </tbody>
+    </table>
+
+    <h4>Environment Variables</h4>
+    <div hx-get="/ui/partials/task-type-env?type={{.TaskType.Name}}" hx-trigger="load" hx-swap="innerHTML"></div>
+</section>
+{{end}}

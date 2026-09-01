@@ -13,9 +13,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -199,4 +202,95 @@ func TestUI_SubmitWorker_RejectsLowCheckInterval(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code,
 		"sub-minimum checkInterval should return 400; body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "checkInterval")
+}
+
+// --- /ui/task-types ---
+
+const docsTaskTypeToml = `
+description = "Say hello"
+
+documentation = '''
+Requires nothing. Writes a greeting to stdout.
+'''
+
+tags = ["bash", "unix"]
+timeout = 10
+command = "echo 'hello from blanket'"
+executor = "bash"
+`
+
+// setupDocsTaskType writes a task type with description/documentation set,
+// distinct from the shared minimal fixture in serve_tasks_test.go.
+func setupDocsTaskType(t *testing.T) func() {
+	t.Helper()
+
+	typesDir, err := os.MkdirTemp("", "blanket-test-types-docs-*")
+	if err != nil {
+		t.Fatalf("failed to create types dir: %v", err)
+	}
+	resultsDir, err := os.MkdirTemp("", "blanket-test-results-docs-*")
+	if err != nil {
+		os.RemoveAll(typesDir)
+		t.Fatalf("failed to create results dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(typesDir, "greet_task.toml"), []byte(docsTaskTypeToml), 0644); err != nil {
+		os.RemoveAll(typesDir)
+		os.RemoveAll(resultsDir)
+		t.Fatalf("failed to write task type TOML: %v", err)
+	}
+
+	viper.Set("tasks.typesPaths", []string{typesDir})
+	viper.Set("tasks.resultsPath", resultsDir)
+
+	return func() {
+		os.RemoveAll(typesDir)
+		os.RemoveAll(resultsDir)
+	}
+}
+
+func TestUI_TaskTypesRows_ShowsDescriptionAndDetailLink(t *testing.T) {
+	cleanup := setupDocsTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/partials/task-types-rows")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	assert.Contains(t, body, "Say hello")
+	assert.Contains(t, body, `href="/ui/task-types/greet_task"`)
+	assert.NotContains(t, body, `href="/task_type/greet_task"`,
+		"list should link to the UI detail page, not the JSON API route")
+}
+
+func TestUI_TaskTypeDetailPage_RendersDescriptionAndDocumentation(t *testing.T) {
+	cleanup := setupDocsTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/task-types/greet_task")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	assert.Contains(t, body, "Say hello")
+	assert.Contains(t, body, "Requires nothing. Writes a greeting to stdout.")
+	assert.Contains(t, body, "bash, unix")
+}
+
+func TestUI_TaskTypeDetailPage_UnknownTypeReturns404(t *testing.T) {
+	cleanup := setupDocsTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/task-types/does_not_exist")
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
