@@ -8,7 +8,7 @@ import (
 
 func TestGenerateFromTaskType(t *testing.T) {
 	tt_config := `
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 
 # timeout in seconds
 timeout = 200

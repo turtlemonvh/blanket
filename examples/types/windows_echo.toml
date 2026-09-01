@@ -4,7 +4,7 @@
 
 description = "Write a fixed string to stdout via cmd.exe."
 
-tags = ["windows"]
+tags = ["os:windows"]
 executor = "cmd"
 command = "echo hello from blanket"
 timeout = 10

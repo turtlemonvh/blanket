@@ -2,8 +2,8 @@
 # pattern. Shows an optional env var (NAME) with a default, so the task
 # can be submitted with no environment at all.
 #
-# Requires python3 on $PATH; tag "python" keeps it off workers that
-# don't advertise that capability.
+# Requires python3 on $PATH; tag "runtime:python3" keeps it off workers
+# that don't advertise that capability.
 
 description = "Print a greeting via python3."
 
@@ -12,7 +12,7 @@ Requires python3 on $PATH. Demonstrates an optional input with a
 default (NAME) so the task can be submitted with no environment at all.
 '''
 
-tags = ["python", "unix"]
+tags = ["runtime:python3", "os:unix"]
 timeout = 60
 
 command = '''

@@ -233,7 +233,7 @@ test.describe('Task types view', () => {
     await expect(
       page.getByRole('heading', { name: 'echo_task', exact: true }),
     ).toBeVisible();
-    await expect(page.getByText('bash, unix')).toBeVisible();
+    await expect(page.getByText('exec:bash, os:unix')).toBeVisible();
     await expect(page.getByText('Environment Variables')).toBeVisible();
   });
 });
@@ -317,7 +317,7 @@ test.describe('Worker detail page', () => {
     const res = await request.put(`/worker/${workerId}`, {
       data: {
         id: workerId,
-        tags: ['bash', 'unix'],
+        tags: ['exec:bash', 'os:unix'],
         pid: 99999,
         stopped: false,
         checkInterval: 2,
@@ -344,7 +344,7 @@ test.describe('Worker detail page', () => {
     await expect(page.getByRole('cell', { name: workerId })).toBeVisible();
 
     // Tags appear.
-    await expect(page.getByText('bash, unix')).toBeVisible();
+    await expect(page.getByText('exec:bash, os:unix')).toBeVisible();
 
     // Live Log section heading is present.
     await expect(

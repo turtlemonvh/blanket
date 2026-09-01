@@ -117,11 +117,14 @@ blanket ps -q | xargs -I {} blanket rm {}
 ## Workers
 
 Workers claim and execute tasks. Tags advertise capabilities — a
-worker only claims tasks whose `tags` it satisfies.
+worker only claims tasks whose `tags` it satisfies. See
+[tag_ontology.md](tag_ontology.md) for the namespaced tag convention;
+workers should advertise generously (more tags than any one task type
+needs), since a task's tags only narrow which workers may claim it.
 
 ```bash
-# Run a worker that handles bash + unix + python tasks
-blanket worker -t unix,bash,python
+# Run a worker that handles bash + unix + python3 tasks
+blanket worker -t os:unix,exec:bash,runtime:python3
 
 # Validate that all configured task types have working executors
 blanket task-validate
@@ -140,7 +143,7 @@ Drop your own TOML files into the types directory and submit them
 the same way as the examples.
 
 ```toml
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 executor = "bash"
 command = "echo 'hello from blanket'"
 timeout = 300

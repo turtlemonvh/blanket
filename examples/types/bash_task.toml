@@ -18,7 +18,7 @@ so `$DEFAULT_COMMAND` works too — the difference matters when the value
 is set by the caller versus inherited from the worker's environment.
 '''
 
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 timeout = 300
 
 command = '''

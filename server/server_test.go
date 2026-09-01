@@ -18,7 +18,7 @@ import (
 
 const testConfig = `
 # https://npf.io/2014/08/intro-to-toml/
-tags = ["bash", "unix"]
+tags = ["exec:bash", "os:unix"]
 
 # timeout in seconds
 timeout = 200
@@ -177,7 +177,7 @@ func TestLaunchWorker_RejectsLowCheckInterval(t *testing.T) {
 	defer cleanup()
 	r := s.GetRouter()
 
-	body := []byte(`{"tags": ["bash"], "checkInterval": 0.1}`)
+	body := []byte(`{"tags": ["exec:bash"], "checkInterval": 0.1}`)
 	req, _ := http.NewRequest("POST", "/worker/", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
