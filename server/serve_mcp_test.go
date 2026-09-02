@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 )
 
@@ -204,4 +207,48 @@ func TestMcpWorkers_InvalidId(t *testing.T) {
 
 	_, _, err := s.mcpWorkers(context.Background(), nil, blanketWorkersArgs{Id: "not-an-id"})
 	assert.Error(t, err)
+}
+
+func TestMcpWriteTaskType_RejectsOnError(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	res, _, err := s.mcpWriteTaskType(context.Background(), nil, blanketWriteTaskTypeArgs{
+		Name: "broken_task",
+		Toml: `tags = ["bash"]`, // missing required 'command'
+	})
+	assert.NoError(t, err) // a validation failure is a tool-level result, not a Go error
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "refused to write")
+
+	typesDir := viper.GetStringSlice("tasks.typesPaths")[0]
+	_, statErr := os.Stat(path.Join(typesDir, "broken_task.toml"))
+	assert.True(t, os.IsNotExist(statErr), "file should not have been written")
+}
+
+func TestMcpWriteTaskType_WritesOnSuccess(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	res, _, err := s.mcpWriteTaskType(context.Background(), nil, blanketWriteTaskTypeArgs{
+		Name: "new_task",
+		Toml: "command = \"echo hi\"\nexecutor = \"bash\"\ntags = [\"exec:bash\"]\ndescription = \"says hi\"\ndocumentation = \"none needed\"\n",
+	})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "wrote")
+
+	typesDir := viper.GetStringSlice("tasks.typesPaths")[0]
+	_, statErr := os.Stat(path.Join(typesDir, "new_task.toml"))
+	assert.NoError(t, statErr)
+
+	// Immediately submittable — no restart needed, since tasks.ReadTypes()
+	// re-reads from disk on every request.
+	tt, err := tasks.FetchTaskType("new_task")
+	assert.NoError(t, err)
+	assert.Equal(t, "new_task", tt.GetName())
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -195,6 +196,64 @@ func (s *ServerConfig) mcpWorkers(ctx context.Context, req *mcp.CallToolRequest,
 	fmt.Fprintf(&b, "%-24s %-30s %-8s %s\n", "ID", "TAGS", "PID", "STOPPED")
 	for _, w := range ws {
 		fmt.Fprintf(&b, "%-24s %-30s %-8d %t\n", w.Id.Hex(), strings.Join(w.Tags, ","), w.Pid, w.Stopped)
+	}
+	return textResult(b.String())
+}
+
+type blanketWriteTaskTypeArgs struct {
+	Name string `json:"name" jsonschema:"task type name (without .toml)"`
+	Toml string `json:"toml" jsonschema:"full TOML contents of the task type"`
+}
+
+func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRequest, args blanketWriteTaskTypeArgs) (*mcp.CallToolResult, any, error) {
+	if args.Name == "" {
+		return nil, nil, fmt.Errorf("name is required")
+	}
+
+	tt, readErr := tasks.ReadTaskType(strings.NewReader(args.Toml))
+	tt.Config.Set("name", args.Name)
+
+	typesDirs := viper.GetStringSlice("tasks.typesPaths")
+	existing, _ := tasks.ReadTaskTypesForValidation(typesDirs)
+	tagIdx := tasks.BuildTagIndex(typesDirs, existing, tasks.KnownTagsOptions{})
+
+	findings := tasks.ValidateTaskType(&tt, readErr)
+	findings = append(findings, tasks.LintTags(&tt, tagIdx, tasks.TagLintOptions{})...)
+
+	strict := viper.GetBool("mcp.validateStrict")
+	blocking := false
+	for _, f := range findings {
+		if f.Level == tasks.LevelError || (strict && f.Level == tasks.LevelWarn) {
+			blocking = true
+			break
+		}
+	}
+
+	if blocking {
+		var b strings.Builder
+		fmt.Fprintf(&b, "refused to write %q: validation failed\n", args.Name)
+		for _, f := range findings {
+			fmt.Fprintf(&b, "%s %s: %s\n", f.Code, f.Level, f.Message)
+		}
+		return textResult(b.String())
+	}
+
+	writeDir := viper.GetString("mcp.writeTypesPath")
+	if writeDir == "" {
+		if len(typesDirs) == 0 {
+			return nil, nil, fmt.Errorf("no tasks.typesPaths configured to write into")
+		}
+		writeDir = typesDirs[0]
+	}
+	writePath := path.Join(writeDir, args.Name+".toml")
+	if err := os.WriteFile(writePath, []byte(args.Toml), 0644); err != nil {
+		return nil, nil, err
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "wrote %s\n", writePath)
+	for _, f := range findings {
+		fmt.Fprintf(&b, "%s %s: %s\n", f.Code, f.Level, f.Message)
 	}
 	return textResult(b.String())
 }

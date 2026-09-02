@@ -98,6 +98,10 @@ func (s *ServerConfig) registerCreateMCPTools(srv *mcp.Server, mode string) {
 	if !mcpModeAllows(mode, mcpTierCreate) {
 		return
 	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "blanket_write_task_type",
+		Description: "Validate and write a new task type TOML. Refuses to write on any validation error; see blanket_docs(page=\"authoring\") first.",
+	}, s.mcpWriteTaskType)
 }
 
 func (s *ServerConfig) registerDestructiveMCPTools(srv *mcp.Server, mode string) {
