@@ -50,6 +50,42 @@ type WorkerConf struct {
 	StartedTs     int64             `json:"startedTs"`
 }
 
+// buildDaemonCmd constructs the exec.Cmd used to relaunch this process as
+// a detached worker daemon (see the Daemon branch of Run, below). Forwards
+// the config file and port this process itself resolved via
+// InitializeConfig, so the daemonized child talks to the same server the
+// parent did instead of falling back to viper's own default resolution —
+// see https://github.com/turtlemonvh/blanket/issues/45. --port is always
+// forwarded (it has a default even with no config file); --config is only
+// forwarded when a config file was actually resolved, since an empty
+// value would make the child fail to parse its own flags.
+func (c *WorkerConf) buildDaemonCmd(path string) *exec.Cmd {
+	cmd := exec.Command(path, "worker")
+	if len(c.Tags) != 0 {
+		cmd.Args = append(cmd.Args, "--tags")
+		cmd.Args = append(cmd.Args, strings.Join(c.Tags, ","))
+	}
+	if !c.Id.IsZero() {
+		cmd.Args = append(cmd.Args, "--id")
+		cmd.Args = append(cmd.Args, c.Id.Hex())
+	}
+	if c.Logfile != "" {
+		cmd.Args = append(cmd.Args, "--logfile")
+		cmd.Args = append(cmd.Args, c.Logfile)
+	}
+	if c.CheckInterval != 0 {
+		cmd.Args = append(cmd.Args, "--checkinterval")
+		cmd.Args = append(cmd.Args, fmt.Sprintf("%f", c.CheckInterval))
+	}
+	if cfgFile := viper.ConfigFileUsed(); cfgFile != "" {
+		cmd.Args = append(cmd.Args, "--config")
+		cmd.Args = append(cmd.Args, cfgFile)
+	}
+	cmd.Args = append(cmd.Args, "--port")
+	cmd.Args = append(cmd.Args, fmt.Sprintf("%d", viper.GetInt("port")))
+	return cmd
+}
+
 // FIXME: Ensure this works ok on windows: https://golang.org/pkg/os/#Signal
 // FIXME: Make sure logging works fine with sighup for logrotate
 // https://en.wikipedia.org/wiki/Unix_signal#POSIX_signals
@@ -85,24 +121,7 @@ func (c *WorkerConf) Run() error {
 			"path": path,
 		}).Debug("Path to current executable is")
 
-		cmd := exec.Command(path, "worker")
-		if len(c.Tags) != 0 {
-			cmd.Args = append(cmd.Args, "--tags")
-			cmd.Args = append(cmd.Args, strings.Join(c.Tags, ","))
-		}
-		if !c.Id.IsZero() {
-			cmd.Args = append(cmd.Args, "--id")
-			cmd.Args = append(cmd.Args, c.Id.Hex())
-		}
-		if c.Logfile != "" {
-			cmd.Args = append(cmd.Args, "--logfile")
-			cmd.Args = append(cmd.Args, c.Logfile)
-		}
-		if c.CheckInterval != 0 {
-			cmd.Args = append(cmd.Args, "--checkinterval")
-			cmd.Args = append(cmd.Args, fmt.Sprintf("%f", c.CheckInterval))
-		}
-
+		cmd := c.buildDaemonCmd(path)
 		setDaemonAttrs(cmd)
 
 		// FIXME: Redirect the first couple seconds of stdout here to check that process started ok
