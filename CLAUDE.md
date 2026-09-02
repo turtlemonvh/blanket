@@ -13,7 +13,7 @@ binary invoked with different subcommands.
 
 ## Tech stack
 
-- **Go 1.23** (pinned in Dockerfile), `go.mod`-managed.
+- **Go 1.25** (pinned in Dockerfile), `go.mod`-managed.
 - **BoltDB** for storage (`lib/bolt`); internal queue abstraction at
   `lib/queue` + `lib/bolt/queue.go`.
 - **Gin** for HTTP routing; `//go:embed` bakes the UI into the binary.
@@ -84,6 +84,10 @@ has no Setpgid field, ...
 
 Match the repo's existing subject-line style; check `git log --oneline`
 if in doubt. Don't create commits without explicit user approval.
+
+Delete a branch (local and remote) once its PR is merged — don't leave
+merged branches sitting around. (Older merged branches predate this
+convention and were left as-is; this applies going forward.)
 
 ## Gotchas
 
