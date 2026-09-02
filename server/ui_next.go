@@ -528,7 +528,7 @@ func (s *ServerConfig) uiNextSubmitTask(c *gin.Context) {
 	// TOML (bad template, missing executor) first surfaces to a user
 	// rather than failing later at exec time. Errors block submission;
 	// warnings are logged but don't block, since there's no flash-message
-	// UI yet to surface them inline (tracked in docs/next_up.md).
+	// UI yet to surface them inline (tracked in turtlemonvh/blanket#64).
 	findings := tasks.ValidateTaskType(tt, nil)
 	var errMsgs []string
 	for _, f := range findings {

@@ -28,7 +28,8 @@ here go deeper.
 - [**Task flow**](task_flow.md) — task and worker state machines,
   end-to-end claim/execute lifecycle.
 - [**Design**](design.md) — origin, design goals, architecture.
-- [**Next up**](next_up.md) — running backlog of planned work.
+
+Planned work is tracked as [GitHub issues](https://github.com/turtlemonvh/blanket/issues), not in a docs file — see [issue #43](https://github.com/turtlemonvh/blanket/issues/43) for why.
 
 ## Where else to look
 

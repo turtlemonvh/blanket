@@ -34,9 +34,8 @@ binary invoked with different subcommands.
 - `testdata/types/echo_task.toml` — the minimal smoke-test fixture.
   Kept tiny on purpose; don't add examples here.
 - `docs/` — user and maintainer docs. Filenames are `snake_case.md`.
-  Index is `docs/README.md`.
-  - `docs/next_up.md` — the living backlog. Add/reorder items as priorities
-    shift. Entries must be self-contained so a cold reader can pick them up.
+  Index is `docs/README.md`. Planned/backlog work lives as GitHub issues,
+  not a docs file — there's no `docs/next_up.md` anymore (see #43).
   - `docs/api.md` — REST endpoint reference. **Keep in sync with
     `server/server.go`** — when you add, remove, or change a route,
     update `docs/api.md` in the same PR. Easy to drift; easy to catch
