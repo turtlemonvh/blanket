@@ -114,3 +114,58 @@ func TestMcpTaskTypes_UnknownName(t *testing.T) {
 	_, _, err := s.mcpTaskTypes(context.Background(), nil, blanketTaskTypesArgs{Name: "nope"})
 	assert.Error(t, err)
 }
+
+func TestMcpTasks_List(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	_, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+
+	res, _, err := s.mcpTasks(context.Background(), nil, blanketTasksArgs{})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "echo_task")
+	assert.Contains(t, text, "WAITING")
+}
+
+func TestMcpTasks_FilterByState(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	_, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+
+	res, _, err := s.mcpTasks(context.Background(), nil, blanketTasksArgs{States: []string{"RUNNING"}})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.NotContains(t, text, "echo_task")
+}
+
+func TestMcpTasks_Detail(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+
+	res, _, err := s.mcpTasks(context.Background(), nil, blanketTasksArgs{Id: tsk.Id.Hex()})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, tsk.Id.Hex())
+	assert.Contains(t, text, "log tail")
+}
+
+func TestMcpTasks_InvalidId(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpTasks(context.Background(), nil, blanketTasksArgs{Id: "not-an-id"})
+	assert.Error(t, err)
+}
