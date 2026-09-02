@@ -297,7 +297,7 @@ func (s *ServerConfig) cancelTask(c *gin.Context) {
 	case errors.Is(err, ErrTaskNotCancelable):
 		// Preserves the historical (non-404, non-2xx) response for a task
 		// that exists but can't be canceled from its current state — see
-		// docs/next_up.md "Normalize task-handler error status codes".
+		// turtlemonvh/blanket#49 "Normalize task-handler error status codes".
 		c.JSON(http.StatusNotImplemented, `{"error": "Functionality not implemented"}`)
 	default:
 		c.String(http.StatusNotFound, MakeErrorString(err.Error()))

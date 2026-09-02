@@ -26,7 +26,7 @@
 //   - cancel-then-still-try-to-run: ensure the worker observes the tombstone
 //     and refuses/stops the task cleanly
 //   - PUT /task/:id/progress: wrong-state rejection — the handler currently
-//     doesn't check state, see docs/next_up.md
+//     doesn't check state, see turtlemonvh/blanket#49
 
 package server
 
@@ -533,8 +533,8 @@ func TestFinishTask_MissingTask(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Current handler returns 400 for any DB error. docs/next_up.md tracks
-	// normalizing this to 404 for ItemNotFoundError.
+	// Current handler returns 400 for any DB error. turtlemonvh/blanket#49
+	// tracks normalizing this to 404 for ItemNotFoundError.
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
@@ -596,8 +596,8 @@ func TestUpdateProgress_MissingTask(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Current handler returns 500 for any DB error; docs/next_up.md tracks
-	// normalizing this to 404 for ItemNotFoundError.
+	// Current handler returns 500 for any DB error; turtlemonvh/blanket#49
+	// tracks normalizing this to 404 for ItemNotFoundError.
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
@@ -622,7 +622,7 @@ func TestClaim_MissingWorker(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	// Worker not in DB → handler returns 500 with a descriptive error string.
-	// Ideally this would be 404; tracked in docs/next_up.md.
+	// Ideally this would be 404; tracked in turtlemonvh/blanket#49.
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), "worker")
 }
