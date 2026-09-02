@@ -75,3 +75,14 @@ GET /version                    # build info as JSON
 GET /config/                    # processed server config
 GET /ops/status/                # runtime metrics (goroutines, memory, etc.)
 ```
+
+## MCP
+
+```
+ANY /mcp                        # MCP streamable-HTTP endpoint (JSON-RPC 2.0)
+```
+
+Mounted when `mcp.enabled` is true (default). See
+[mcp.md](mcp.md) for the tool list, setup instructions, and the
+security posture of the default (all-interfaces, `mcp.mode = "all"`)
+configuration.

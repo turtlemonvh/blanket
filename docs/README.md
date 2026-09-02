@@ -18,6 +18,8 @@ here go deeper.
   why tags are worker constraints rather than labels, and how to
   extend the vocabulary.
 - [**API**](api.md) — full list of REST endpoints.
+- [**MCP interface**](mcp.md) — tool list, setup (incl. Claude Code),
+  permissions, and the default security posture.
 - [**Offline install**](offline_install.md) — installing on machines
   with no internet access and only local-user permissions.
 
