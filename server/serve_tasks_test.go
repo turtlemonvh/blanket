@@ -32,6 +32,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
@@ -224,6 +225,52 @@ func TestPostTask_Valid(t *testing.T) {
 	assert.Equal(t, "echo_task", task["type"])
 	assert.Equal(t, "WAITING", task["state"])
 	assert.NotEmpty(t, task["id"])
+}
+
+func TestCreateTask_Valid(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+	assert.Equal(t, "echo_task", tsk.TypeId)
+	assert.Equal(t, "WAITING", tsk.State)
+
+	saved, err := s.DB.GetTask(tsk.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, tsk.Id, saved.Id)
+}
+
+func TestCreateTask_UnknownType(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, err := s.createTask(context.Background(), "does-not-exist", nil)
+	assert.Error(t, err)
+}
+
+func TestNewTaskForType_MissingRequiredEnv(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	typesDir, err := os.MkdirTemp("", "blanket-test-types-*")
+	assert.NoError(t, err)
+	defer os.RemoveAll(typesDir)
+	err = os.WriteFile(filepath.Join(typesDir, "needs_env.toml"), []byte(`
+command = "echo {{.MSG}}"
+executor = "bash"
+[[environment.required]]
+name = "MSG"
+`), 0644)
+	assert.NoError(t, err)
+	viper.Set("tasks.typesPaths", []string{typesDir})
+	defer viper.Set("tasks.typesPaths", nil)
+
+	_, err = s.newTaskForType("needs_env", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "required environment")
 }
 
 // --- GET /task/:id ---
