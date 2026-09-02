@@ -382,6 +382,53 @@ func TestCancelTask_Waiting(t *testing.T) {
 	assert.Equal(t, "STOPPED", stopped.State)
 }
 
+func TestCancelTaskById_Waiting(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+
+	err = s.cancelTaskById(context.Background(), tsk.Id)
+	assert.NoError(t, err)
+
+	updated, err := s.DB.GetTask(tsk.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", updated.State)
+}
+
+func TestCancelTaskById_AlreadyTerminal(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+	assert.NoError(t, s.DB.FinishTask(tsk.Id, "SUCCESS"))
+
+	err = s.cancelTaskById(context.Background(), tsk.Id)
+	assert.ErrorIs(t, err, ErrTaskNotCancelable)
+}
+
+func TestRemoveTaskById(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+
+	err = s.removeTaskById(context.Background(), tsk.Id)
+	assert.NoError(t, err)
+
+	_, err = s.DB.GetTask(tsk.Id)
+	assert.Error(t, err)
+}
+
 // --- PUT /task/:id/progress ---
 
 func TestUpdateProgress_InvalidValue(t *testing.T) {

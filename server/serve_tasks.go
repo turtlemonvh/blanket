@@ -43,6 +43,42 @@ func (s *ServerConfig) getTaskId(c *gin.Context) (objectid.ObjectId, error) {
 	return tid, err
 }
 
+// ErrTaskNotCancelable is returned by cancelTaskById when a task exists
+// but isn't in a state that can be canceled (only RUNNING and WAITING
+// are). Kept as a sentinel rather than a formatted error so callers (the
+// REST handler, MCP) can each decide how to present it.
+var ErrTaskNotCancelable = errors.New("task is not in a cancelable state (must be RUNNING or WAITING)")
+
+// cancelTaskById transitions a RUNNING or WAITING task to STOPPED.
+func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.ObjectId) error {
+	task, err := s.DB.GetTask(taskId)
+	if err != nil {
+		return err
+	}
+	if task.State != "RUNNING" && task.State != "WAITING" {
+		return ErrTaskNotCancelable
+	}
+	if err := s.DB.FinishTask(taskId, "STOPPED"); err != nil {
+		return err
+	}
+	s.TaskEvents.Notify()
+	return nil
+}
+
+// removeTaskById deletes a task from the database and its result
+// directory. Mirrors the historical removeTask semantics: deleting a
+// nonexistent task's result directory is not an error.
+func (s *ServerConfig) removeTaskById(ctx context.Context, taskId objectid.ObjectId) error {
+	if err := s.DB.DeleteTask(taskId); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(path.Join(s.ResultsPath, taskId.Hex())); err != nil {
+		return err
+	}
+	s.TaskEvents.Notify()
+	return nil
+}
+
 /*
  * Request handlers
  */
@@ -246,38 +282,25 @@ func (s *ServerConfig) markTaskAsRunning(c *gin.Context) {
 
 // Called for stopping
 func (s *ServerConfig) cancelTask(c *gin.Context) {
-	// Upsert in database, setting any item that has that Id to STOPPED state
 	c.Header("Content-Type", "application/json")
 
-	var err error
-	var taskId objectid.ObjectId
-	taskId, err = s.getTaskId(c)
+	taskId, err := s.getTaskId(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
-	var task tasks.Task
-	task, err = s.DB.GetTask(taskId)
-	if err != nil {
-		// Should already be there since we will write to db first before adding to queue
-		c.String(http.StatusNotFound, MakeErrorString(err.Error()))
-		return
-	}
-
-	if task.State == "RUNNING" || task.State == "WAITING" {
-		err = s.DB.FinishTask(taskId, "STOPPED")
-		if err != nil {
-			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
-			return
-		} else {
-			s.TaskEvents.Notify()
-			c.String(http.StatusOK, `{}`)
-			return
-		}
-	} else {
-		// If it doesn't exist in the database, the 'tombstone' will just have the taskId and state=STOPPED
+	err = s.cancelTaskById(c.Request.Context(), taskId)
+	switch {
+	case err == nil:
+		c.String(http.StatusOK, `{}`)
+	case errors.Is(err, ErrTaskNotCancelable):
+		// Preserves the historical (non-404, non-2xx) response for a task
+		// that exists but can't be canceled from its current state — see
+		// docs/next_up.md "Normalize task-handler error status codes".
 		c.JSON(http.StatusNotImplemented, `{"error": "Functionality not implemented"}`)
+	default:
+		c.String(http.StatusNotFound, MakeErrorString(err.Error()))
 	}
 }
 
@@ -504,31 +527,17 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 func (s *ServerConfig) removeTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
-	var err error
-	var taskId objectid.ObjectId
-
-	taskId, err = s.getTaskId(c)
+	taskId, err := s.getTaskId(c)
 	if err != nil {
 		return
 	}
 
-	err = s.DB.DeleteTask(taskId)
-	if err != nil {
+	if err := s.removeTaskById(c.Request.Context(), taskId); err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
 
-	// Remove result directory
-	// FIXME: Grab from json instead
-	err = os.RemoveAll(path.Join(s.ResultsPath, taskId.Hex()))
-	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
-		return
-	}
-
-	s.TaskEvents.Notify()
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
 }
 
