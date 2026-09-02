@@ -257,3 +257,16 @@ func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRe
 	}
 	return textResult(b.String())
 }
+
+type blanketSubmitTaskArgs struct {
+	Type string            `json:"type" jsonschema:"task type name"`
+	Env  map[string]string `json:"env,omitempty" jsonschema:"environment variables for this task"`
+}
+
+func (s *ServerConfig) mcpSubmitTask(ctx context.Context, req *mcp.CallToolRequest, args blanketSubmitTaskArgs) (*mcp.CallToolResult, any, error) {
+	t, err := s.createTask(ctx, args.Type, args.Env)
+	if err != nil {
+		return nil, nil, err
+	}
+	return textResult(fmt.Sprintf("submitted task %s (type=%s, state=%s)", t.Id.Hex(), t.TypeId, t.State))
+}

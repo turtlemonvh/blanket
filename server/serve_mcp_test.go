@@ -252,3 +252,24 @@ func TestMcpWriteTaskType_WritesOnSuccess(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "new_task", tt.GetName())
 }
+
+func TestMcpSubmitTask_Valid(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	res, _, err := s.mcpSubmitTask(context.Background(), nil, blanketSubmitTaskArgs{Type: "echo_task"})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "echo_task")
+	assert.Contains(t, text, "WAITING")
+}
+
+func TestMcpSubmitTask_UnknownType(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpSubmitTask(context.Background(), nil, blanketSubmitTaskArgs{Type: "nope"})
+	assert.Error(t, err)
+}

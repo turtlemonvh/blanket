@@ -102,6 +102,10 @@ func (s *ServerConfig) registerCreateMCPTools(srv *mcp.Server, mode string) {
 		Name:        "blanket_write_task_type",
 		Description: "Validate and write a new task type TOML. Refuses to write on any validation error; see blanket_docs(page=\"authoring\") first.",
 	}, s.mcpWriteTaskType)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "blanket_submit_task",
+		Description: "Submit (queue) a task of the given type. Requires an available worker whose tags are a superset of the type's tags to actually run.",
+	}, s.mcpSubmitTask)
 }
 
 func (s *ServerConfig) registerDestructiveMCPTools(srv *mcp.Server, mode string) {
