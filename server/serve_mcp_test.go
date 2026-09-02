@@ -371,3 +371,50 @@ func TestMcpStopWorker_WithDelete(t *testing.T) {
 	_, err = s.DB.GetWorker(w.Id)
 	assert.Error(t, err)
 }
+
+func TestMCPModeGating(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	defer viper.Set("mcp.mode", nil)
+
+	wantByMode := map[string][]string{
+		"readonly": {"blanket_docs", "blanket_task_types", "blanket_tasks", "blanket_workers"},
+		"create":   {"blanket_docs", "blanket_write_task_type", "blanket_submit_task", "blanket_launch_worker"},
+		"all":      {"blanket_cancel_task", "blanket_stop_worker"},
+	}
+
+	for mode, wantNames := range wantByMode {
+		viper.Set("mcp.mode", mode)
+		srv := s.buildMCPServer()
+
+		ctx := context.Background()
+		clientTransport, serverTransport := mcp.NewInMemoryTransports()
+		serverSession, err := srv.Connect(ctx, serverTransport, nil)
+		assert.NoError(t, err)
+
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client"}, nil)
+		clientSession, err := client.Connect(ctx, clientTransport, nil)
+		assert.NoError(t, err)
+
+		res, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{})
+		assert.NoError(t, err)
+
+		got := map[string]bool{}
+		for _, tool := range res.Tools {
+			got[tool.Name] = true
+		}
+		for _, name := range wantNames {
+			assert.True(t, got[name], "mode %q should include tool %q", mode, name)
+		}
+		if mode == "readonly" {
+			assert.False(t, got["blanket_submit_task"], "readonly mode should not include blanket_submit_task")
+			assert.False(t, got["blanket_cancel_task"], "readonly mode should not include blanket_cancel_task")
+		}
+		if mode == "create" {
+			assert.False(t, got["blanket_cancel_task"], "create mode should not include blanket_cancel_task")
+		}
+
+		clientSession.Close()
+		serverSession.Wait()
+	}
+}
