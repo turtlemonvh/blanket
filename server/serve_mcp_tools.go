@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -210,6 +211,9 @@ func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRe
 	if args.Name == "" {
 		return nil, nil, fmt.Errorf("name is required")
 	}
+	if strings.ContainsAny(args.Name, `/\`) || args.Name == "." || args.Name == ".." {
+		return nil, nil, fmt.Errorf("name must be a bare task type name, not a path")
+	}
 
 	tt, readErr := tasks.ReadTaskType(strings.NewReader(args.Toml))
 	tt.Config.Set("name", args.Name)
@@ -247,12 +251,18 @@ func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRe
 		writeDir = typesDirs[0]
 	}
 	writePath := path.Join(writeDir, args.Name+".toml")
+	_, statErr := os.Stat(writePath)
+	existed := statErr == nil
 	if err := os.WriteFile(writePath, []byte(args.Toml), 0644); err != nil {
 		return nil, nil, err
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "wrote %s\n", writePath)
+	if existed {
+		fmt.Fprintf(&b, "overwrote %s\n", writePath)
+	} else {
+		fmt.Fprintf(&b, "wrote %s\n", writePath)
+	}
 	for _, f := range findings {
 		fmt.Fprintf(&b, "%s %s: %s\n", f.Code, f.Level, f.Message)
 	}
@@ -309,11 +319,18 @@ func (s *ServerConfig) mcpCancelTask(ctx context.Context, req *mcp.CallToolReque
 	}
 	taskId := objectid.ObjectIdHex(args.Id)
 
-	if err := s.cancelTaskById(ctx, taskId); err != nil {
-		return nil, nil, err
+	cancelErr := s.cancelTaskById(ctx, taskId)
+	wasCanceled := cancelErr == nil
+	if cancelErr != nil && !(args.Delete && errors.Is(cancelErr, ErrTaskNotCancelable)) {
+		return nil, nil, cancelErr
 	}
 
-	msg := fmt.Sprintf("canceled task %s", taskId.Hex())
+	var msg string
+	if wasCanceled {
+		msg = fmt.Sprintf("canceled task %s", taskId.Hex())
+	} else {
+		msg = fmt.Sprintf("task %s was already in a terminal state, not canceled", taskId.Hex())
+	}
 	if args.Delete {
 		if err := s.removeTaskById(ctx, taskId); err != nil {
 			return nil, nil, err

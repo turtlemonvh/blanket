@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
 
@@ -33,6 +34,14 @@ func mcpModeAllows(mode string, t mcpToolTier) bool {
 	}
 }
 
+// mcpContextBudgetChars is a design tripwire, not a hard protocol limit —
+// the measured tools/list + Instructions size (currently ~3994 chars) is
+// close to this budget by design; nine tools' worth of descriptions is a
+// lean surface, not accumulated bloat. If a future addition trips
+// TestToolListFitsContextBudget, prefer moving prose into blanket_docs
+// over shaving wording that an agent actually needs to call a tool
+// correctly — see docs/superpowers/plans/2026-09-01-blanket-mcp-interface.md's
+// Context budget section for the full lever ordering.
 const mcpContextBudgetChars = 4000
 
 const mcpInstructions = `blanket runs shell tasks defined by TOML task types. To author a new task type: call blanket_docs(page="authoring") for the guide, then blanket_write_task_type to save and validate it. To run it: blanket_submit_task queues a task of that type, but it only runs once a worker is available whose tags are a superset of the type's tags -- use blanket_workers to check, blanket_launch_worker to start one. Check status and logs with blanket_tasks(id=...).`
@@ -61,6 +70,15 @@ func (s *ServerConfig) mcpHTTPHandler() http.Handler {
 	if !viper.GetBool("mcp.enabled") {
 		return nil
 	}
+
+	mode := viper.GetString("mcp.mode")
+	fields := log.Fields{"mode": mode}
+	if mode == "all" {
+		log.WithFields(fields).Warn("MCP server mounted at /mcp with mode=all — this exposes task-type write and worker-launch to any host that can reach this port")
+	} else {
+		log.WithFields(fields).Info("MCP server mounted at /mcp")
+	}
+
 	srv := s.buildMCPServer()
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return srv

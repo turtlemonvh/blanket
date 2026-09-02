@@ -229,6 +229,45 @@ func TestMcpWriteTaskType_RejectsOnError(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "file should not have been written")
 }
 
+func TestMcpWriteTaskType_RejectsPathTraversal(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	_, _, err := s.mcpWriteTaskType(context.Background(), nil, blanketWriteTaskTypeArgs{
+		Name: "../../../tmp/evil",
+		Toml: "command = \"echo hi\"\nexecutor = \"bash\"\ntags = [\"exec:bash\"]\ndescription = \"says hi\"\ndocumentation = \"none needed\"\n",
+	})
+	assert.Error(t, err, "path traversal in name should be a hard input-validation error, not a tool-level refusal")
+
+	_, statErr := os.Stat("/tmp/evil.toml")
+	assert.True(t, os.IsNotExist(statErr), "file should not have been written outside the configured types dir")
+}
+
+func TestMcpWriteTaskType_OverwriteMessage(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	toml1 := "command = \"echo hi\"\nexecutor = \"bash\"\ntags = [\"exec:bash\"]\ndescription = \"says hi\"\ndocumentation = \"none needed\"\n"
+	res, _, err := s.mcpWriteTaskType(context.Background(), nil, blanketWriteTaskTypeArgs{
+		Name: "overwrite_task",
+		Toml: toml1,
+	})
+	assert.NoError(t, err)
+	assert.Contains(t, res.Content[0].(*mcp.TextContent).Text, "wrote")
+
+	toml2 := "command = \"echo bye\"\nexecutor = \"bash\"\ntags = [\"exec:bash\"]\ndescription = \"says bye\"\ndocumentation = \"none needed\"\n"
+	res2, _, err := s.mcpWriteTaskType(context.Background(), nil, blanketWriteTaskTypeArgs{
+		Name: "overwrite_task",
+		Toml: toml2,
+	})
+	assert.NoError(t, err)
+	assert.Contains(t, res2.Content[0].(*mcp.TextContent).Text, "overwrote")
+}
+
 func TestMcpWriteTaskType_WritesOnSuccess(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()
@@ -283,24 +322,6 @@ func TestMcpLaunchWorker_RequiresTags(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestMcpLaunchWorker_RejectsLowCheckInterval(t *testing.T) {
-	// launchWorkerAndWait doesn't take a checkInterval arg from MCP callers
-	// (they always get the default), so this instead confirms the tool
-	// surfaces the underlying error path correctly when Count is invalid.
-	s, cleanup := NewTestServer()
-	defer cleanup()
-
-	_, _, err := s.mcpLaunchWorker(context.Background(), nil, blanketLaunchWorkerArgs{Tags: []string{"exec:bash"}, Count: -1})
-	// Count <= 0 defaults to 1, so this should not error on Count alone;
-	// asserts the default-normalization path doesn't panic or reject.
-	// (A real launch will fail fast in this sandboxed test environment for
-	// unrelated reasons -- e.g. no worker binary path -- so only assert
-	// no panic occurred; full launch behavior is covered by the REST-level
-	// TestLaunchWorker_RejectsLowCheckInterval and the unit-level
-	// TestLaunchWorkerAndWait_RejectsLowCheckInterval from Task 6.)
-	_ = err
-}
-
 func TestMcpCancelTask_Valid(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()
@@ -333,6 +354,24 @@ func TestMcpCancelTask_WithDelete(t *testing.T) {
 
 	_, err = s.DB.GetTask(tsk.Id)
 	assert.Error(t, err)
+}
+
+func TestMcpCancelTask_DeleteOnTerminalTask(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+	assert.NoError(t, s.DB.FinishTask(tsk.Id, "SUCCESS"))
+
+	res, _, err := s.mcpCancelTask(context.Background(), nil, blanketCancelTaskArgs{Id: tsk.Id.Hex(), Delete: true})
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+
+	_, err = s.DB.GetTask(tsk.Id)
+	assert.Error(t, err, "task should have been deleted even though it was already terminal")
 }
 
 func TestMcpCancelTask_InvalidId(t *testing.T) {

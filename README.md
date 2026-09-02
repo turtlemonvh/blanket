@@ -65,6 +65,8 @@ types, and the full REST API, see the [docs](docs/README.md):
   schema for authoring your own task types
 - [**API reference**](docs/api.md) — full list of REST endpoints
 - [**Task flow**](docs/task_flow.md) — task and worker state machines
+- [**MCP interface**](docs/mcp.md) — expose blanket to MCP clients (agents),
+  security considerations, and setup
 
 ## Contributing
 
