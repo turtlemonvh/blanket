@@ -106,6 +106,10 @@ func (s *ServerConfig) registerCreateMCPTools(srv *mcp.Server, mode string) {
 		Name:        "blanket_submit_task",
 		Description: "Submit (queue) a task of the given type. Requires an available worker whose tags are a superset of the type's tags to actually run.",
 	}, s.mcpSubmitTask)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "blanket_launch_worker",
+		Description: "Launch one or more workers with the given tags.",
+	}, s.mcpLaunchWorker)
 }
 
 func (s *ServerConfig) registerDestructiveMCPTools(srv *mcp.Server, mode string) {

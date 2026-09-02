@@ -14,6 +14,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
+	"github.com/turtlemonvh/blanket/worker"
 )
 
 // textResult wraps s as a successful single-text-block tool result. Every
@@ -269,4 +270,30 @@ func (s *ServerConfig) mcpSubmitTask(ctx context.Context, req *mcp.CallToolReque
 		return nil, nil, err
 	}
 	return textResult(fmt.Sprintf("submitted task %s (type=%s, state=%s)", t.Id.Hex(), t.TypeId, t.State))
+}
+
+type blanketLaunchWorkerArgs struct {
+	Tags  []string `json:"tags" jsonschema:"tags this worker can claim tasks for"`
+	Count int      `json:"count,omitempty" jsonschema:"number of workers to launch, default 1"`
+}
+
+func (s *ServerConfig) mcpLaunchWorker(ctx context.Context, req *mcp.CallToolRequest, args blanketLaunchWorkerArgs) (*mcp.CallToolResult, any, error) {
+	if len(args.Tags) == 0 {
+		return nil, nil, fmt.Errorf("tags is required")
+	}
+	count := args.Count
+	if count <= 0 {
+		count = 1
+	}
+
+	var b strings.Builder
+	for i := 0; i < count; i++ {
+		w := &worker.WorkerConf{Tags: args.Tags}
+		registered, err := s.launchWorkerAndWait(ctx, w)
+		if err != nil {
+			return nil, nil, err
+		}
+		fmt.Fprintf(&b, "launched worker %s (pid=%d, tags=%s)\n", registered.Id.Hex(), registered.Pid, strings.Join(registered.Tags, ","))
+	}
+	return textResult(b.String())
 }
