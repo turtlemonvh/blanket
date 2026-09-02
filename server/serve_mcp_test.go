@@ -10,6 +10,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/worker"
 )
 
 func TestMcpModeAllows(t *testing.T) {
@@ -167,5 +169,39 @@ func TestMcpTasks_InvalidId(t *testing.T) {
 	defer cleanup()
 
 	_, _, err := s.mcpTasks(context.Background(), nil, blanketTasksArgs{Id: "not-an-id"})
+	assert.Error(t, err)
+}
+
+func TestMcpWorkers_List(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}, Pid: 123}
+	assert.NoError(t, s.DB.UpdateWorker(&w))
+
+	res, _, err := s.mcpWorkers(context.Background(), nil, blanketWorkersArgs{})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, w.Id.Hex())
+}
+
+func TestMcpWorkers_Detail(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}, Pid: 123}
+	assert.NoError(t, s.DB.UpdateWorker(&w))
+
+	res, _, err := s.mcpWorkers(context.Background(), nil, blanketWorkersArgs{Id: w.Id.Hex()})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "pid: 123")
+}
+
+func TestMcpWorkers_InvalidId(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpWorkers(context.Background(), nil, blanketWorkersArgs{Id: "not-an-id"})
 	assert.Error(t, err)
 }

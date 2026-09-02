@@ -88,6 +88,10 @@ func (s *ServerConfig) registerReadonlyMCPTools(srv *mcp.Server, mode string) {
 		Name:        "blanket_tasks",
 		Description: "List tasks (filterable by state/type), or fetch one by id with a log tail.",
 	}, s.mcpTasks)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "blanket_workers",
+		Description: "List workers, or fetch one by id with a log tail.",
+	}, s.mcpWorkers)
 }
 
 func (s *ServerConfig) registerCreateMCPTools(srv *mcp.Server, mode string) {

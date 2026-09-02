@@ -156,3 +156,45 @@ func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, a
 	}
 	return textResult(b.String())
 }
+
+type blanketWorkersArgs struct {
+	Id       string `json:"id,omitempty" jsonschema:"worker id; if set, returns detail plus a log tail instead of a list"`
+	LogLines int    `json:"log_lines,omitempty" jsonschema:"log tail lines when id is set, default 50"`
+}
+
+func (s *ServerConfig) mcpWorkers(ctx context.Context, req *mcp.CallToolRequest, args blanketWorkersArgs) (*mcp.CallToolResult, any, error) {
+	if args.Id != "" {
+		if !objectid.IsObjectIdHex(args.Id) {
+			return nil, nil, fmt.Errorf("%q is not a valid worker id", args.Id)
+		}
+		workerId := objectid.ObjectIdHex(args.Id)
+		w, err := s.DB.GetWorker(workerId)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		logLines := clampLogLines(args.LogLines)
+		logTail, _ := tailLines(w.Logfile, logLines)
+
+		var b strings.Builder
+		fmt.Fprintf(&b, "id: %s\n", w.Id.Hex())
+		fmt.Fprintf(&b, "tags: %s\n", strings.Join(w.Tags, ", "))
+		fmt.Fprintf(&b, "pid: %d\n", w.Pid)
+		fmt.Fprintf(&b, "stopped: %t\n", w.Stopped)
+		fmt.Fprintf(&b, "checkInterval: %.1fs\n", w.CheckInterval)
+		fmt.Fprintf(&b, "startedTs: %d\n", w.StartedTs)
+		fmt.Fprintf(&b, "\n--- log tail (%d lines) ---\n%s", logLines, logTail)
+		return textResult(b.String())
+	}
+
+	ws, err := s.DB.GetWorkers()
+	if err != nil {
+		return nil, nil, err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-24s %-30s %-8s %s\n", "ID", "TAGS", "PID", "STOPPED")
+	for _, w := range ws {
+		fmt.Fprintf(&b, "%-24s %-30s %-8d %t\n", w.Id.Hex(), strings.Join(w.Tags, ","), w.Pid, w.Stopped)
+	}
+	return textResult(b.String())
+}
