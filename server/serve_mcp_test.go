@@ -1,6 +1,14 @@
 package server
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
+)
 
 func TestMcpModeAllows(t *testing.T) {
 	cases := []struct {
@@ -26,4 +34,31 @@ func TestMcpModeAllows(t *testing.T) {
 			t.Errorf("mcpModeAllows(%q, %v) = %v, want %v", c.mode, c.tier, got, c.want)
 		}
 	}
+}
+
+func TestMCPRouteMounted(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	viper.Set("mcp.enabled", true)
+	defer viper.Set("mcp.enabled", nil)
+
+	r := s.GetRouter()
+	req, _ := http.NewRequest("POST", "/mcp", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.NotEqual(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+}
+
+func TestMCPRouteNotMountedWhenDisabled(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	viper.Set("mcp.enabled", false)
+	defer viper.Set("mcp.enabled", nil)
+
+	r := s.GetRouter()
+	req, _ := http.NewRequest("POST", "/mcp", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
