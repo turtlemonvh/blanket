@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -417,4 +418,35 @@ func TestMCPModeGating(t *testing.T) {
 		clientSession.Close()
 		serverSession.Wait()
 	}
+}
+
+func TestToolListFitsContextBudget(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	viper.Set("mcp.mode", "all") // worst case: every tool registered
+	defer viper.Set("mcp.mode", nil)
+
+	srv := s.buildMCPServer()
+
+	ctx := context.Background()
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	serverSession, err := srv.Connect(ctx, serverTransport, nil)
+	assert.NoError(t, err)
+	defer serverSession.Wait()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	assert.NoError(t, err)
+	defer clientSession.Close()
+
+	res, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{})
+	assert.NoError(t, err)
+
+	toolsJSON, err := json.Marshal(res.Tools)
+	assert.NoError(t, err)
+
+	total := len(toolsJSON) + len(mcpInstructions)
+	t.Logf("tools/list (%d tools) + Instructions: %d characters (budget: %d)", len(res.Tools), total, mcpContextBudgetChars)
+	assert.LessOrEqual(t, total, mcpContextBudgetChars,
+		"tools/list + Instructions exceeds the %d-character budget; see docs/mcp.md's levers (trim jsonschema descriptions, shorten tool descriptions, move prose into blanket_docs)", mcpContextBudgetChars)
 }

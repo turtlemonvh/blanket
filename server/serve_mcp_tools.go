@@ -25,7 +25,7 @@ func textResult(s string) (*mcp.CallToolResult, any, error) {
 }
 
 type blanketDocsArgs struct {
-	Page string `json:"page" jsonschema:"doc page to fetch: overview, authoring, schema, tags, usage, api, or flow"`
+	Page string `json:"page" jsonschema:"doc page: overview, authoring, schema, tags, usage, api, or flow"`
 }
 
 func (s *ServerConfig) mcpDocs(ctx context.Context, req *mcp.CallToolRequest, args blanketDocsArgs) (*mcp.CallToolResult, any, error) {
@@ -89,11 +89,11 @@ func clampLogLines(n int) int {
 }
 
 type blanketTasksArgs struct {
-	Id       string   `json:"id,omitempty" jsonschema:"task id; if set, returns detail plus a log tail instead of a list"`
-	States   []string `json:"states,omitempty" jsonschema:"filter by task state (WAITING, CLAIMED, RUNNING, SUCCESS, ERROR, STOPPED, TIMEDOUT)"`
-	Types    []string `json:"types,omitempty" jsonschema:"filter by task type name"`
+	Id       string   `json:"id,omitempty" jsonschema:"task id; if set, returns detail with a log tail"`
+	States   []string `json:"states,omitempty" jsonschema:"filter by state (WAITING, CLAIMED, RUNNING, SUCCESS, ERROR, STOPPED, TIMEDOUT)"`
+	Types    []string `json:"types,omitempty" jsonschema:"filter by type name"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"max tasks to list, default 20, max 100"`
-	LogLines int      `json:"log_lines,omitempty" jsonschema:"log tail lines when id is set, default 50"`
+	LogLines int      `json:"log_lines,omitempty" jsonschema:"log tail lines when id set, default 50"`
 }
 
 func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, args blanketTasksArgs) (*mcp.CallToolResult, any, error) {
@@ -160,8 +160,8 @@ func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, a
 }
 
 type blanketWorkersArgs struct {
-	Id       string `json:"id,omitempty" jsonschema:"worker id; if set, returns detail plus a log tail instead of a list"`
-	LogLines int    `json:"log_lines,omitempty" jsonschema:"log tail lines when id is set, default 50"`
+	Id       string `json:"id,omitempty" jsonschema:"worker id; if set, returns detail with a log tail"`
+	LogLines int    `json:"log_lines,omitempty" jsonschema:"log tail lines when id set, default 50"`
 }
 
 func (s *ServerConfig) mcpWorkers(ctx context.Context, req *mcp.CallToolRequest, args blanketWorkersArgs) (*mcp.CallToolResult, any, error) {
@@ -203,7 +203,7 @@ func (s *ServerConfig) mcpWorkers(ctx context.Context, req *mcp.CallToolRequest,
 
 type blanketWriteTaskTypeArgs struct {
 	Name string `json:"name" jsonschema:"task type name (without .toml)"`
-	Toml string `json:"toml" jsonschema:"full TOML contents of the task type"`
+	Toml string `json:"toml" jsonschema:"TOML contents of the task type"`
 }
 
 func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRequest, args blanketWriteTaskTypeArgs) (*mcp.CallToolResult, any, error) {
@@ -261,7 +261,7 @@ func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRe
 
 type blanketSubmitTaskArgs struct {
 	Type string            `json:"type" jsonschema:"task type name"`
-	Env  map[string]string `json:"env,omitempty" jsonschema:"environment variables for this task"`
+	Env  map[string]string `json:"env,omitempty" jsonschema:"env vars for the task"`
 }
 
 func (s *ServerConfig) mcpSubmitTask(ctx context.Context, req *mcp.CallToolRequest, args blanketSubmitTaskArgs) (*mcp.CallToolResult, any, error) {
@@ -273,8 +273,8 @@ func (s *ServerConfig) mcpSubmitTask(ctx context.Context, req *mcp.CallToolReque
 }
 
 type blanketLaunchWorkerArgs struct {
-	Tags  []string `json:"tags" jsonschema:"tags this worker can claim tasks for"`
-	Count int      `json:"count,omitempty" jsonschema:"number of workers to launch, default 1"`
+	Tags  []string `json:"tags" jsonschema:"tags the worker can claim tasks for"`
+	Count int      `json:"count,omitempty" jsonschema:"workers to launch, default 1"`
 }
 
 func (s *ServerConfig) mcpLaunchWorker(ctx context.Context, req *mcp.CallToolRequest, args blanketLaunchWorkerArgs) (*mcp.CallToolResult, any, error) {
@@ -300,7 +300,7 @@ func (s *ServerConfig) mcpLaunchWorker(ctx context.Context, req *mcp.CallToolReq
 
 type blanketCancelTaskArgs struct {
 	Id     string `json:"id" jsonschema:"task id"`
-	Delete bool   `json:"delete,omitempty" jsonschema:"also delete the task and its result directory after canceling"`
+	Delete bool   `json:"delete,omitempty" jsonschema:"also delete the task and its result dir"`
 }
 
 func (s *ServerConfig) mcpCancelTask(ctx context.Context, req *mcp.CallToolRequest, args blanketCancelTaskArgs) (*mcp.CallToolResult, any, error) {
@@ -325,7 +325,7 @@ func (s *ServerConfig) mcpCancelTask(ctx context.Context, req *mcp.CallToolReque
 
 type blanketStopWorkerArgs struct {
 	Id     string `json:"id" jsonschema:"worker id"`
-	Delete bool   `json:"delete,omitempty" jsonschema:"also delete the worker record after stopping"`
+	Delete bool   `json:"delete,omitempty" jsonschema:"also delete the worker record"`
 }
 
 func (s *ServerConfig) mcpStopWorker(ctx context.Context, req *mcp.CallToolRequest, args blanketStopWorkerArgs) (*mcp.CallToolResult, any, error) {

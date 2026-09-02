@@ -78,15 +78,15 @@ func (s *ServerConfig) registerReadonlyMCPTools(srv *mcp.Server, mode string) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_docs",
-		Description: "Fetch a blanket documentation page (overview, authoring, schema, tags, usage, api, flow). Read 'authoring' before writing a new task type.",
+		Description: "Fetch a blanket doc page (overview, authoring, schema, tags, usage, api, flow). Read 'authoring' before writing a task type.",
 	}, s.mcpDocs)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_task_types",
-		Description: "List task types, or fetch one by name for full detail.",
+		Description: "List task types, or fetch one by name for detail.",
 	}, s.mcpTaskTypes)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_tasks",
-		Description: "List tasks (filterable by state/type), or fetch one by id with a log tail.",
+		Description: "List tasks (filter by state/type), or fetch one by id with a log tail.",
 	}, s.mcpTasks)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_workers",
@@ -100,15 +100,15 @@ func (s *ServerConfig) registerCreateMCPTools(srv *mcp.Server, mode string) {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_write_task_type",
-		Description: "Validate and write a new task type TOML. Refuses to write on any validation error; see blanket_docs(page=\"authoring\") first.",
+		Description: "Validate and write a task type TOML. Refuses on any validation error; see blanket_docs(page=\"authoring\") first.",
 	}, s.mcpWriteTaskType)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_submit_task",
-		Description: "Submit (queue) a task of the given type. Requires an available worker whose tags are a superset of the type's tags to actually run.",
+		Description: "Submit (queue) a task of the given type. Requires an available worker whose tags superset the type's tags to run.",
 	}, s.mcpSubmitTask)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_launch_worker",
-		Description: "Launch one or more workers with the given tags.",
+		Description: "Launch one or more workers with given tags.",
 	}, s.mcpLaunchWorker)
 }
 
@@ -118,10 +118,10 @@ func (s *ServerConfig) registerDestructiveMCPTools(srv *mcp.Server, mode string)
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_cancel_task",
-		Description: "Cancel a RUNNING or WAITING task, optionally deleting it (delete=true).",
+		Description: "Cancel a RUNNING or WAITING task, optionally delete (delete=true).",
 	}, s.mcpCancelTask)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_stop_worker",
-		Description: "Stop a worker after its current task finishes, optionally deleting its record (delete=true).",
+		Description: "Stop a worker after its current task finishes, optionally delete record (delete=true).",
 	}, s.mcpStopWorker)
 }
