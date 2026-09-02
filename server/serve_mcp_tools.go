@@ -297,3 +297,53 @@ func (s *ServerConfig) mcpLaunchWorker(ctx context.Context, req *mcp.CallToolReq
 	}
 	return textResult(b.String())
 }
+
+type blanketCancelTaskArgs struct {
+	Id     string `json:"id" jsonschema:"task id"`
+	Delete bool   `json:"delete,omitempty" jsonschema:"also delete the task and its result directory after canceling"`
+}
+
+func (s *ServerConfig) mcpCancelTask(ctx context.Context, req *mcp.CallToolRequest, args blanketCancelTaskArgs) (*mcp.CallToolResult, any, error) {
+	if !objectid.IsObjectIdHex(args.Id) {
+		return nil, nil, fmt.Errorf("%q is not a valid task id", args.Id)
+	}
+	taskId := objectid.ObjectIdHex(args.Id)
+
+	if err := s.cancelTaskById(ctx, taskId); err != nil {
+		return nil, nil, err
+	}
+
+	msg := fmt.Sprintf("canceled task %s", taskId.Hex())
+	if args.Delete {
+		if err := s.removeTaskById(ctx, taskId); err != nil {
+			return nil, nil, err
+		}
+		msg += " and deleted it"
+	}
+	return textResult(msg)
+}
+
+type blanketStopWorkerArgs struct {
+	Id     string `json:"id" jsonschema:"worker id"`
+	Delete bool   `json:"delete,omitempty" jsonschema:"also delete the worker record after stopping"`
+}
+
+func (s *ServerConfig) mcpStopWorker(ctx context.Context, req *mcp.CallToolRequest, args blanketStopWorkerArgs) (*mcp.CallToolResult, any, error) {
+	if !objectid.IsObjectIdHex(args.Id) {
+		return nil, nil, fmt.Errorf("%q is not a valid worker id", args.Id)
+	}
+	workerId := objectid.ObjectIdHex(args.Id)
+
+	if err := s.stopWorkerById(ctx, workerId); err != nil {
+		return nil, nil, err
+	}
+
+	msg := fmt.Sprintf("stopped worker %s", workerId.Hex())
+	if args.Delete {
+		if err := s.deleteWorkerById(ctx, workerId); err != nil {
+			return nil, nil, err
+		}
+		msg += " and deleted it"
+	}
+	return textResult(msg)
+}

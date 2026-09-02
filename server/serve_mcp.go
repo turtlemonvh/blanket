@@ -116,4 +116,12 @@ func (s *ServerConfig) registerDestructiveMCPTools(srv *mcp.Server, mode string)
 	if !mcpModeAllows(mode, mcpTierAll) {
 		return
 	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "blanket_cancel_task",
+		Description: "Cancel a RUNNING or WAITING task, optionally deleting it (delete=true).",
+	}, s.mcpCancelTask)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "blanket_stop_worker",
+		Description: "Stop a worker after its current task finishes, optionally deleting its record (delete=true).",
+	}, s.mcpStopWorker)
 }

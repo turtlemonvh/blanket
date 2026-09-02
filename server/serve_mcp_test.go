@@ -299,3 +299,75 @@ func TestMcpLaunchWorker_RejectsLowCheckInterval(t *testing.T) {
 	// TestLaunchWorkerAndWait_RejectsLowCheckInterval from Task 6.)
 	_ = err
 }
+
+func TestMcpCancelTask_Valid(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+
+	res, _, err := s.mcpCancelTask(context.Background(), nil, blanketCancelTaskArgs{Id: tsk.Id.Hex()})
+	assert.NoError(t, err)
+	assert.Contains(t, res.Content[0].(*mcp.TextContent).Text, "canceled")
+
+	updated, err := s.DB.GetTask(tsk.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", updated.State)
+}
+
+func TestMcpCancelTask_WithDelete(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+
+	_, _, err = s.mcpCancelTask(context.Background(), nil, blanketCancelTaskArgs{Id: tsk.Id.Hex(), Delete: true})
+	assert.NoError(t, err)
+
+	_, err = s.DB.GetTask(tsk.Id)
+	assert.Error(t, err)
+}
+
+func TestMcpCancelTask_InvalidId(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpCancelTask(context.Background(), nil, blanketCancelTaskArgs{Id: "not-an-id"})
+	assert.Error(t, err)
+}
+
+func TestMcpStopWorker_Valid(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}}
+	assert.NoError(t, s.DB.UpdateWorker(&w))
+
+	res, _, err := s.mcpStopWorker(context.Background(), nil, blanketStopWorkerArgs{Id: w.Id.Hex()})
+	assert.NoError(t, err)
+	assert.Contains(t, res.Content[0].(*mcp.TextContent).Text, "stopped")
+
+	updated, err := s.DB.GetWorker(w.Id)
+	assert.NoError(t, err)
+	assert.True(t, updated.Stopped)
+}
+
+func TestMcpStopWorker_WithDelete(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}}
+	assert.NoError(t, s.DB.UpdateWorker(&w))
+
+	_, _, err := s.mcpStopWorker(context.Background(), nil, blanketStopWorkerArgs{Id: w.Id.Hex(), Delete: true})
+	assert.NoError(t, err)
+
+	_, err = s.DB.GetWorker(w.Id)
+	assert.Error(t, err)
+}
