@@ -75,6 +75,21 @@ func (s *ServerConfig) updateWorker(c *gin.Context) {
 	c.String(http.StatusOK, "{}")
 }
 
+// stopWorkerById marks w as stopped; the worker's own poll loop observes
+// this and exits after its current task finishes.
+func (s *ServerConfig) stopWorkerById(ctx context.Context, workerId objectid.ObjectId) error {
+	w, err := s.DB.GetWorker(workerId)
+	if err != nil {
+		return err
+	}
+	w.Stopped = true
+	if err := s.DB.UpdateWorker(&w); err != nil {
+		return err
+	}
+	s.WorkerEvents.Notify()
+	return nil
+}
+
 // Put the worker in the "stopped" state
 // The worker will poll for this state
 // FIXME: Make this worker update atomic
@@ -89,20 +104,11 @@ func (s *ServerConfig) stopWorker(c *gin.Context) {
 		return
 	}
 
-	w, err := s.DB.GetWorker(workerId)
-	if err != nil {
+	if err := s.stopWorkerById(c.Request.Context(), workerId); err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
-	w.Stopped = true
-	err = s.DB.UpdateWorker(&w)
-	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
-		return
-	}
-
-	s.WorkerEvents.Notify()
 	c.String(http.StatusOK, `{}`)
 }
 
@@ -126,6 +132,17 @@ func (s *ServerConfig) restartWorker(c *gin.Context) {
 	s.launchWorker(c, &w)
 }
 
+// deleteWorkerById removes a worker's record from the database. Does not
+// check whether the worker is stopped — callers that need that guard
+// (deleteWorker below) check before calling in.
+func (s *ServerConfig) deleteWorkerById(ctx context.Context, workerId objectid.ObjectId) error {
+	if err := s.DB.DeleteWorker(workerId); err != nil {
+		return err
+	}
+	s.WorkerEvents.Notify()
+	return nil
+}
+
 // Remove the worker's record from the db if it exists
 // Should only be called by the worker itself as it is shutting down
 func (s *ServerConfig) deleteWorker(c *gin.Context) {
@@ -143,12 +160,10 @@ func (s *ServerConfig) deleteWorker(c *gin.Context) {
 		c.String(http.StatusBadRequest, `{"error": "Cannot delete a worker that has not been stopped"}`)
 	}
 
-	err = s.DB.DeleteWorker(workerId)
-	if err != nil {
+	if err := s.deleteWorkerById(c.Request.Context(), workerId); err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
-	s.WorkerEvents.Notify()
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId.Hex()))
 }
 
