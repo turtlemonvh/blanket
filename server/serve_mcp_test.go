@@ -82,3 +82,35 @@ func TestMcpDocs_UnknownPage(t *testing.T) {
 	_, _, err := s.mcpDocs(context.Background(), nil, blanketDocsArgs{Page: "nope"})
 	assert.Error(t, err)
 }
+
+func TestMcpTaskTypes_List(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	res, _, err := s.mcpTaskTypes(context.Background(), nil, blanketTaskTypesArgs{})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "echo_task")
+}
+
+func TestMcpTaskTypes_Detail(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	res, _, err := s.mcpTaskTypes(context.Background(), nil, blanketTaskTypesArgs{Name: "echo_task"})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "name: echo_task")
+}
+
+func TestMcpTaskTypes_UnknownName(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpTaskTypes(context.Background(), nil, blanketTaskTypesArgs{Name: "nope"})
+	assert.Error(t, err)
+}
