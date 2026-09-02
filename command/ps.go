@@ -60,7 +60,7 @@ func ListTasks() {
 
 	tmpl, err := template.New("tasks").Parse(psConf.Template)
 	if err != nil {
-		log.Fatalf(err.Error())
+		log.Fatalf("%s", err.Error())
 	}
 
 	// FIXME: Clean up formatting to make fields the same size
