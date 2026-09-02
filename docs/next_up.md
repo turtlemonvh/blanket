@@ -98,11 +98,6 @@ The HTMX + Go-template UI is now the only UI (Phase C complete — Angular,
   `bash` (or `claude` directly if installed), and tags like `["ai",
   "claude"]` so workers can opt in. Useful for: long-running refactors,
   scheduled audits, batch PR reviews, etc.
-- **MCP wrapper** — expose blanket as an MCP server so AI agents can
-  list/submit/inspect tasks as tools. Server lives alongside the REST
-  API (likely a new `blanket mcp` subcommand or a `/mcp` route). Tools
-  to surface: `submit_task`, `list_tasks`, `get_task`, `get_task_log`,
-  `cancel_task`, `list_task_types`. Auth and scoping TBD.
 - **Auto-start on install** — option in the install scripts to register
   blanket as a background service, so the server starts on login/boot.
   Per-platform: systemd user unit on Linux, `launchctl` plist on macOS,

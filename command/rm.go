@@ -42,11 +42,11 @@ func (c *RmConf) RemoveTask(taskId string) {
 	// Use RootConfig to decide what port to hit
 	req, err := http.NewRequest("DELETE", fmt.Sprintf("http://localhost:%d/task/%s", viper.GetInt("port"), taskId), nil)
 	if err != nil {
-		log.Fatalf(err.Error())
+		log.Fatalf("%s", err.Error())
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Fatalf(err.Error())
+		log.Fatalf("%s", err.Error())
 	}
 	defer resp.Body.Close()
 }
