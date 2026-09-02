@@ -76,6 +76,10 @@ func (s *ServerConfig) registerReadonlyMCPTools(srv *mcp.Server, mode string) {
 	if !mcpModeAllows(mode, mcpTierReadonly) {
 		return
 	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "blanket_docs",
+		Description: "Fetch a blanket documentation page (overview, authoring, schema, tags, usage, api, flow). Read 'authoring' before writing a new task type.",
+	}, s.mcpDocs)
 }
 
 func (s *ServerConfig) registerCreateMCPTools(srv *mcp.Server, mode string) {

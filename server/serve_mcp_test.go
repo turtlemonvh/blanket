@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 )
@@ -61,4 +63,22 @@ func TestMCPRouteNotMountedWhenDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestMcpDocs_KnownPage(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	res, _, err := s.mcpDocs(context.Background(), nil, blanketDocsArgs{Page: "overview"})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.NotEmpty(t, text)
+}
+
+func TestMcpDocs_UnknownPage(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpDocs(context.Background(), nil, blanketDocsArgs{Page: "nope"})
+	assert.Error(t, err)
 }
