@@ -351,7 +351,10 @@ func (s *ServerConfig) mcpStopWorker(ctx context.Context, req *mcp.CallToolReque
 	}
 	workerId := objectid.ObjectIdHex(args.Id)
 
-	if err := s.stopWorkerById(ctx, workerId); err != nil {
+	// force=false: the MCP tool schema is already near its context budget
+	// (see TestToolListFitsContextBudget), so the force option is exposed
+	// over the HTTP API (PUT /worker/:id/stop?force=true) but not here.
+	if err := s.stopWorkerById(ctx, workerId, false); err != nil {
 		return nil, nil, err
 	}
 

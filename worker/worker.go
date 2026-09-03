@@ -48,6 +48,11 @@ type WorkerConf struct {
 	Stopped       bool              `json:"stopped"`
 	CheckInterval float64           `json:"checkInterval"` // seconds
 	StartedTs     int64             `json:"startedTs"`
+	// LastHeardTs is the unix timestamp of the last time the server heard
+	// from (or acted on) this worker record — currently bumped when the
+	// worker is stopped. Intended to grow into a general heartbeat field;
+	// see the "not heartbeated in a while" FIXME on CleanupStalledWorkers.
+	LastHeardTs int64 `json:"lastHeardTs"`
 }
 
 // buildDaemonCmd constructs the exec.Cmd used to relaunch this process as
