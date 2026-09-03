@@ -44,7 +44,7 @@ some Windows users to install. Go was chosen for the rewrite since:
 ## Architecture
 
 * Go modules for dependency management
-* `//go:embed` for static files (see `server/ui_next.go`)
+* `//go:embed` for static files (see `server/ui.go`)
 * Server-rendered Go templates + [htmx](https://htmx.org/) for the web UI
 * BoltDB for storage; internal queue abstraction
 * Gin for HTTP routing
