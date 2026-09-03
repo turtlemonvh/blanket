@@ -21,7 +21,7 @@ const (
 	DEFAULT_TIMEOUT = 3600 // default timeout is 1 hour
 )
 
-var validConfigfileName = regexp.MustCompile(`(\w*).toml`)
+var validConfigfileName = regexp.MustCompile(`^\w+\.toml$`)
 
 // Task types are just a load of configuration loaded with viper with a few extra methods
 type TaskType struct {
@@ -67,7 +67,7 @@ func ReadTypes() ([]TaskType, error) {
 
 		for _, dirEntry := range dirEntries {
 			filepath := path.Join(typesDir, dirEntry.Name())
-			if !validConfigfileName.MatchString(filepath) {
+			if !validConfigfileName.MatchString(dirEntry.Name()) {
 				continue
 			}
 
@@ -111,7 +111,7 @@ func ReadTaskTypesForValidation(typesDirs []string) ([]TaskType, []error) {
 		}
 		for _, dirEntry := range dirEntries {
 			fp := path.Join(typesDir, dirEntry.Name())
-			if !validConfigfileName.MatchString(fp) {
+			if !validConfigfileName.MatchString(dirEntry.Name()) {
 				continue
 			}
 			tt, err := ReadTaskTypeFromFilepathForValidation(fp)
