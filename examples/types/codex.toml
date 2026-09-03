@@ -1,0 +1,70 @@
+# Drives the OpenAI Codex CLI non-interactively against a working
+# directory, mirroring examples/types/claude_code.toml for a second
+# AI-coding-agent backend — pick whichever type matches the CLI (and
+# credentials) your worker has installed.
+#
+# ASSUMPTION, unverified in this environment: the `codex` binary isn't
+# installed on the host this type was authored on, so the flags below
+# ("codex exec" as the non-interactive automation subcommand, and
+# --sandbox for its access level) come from public Codex CLI docs
+# rather than a live `codex --help`. Run `codex exec --help` on your
+# worker and adjust this command if your installed version differs
+# before relying on this in production.
+
+description = "Run the OpenAI Codex CLI non-interactively against a prompt in a target directory."
+
+documentation = '''
+Requires the `codex` CLI on the worker's $PATH, already authenticated
+(via `codex login` or an API key per the CLI's normal auth methods) —
+this task type does not handle login. Runs `codex exec "$PROMPT"` with
+the working directory changed to $WORKING_DIR first, so Codex operates
+on that checkout.
+
+ASSUMPTION: `codex exec` is documented as the Codex CLI's non-interactive
+"automation mode" subcommand, and --sandbox controls what it may touch
+without a human present to approve each step. SANDBOX_MODE defaults to
+"workspace-write" (can edit files under $WORKING_DIR, no network or
+access outside it); "read-only" is safer for an audit that should only
+report findings, "danger-full-access" removes the sandbox entirely and
+should only be used on a worker with no broader access than the target
+checkout. These flag names were not verified against a live `codex
+--help` in this environment — confirm them against your installed
+version before relying on this in production.
+
+Good for: long-running refactors, scheduled codebase audits, batch PR
+reviews — anything you'd run as `codex exec` from a terminal but want
+queued, logged, and retried by blanket instead. Set `timeout` well
+above the default 3600s for anything nontrivial; multi-file refactors
+can run for a long time.
+
+`task-validate` warns (code 005) that PROMPT and WORKING_DIR are never
+referenced by `command` — expected. They're deliberately consumed as
+`$PROMPT`/`$WORKING_DIR` (shell expansion at exec time) rather than
+`{{.PROMPT}}`/`{{.WORKING_DIR}}` (baked into the command string at
+submit time), so an arbitrary prompt containing quotes or backticks
+can't break out of the command's own quoting; the validator's
+reference check only looks for the `{{.VAR}}` form.
+'''
+
+tags = ["ai:codex", "exec:bash", "os:unix", "access:secrets", "resource:internet"]
+timeout = 14400
+
+command = '''
+set -euo pipefail
+cd "$WORKING_DIR"
+codex exec --sandbox "$SANDBOX_MODE" "$PROMPT"
+'''
+
+executor = "bash"
+
+  [[environment.required]]
+  name = "PROMPT"
+  description = "The instructions for Codex to execute non-interactively, e.g. 'Add table-driven tests for the queue package.'"
+
+  [[environment.required]]
+  name = "WORKING_DIR"
+  description = "Absolute path to the repo/checkout Codex should operate in. Must already exist on the worker host."
+
+  [[environment.default]]
+  name = "SANDBOX_MODE"
+  value = "workspace-write"

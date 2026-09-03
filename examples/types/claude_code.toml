@@ -1,0 +1,65 @@
+# Drives the Claude Code CLI non-interactively against a working
+# directory — long-running refactors, scheduled audits, batch PR
+# reviews, anything you'd normally kick off with `claude -p` from a
+# terminal but want queued and tracked through blanket instead.
+#
+# Verified against `claude --help` (Claude Code CLI v2.1.259): -p /
+# --print is the documented non-interactive single-prompt flag, and
+# --permission-mode accepts "acceptEdits" among its choices. Re-check
+# `claude --help` on your worker if you're on a very different CLI
+# version — flags do move between releases.
+
+description = "Run Claude Code non-interactively against a prompt in a target directory."
+
+documentation = '''
+Requires the `claude` CLI on the worker's $PATH, already authenticated
+(logged in, or an API key available via the CLI's normal auth methods)
+— this task type does not handle login. Runs `claude -p "$PROMPT"` with
+the working directory changed to $WORKING_DIR first, so Claude Code
+operates on that checkout.
+
+PERMISSION_MODE controls what Claude Code is allowed to do without a
+human present to answer prompts. The default, "acceptEdits", lets it
+edit files freely but still applies normal policy to other tools.
+"bypassPermissions" removes all prompting (recommended only on a
+worker sandboxed with no broader access than the target checkout);
+"plan" makes it read-only, useful for an audit that should only ever
+report findings. See `claude --help` for the full list of modes.
+
+Good for: long-running refactors, scheduled codebase audits, batch PR
+reviews — anything you'd run as `claude -p` from a terminal but want
+queued, logged, and retried by blanket instead. Set `timeout` well
+above the default 3600s for anything nontrivial; multi-file refactors
+can run for a long time.
+
+`task-validate` warns (code 005) that PROMPT and WORKING_DIR are never
+referenced by `command` — expected. They're deliberately consumed as
+`$PROMPT`/`$WORKING_DIR` (shell expansion at exec time) rather than
+`{{.PROMPT}}`/`{{.WORKING_DIR}}` (baked into the command string at
+submit time), so an arbitrary prompt containing quotes or backticks
+can't break out of the command's own quoting; the validator's
+reference check only looks for the `{{.VAR}}` form.
+'''
+
+tags = ["ai:claude", "exec:bash", "os:unix", "access:secrets", "resource:internet"]
+timeout = 14400
+
+command = '''
+set -euo pipefail
+cd "$WORKING_DIR"
+claude -p "$PROMPT" --permission-mode "$PERMISSION_MODE"
+'''
+
+executor = "bash"
+
+  [[environment.required]]
+  name = "PROMPT"
+  description = "The instructions for Claude Code to execute non-interactively, e.g. 'Refactor the auth package to use context.Context consistently.'"
+
+  [[environment.required]]
+  name = "WORKING_DIR"
+  description = "Absolute path to the repo/checkout Claude Code should operate in. Must already exist on the worker host."
+
+  [[environment.default]]
+  name = "PERMISSION_MODE"
+  value = "acceptEdits"
