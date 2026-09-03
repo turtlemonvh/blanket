@@ -18,6 +18,8 @@ here go deeper.
   why tags are worker constraints rather than labels, and how to
   extend the vocabulary.
 - [**API**](api.md) — full list of REST endpoints.
+- [**MCP interface**](mcp.md) — tool list, setup (incl. Claude Code),
+  permissions, and the default security posture.
 - [**Offline install**](offline_install.md) — installing on machines
   with no internet access and only local-user permissions.
 
@@ -26,7 +28,8 @@ here go deeper.
 - [**Task flow**](task_flow.md) — task and worker state machines,
   end-to-end claim/execute lifecycle.
 - [**Design**](design.md) — origin, design goals, architecture.
-- [**Next up**](next_up.md) — running backlog of planned work.
+
+Planned work is tracked as [GitHub issues](https://github.com/turtlemonvh/blanket/issues), not in a docs file — see [issue #43](https://github.com/turtlemonvh/blanket/issues/43) for why.
 
 ## Where else to look
 

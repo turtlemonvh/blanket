@@ -138,3 +138,53 @@ validate_json="$("$REPO_ROOT/$BINARY" --config "$WORKDIR/config.json" task-valid
     || fail "task-validate --json exited non-zero unexpectedly: $validate_json"
 echo "$validate_json" | jq -e 'type == "array"' > /dev/null \
     || fail "task-validate --json did not produce a JSON array: $validate_json"
+
+# MCP: initialize -> notifications/initialized -> tools/list -> tools/call
+# blanket_tasks. Confirms the streamable-HTTP handler is really mounted and
+# at least one tool round-trips end to end against the built binary (not
+# just in-process unit tests).
+#
+# Verified against a live server (curl -v): the go-sdk's streamable-HTTP
+# handler responds with Content-Type: text/event-stream and SSE-frames the
+# body as `event: message\ndata: {...json-rpc...}\n\n`, even for this
+# single, non-streaming reply -- NOT `Content-Type: application/json` as
+# might be assumed. The `grep -q '"..."'` checks below still work
+# unmodified because they substring-match the raw SSE body without caring
+# about the `event:`/`data:` framing around it. The Mcp-Session-Id response
+# header on `initialize` matched expectations exactly (case as shown).
+mcp_init_resp="$(curl -fsS -X POST "$BASE/mcp" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0.0.0"}}}')"
+echo "$mcp_init_resp" | grep -q '"protocolVersion"' \
+    || fail "MCP initialize response missing protocolVersion: $mcp_init_resp"
+
+mcp_session_id="$(curl -fsS -X POST "$BASE/mcp" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -D - -o /dev/null \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0.0.0"}}}' \
+    | grep -i '^mcp-session-id:' | tr -d '\r' | cut -d' ' -f2)"
+[[ -n "$mcp_session_id" ]] || fail "MCP initialize did not return an Mcp-Session-Id header"
+
+curl -fsS -X POST "$BASE/mcp" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H "Mcp-Session-Id: $mcp_session_id" \
+    -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null
+
+mcp_tools_resp="$(curl -fsS -X POST "$BASE/mcp" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H "Mcp-Session-Id: $mcp_session_id" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')"
+echo "$mcp_tools_resp" | grep -q '"blanket_tasks"' \
+    || fail "MCP tools/list missing blanket_tasks: $mcp_tools_resp"
+
+mcp_call_resp="$(curl -fsS -X POST "$BASE/mcp" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H "Mcp-Session-Id: $mcp_session_id" \
+    -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"blanket_tasks","arguments":{}}}')"
+echo "$mcp_call_resp" | grep -q '"content"' \
+    || fail "MCP tools/call blanket_tasks did not return content: $mcp_call_resp"

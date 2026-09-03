@@ -166,6 +166,10 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/worker/:id/log", s.streamWorkerLog)    // SSE stream of worker log
 	r.GET("/worker/:id/log/tail", s.tailWorkerLog) // last N lines of worker log
 
+	if h := s.mcpHTTPHandler(); h != nil {
+		r.Any("/mcp", gin.WrapH(h))
+	}
+
 	return r
 }
 

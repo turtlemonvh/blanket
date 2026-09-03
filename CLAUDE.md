@@ -13,7 +13,7 @@ binary invoked with different subcommands.
 
 ## Tech stack
 
-- **Go 1.23** (pinned in Dockerfile), `go.mod`-managed.
+- **Go 1.25** (pinned in Dockerfile), `go.mod`-managed.
 - **BoltDB** for storage (`lib/bolt`); internal queue abstraction at
   `lib/queue` + `lib/bolt/queue.go`.
 - **Gin** for HTTP routing; `//go:embed` bakes the UI into the binary.
@@ -34,10 +34,9 @@ binary invoked with different subcommands.
 - `testdata/types/echo_task.toml` — the minimal smoke-test fixture.
   Kept tiny on purpose; don't add examples here.
 - `docs/` — user and maintainer docs. Filenames are `snake_case.md`.
-  Index is `docs/README.md`.
-  - `docs/next_up.md` — narrative backlog notes only. **Not authoritative.**
-    GitHub issues + `status:` labels are the source of truth for what's
-    actionable — see "Issue workflow" below.
+  Index is `docs/README.md`. Planned/backlog work lives as GitHub issues
+  with `status:` labels, not a docs file — there's no `docs/next_up.md`
+  anymore (see #43). See "Issue workflow" below.
   - `docs/api.md` — REST endpoint reference. **Keep in sync with
     `server/server.go`** — when you add, remove, or change a route,
     update `docs/api.md` in the same PR. Easy to drift; easy to catch
@@ -85,6 +84,10 @@ has no Setpgid field, ...
 
 Match the repo's existing subject-line style; check `git log --oneline`
 if in doubt. Don't create commits without explicit user approval.
+
+Delete a branch (local and remote) once its PR is merged — don't leave
+merged branches sitting around. (Older merged branches predate this
+convention and were left as-is; this applies going forward.)
 
 ## Gotchas
 

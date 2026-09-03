@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +41,42 @@ func (s *ServerConfig) getTaskId(c *gin.Context) (objectid.ObjectId, error) {
 	}
 
 	return tid, err
+}
+
+// ErrTaskNotCancelable is returned by cancelTaskById when a task exists
+// but isn't in a state that can be canceled (only RUNNING and WAITING
+// are). Kept as a sentinel rather than a formatted error so callers (the
+// REST handler, MCP) can each decide how to present it.
+var ErrTaskNotCancelable = errors.New("task is not in a cancelable state (must be RUNNING or WAITING)")
+
+// cancelTaskById transitions a RUNNING or WAITING task to STOPPED.
+func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.ObjectId) error {
+	task, err := s.DB.GetTask(taskId)
+	if err != nil {
+		return err
+	}
+	if task.State != "RUNNING" && task.State != "WAITING" {
+		return ErrTaskNotCancelable
+	}
+	if err := s.DB.FinishTask(taskId, "STOPPED"); err != nil {
+		return err
+	}
+	s.TaskEvents.Notify()
+	return nil
+}
+
+// removeTaskById deletes a task from the database and its result
+// directory. Mirrors the historical removeTask semantics: deleting a
+// nonexistent task's result directory is not an error.
+func (s *ServerConfig) removeTaskById(ctx context.Context, taskId objectid.ObjectId) error {
+	if err := s.DB.DeleteTask(taskId); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(path.Join(s.ResultsPath, taskId.Hex())); err != nil {
+		return err
+	}
+	s.TaskEvents.Notify()
+	return nil
 }
 
 /*
@@ -245,38 +282,25 @@ func (s *ServerConfig) markTaskAsRunning(c *gin.Context) {
 
 // Called for stopping
 func (s *ServerConfig) cancelTask(c *gin.Context) {
-	// Upsert in database, setting any item that has that Id to STOPPED state
 	c.Header("Content-Type", "application/json")
 
-	var err error
-	var taskId objectid.ObjectId
-	taskId, err = s.getTaskId(c)
+	taskId, err := s.getTaskId(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
-	var task tasks.Task
-	task, err = s.DB.GetTask(taskId)
-	if err != nil {
-		// Should already be there since we will write to db first before adding to queue
-		c.String(http.StatusNotFound, MakeErrorString(err.Error()))
-		return
-	}
-
-	if task.State == "RUNNING" || task.State == "WAITING" {
-		err = s.DB.FinishTask(taskId, "STOPPED")
-		if err != nil {
-			c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
-			return
-		} else {
-			s.TaskEvents.Notify()
-			c.String(http.StatusOK, `{}`)
-			return
-		}
-	} else {
-		// If it doesn't exist in the database, the 'tombstone' will just have the taskId and state=STOPPED
+	err = s.cancelTaskById(c.Request.Context(), taskId)
+	switch {
+	case err == nil:
+		c.String(http.StatusOK, `{}`)
+	case errors.Is(err, ErrTaskNotCancelable):
+		// Preserves the historical (non-404, non-2xx) response for a task
+		// that exists but can't be canceled from its current state — see
+		// turtlemonvh/blanket#49 "Normalize task-handler error status codes".
 		c.JSON(http.StatusNotImplemented, `{"error": "Functionality not implemented"}`)
+	default:
+		c.String(http.StatusNotFound, MakeErrorString(err.Error()))
 	}
 }
 
@@ -342,6 +366,62 @@ func (s *ServerConfig) updateTaskProgress(c *gin.Context) {
 	c.String(http.StatusOK, "{}")
 }
 
+// newTaskForType loads typeName, validates env against its required
+// variables, and builds a Task ready to save — but does not save or queue
+// it. Split from enqueueTask so postTask can write uploaded files into the
+// task's ResultDir before the task becomes visible to workers: calling
+// enqueueTask first would let a worker claim and start running before the
+// upload finishes.
+func (s *ServerConfig) newTaskForType(typeName string, env map[string]string) (tasks.Task, error) {
+	tt, err := tasks.FetchTaskType(typeName)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+
+	if len(env) > 0 {
+		var missingVars []string
+		for varName := range tt.RequiredEnv() {
+			if env[varName] == "" {
+				missingVars = append(missingVars, varName)
+			}
+		}
+		if len(missingVars) > 0 {
+			return tasks.Task{}, fmt.Errorf("missing environment variables required for this task type: %v", missingVars)
+		}
+	} else if tt.HasRequiredEnv() {
+		return tasks.Task{}, fmt.Errorf("the task type %q has required environment variables; 'environment' must be set and contain these values", tt.GetName())
+	}
+
+	return tt.NewTask(env)
+}
+
+// enqueueTask saves t to the database and pushes it onto the queue, making
+// it visible to workers. Call after any pre-run setup (e.g. writing
+// uploaded files into t.ResultDir) is complete.
+func (s *ServerConfig) enqueueTask(ctx context.Context, t *tasks.Task) error {
+	if err := s.DB.SaveTask(t); err != nil {
+		return fmt.Errorf("error saving to database: %w", err)
+	}
+	if err := s.Q.AddTask(t); err != nil {
+		return err
+	}
+	s.TaskEvents.Notify()
+	return nil
+}
+
+// createTask is newTaskForType + enqueueTask, for callers with no files to
+// write in between.
+func (s *ServerConfig) createTask(ctx context.Context, typeName string, env map[string]string) (tasks.Task, error) {
+	t, err := s.newTaskForType(typeName, env)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if err := s.enqueueTask(ctx, &t); err != nil {
+		return tasks.Task{}, err
+	}
+	return t, nil
+}
+
 // TESTME
 // FIXME: Also grab extra tags, e.g. machine specific tag
 func (s *ServerConfig) postTask(c *gin.Context) {
@@ -387,14 +467,8 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 		return
 	}
 
-	// Load task type
-	tt, err := tasks.FetchTaskType(cast.ToString(req["type"]))
-	if err != nil {
-		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
-		return
-	}
+	typeName := cast.ToString(req["type"])
 
-	// Load environment variables
 	envVars := make(map[string]string)
 	if req["environment"] != nil {
 		envVars = cast.ToStringMapString(req["environment"])
@@ -402,31 +476,9 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 			c.String(http.StatusBadRequest, MakeErrorString("The 'environment' parameter must be a map of string keys to string values."))
 			return
 		}
-
-		// Check that required variables are set
-		var missingVars []string
-		for varName, _ := range tt.RequiredEnv() {
-			if envVars[varName] == "" {
-				missingVars = append(missingVars, varName)
-			}
-
-			// FIXME: Check types of variables, maybe by checking that they can be cast to that type then back to string with no loss
-		}
-		if len(missingVars) > 0 {
-			errMsg := fmt.Sprintf("Missing environment variables required for this task type: %s", missingVars)
-			c.String(http.StatusBadRequest, MakeErrorString(errMsg))
-			return
-		}
-
-	} else if tt.HasRequiredEnv() {
-		// Environment not set but we have required fields
-		errMsg := fmt.Sprintf("The task type '%s' has required environment variables. The 'environment' parameter must be set and contain these values.", tt.GetName())
-		c.String(http.StatusBadRequest, MakeErrorString(errMsg))
-		return
 	}
 
-	// Create task object
-	t, err := tt.NewTask(envVars)
+	t, err := s.newTaskForType(typeName, envVars)
 	if err != nil {
 		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
@@ -434,14 +486,13 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 
 	// Read any uploaded files
 	if c.Request.MultipartForm != nil {
-		// Create output dir to put files in
 		err = os.MkdirAll(t.ResultDir, os.ModePerm)
 		if err != nil {
 			c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 			return
 		}
 
-		for filename, _ := range c.Request.MultipartForm.File {
+		for filename := range c.Request.MultipartForm.File {
 			if filename == "data" {
 				continue
 			}
@@ -454,26 +505,20 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 			defer uploadedFile.Close()
 
 			writtenUploadedFile, err := os.Create(path.Join(t.ResultDir, filename))
+			if err != nil {
+				c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+				return
+			}
 			defer writtenUploadedFile.Close()
 			io.Copy(writtenUploadedFile, uploadedFile)
 		}
 	}
 
-	// Add to database
-	err = s.DB.SaveTask(&t)
-	if err != nil {
-		errMsg := fmt.Sprintf("Error saving to database :: %s", err.Error())
-		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
-	}
-
-	// Add to queue
-	err = s.Q.AddTask(&t)
-	if err != nil {
+	if err := s.enqueueTask(c.Request.Context(), &t); err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
-	s.TaskEvents.Notify()
 	c.JSON(http.StatusCreated, t)
 }
 
@@ -482,31 +527,17 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 func (s *ServerConfig) removeTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
-	var err error
-	var taskId objectid.ObjectId
-
-	taskId, err = s.getTaskId(c)
+	taskId, err := s.getTaskId(c)
 	if err != nil {
 		return
 	}
 
-	err = s.DB.DeleteTask(taskId)
-	if err != nil {
+	if err := s.removeTaskById(c.Request.Context(), taskId); err != nil {
 		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
 		c.String(http.StatusInternalServerError, errMsg)
 		return
 	}
 
-	// Remove result directory
-	// FIXME: Grab from json instead
-	err = os.RemoveAll(path.Join(s.ResultsPath, taskId.Hex()))
-	if err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
-		return
-	}
-
-	s.TaskEvents.Notify()
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
 }
 

@@ -26,12 +26,13 @@
 //   - cancel-then-still-try-to-run: ensure the worker observes the tombstone
 //     and refuses/stops the task cleanly
 //   - PUT /task/:id/progress: wrong-state rejection — the handler currently
-//     doesn't check state, see docs/next_up.md
+//     doesn't check state, see turtlemonvh/blanket#49
 
 package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
@@ -226,6 +227,52 @@ func TestPostTask_Valid(t *testing.T) {
 	assert.NotEmpty(t, task["id"])
 }
 
+func TestCreateTask_Valid(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+	assert.Equal(t, "echo_task", tsk.TypeId)
+	assert.Equal(t, "WAITING", tsk.State)
+
+	saved, err := s.DB.GetTask(tsk.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, tsk.Id, saved.Id)
+}
+
+func TestCreateTask_UnknownType(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, err := s.createTask(context.Background(), "does-not-exist", nil)
+	assert.Error(t, err)
+}
+
+func TestNewTaskForType_MissingRequiredEnv(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	typesDir, err := os.MkdirTemp("", "blanket-test-types-*")
+	assert.NoError(t, err)
+	defer os.RemoveAll(typesDir)
+	err = os.WriteFile(filepath.Join(typesDir, "needs_env.toml"), []byte(`
+command = "echo {{.MSG}}"
+executor = "bash"
+[[environment.required]]
+name = "MSG"
+`), 0644)
+	assert.NoError(t, err)
+	viper.Set("tasks.typesPaths", []string{typesDir})
+	defer viper.Set("tasks.typesPaths", nil)
+
+	_, err = s.newTaskForType("needs_env", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "required environment")
+}
+
 // --- GET /task/:id ---
 
 func TestGetTask_InvalidId(t *testing.T) {
@@ -335,6 +382,53 @@ func TestCancelTask_Waiting(t *testing.T) {
 	assert.Equal(t, "STOPPED", stopped.State)
 }
 
+func TestCancelTaskById_Waiting(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+
+	err = s.cancelTaskById(context.Background(), tsk.Id)
+	assert.NoError(t, err)
+
+	updated, err := s.DB.GetTask(tsk.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", updated.State)
+}
+
+func TestCancelTaskById_AlreadyTerminal(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+	assert.NoError(t, s.DB.FinishTask(tsk.Id, "SUCCESS"))
+
+	err = s.cancelTaskById(context.Background(), tsk.Id)
+	assert.ErrorIs(t, err, ErrTaskNotCancelable)
+}
+
+func TestRemoveTaskById(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	tsk, err := s.createTask(context.Background(), "echo_task", nil)
+	assert.NoError(t, err)
+
+	err = s.removeTaskById(context.Background(), tsk.Id)
+	assert.NoError(t, err)
+
+	_, err = s.DB.GetTask(tsk.Id)
+	assert.Error(t, err)
+}
+
 // --- PUT /task/:id/progress ---
 
 func TestUpdateProgress_InvalidValue(t *testing.T) {
@@ -439,8 +533,8 @@ func TestFinishTask_MissingTask(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Current handler returns 400 for any DB error. docs/next_up.md tracks
-	// normalizing this to 404 for ItemNotFoundError.
+	// Current handler returns 400 for any DB error. turtlemonvh/blanket#49
+	// tracks normalizing this to 404 for ItemNotFoundError.
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
@@ -502,8 +596,8 @@ func TestUpdateProgress_MissingTask(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Current handler returns 500 for any DB error; docs/next_up.md tracks
-	// normalizing this to 404 for ItemNotFoundError.
+	// Current handler returns 500 for any DB error; turtlemonvh/blanket#49
+	// tracks normalizing this to 404 for ItemNotFoundError.
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
@@ -528,7 +622,7 @@ func TestClaim_MissingWorker(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	// Worker not in DB → handler returns 500 with a descriptive error string.
-	// Ideally this would be 404; tracked in docs/next_up.md.
+	// Ideally this would be 404; tracked in turtlemonvh/blanket#49.
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), "worker")
 }

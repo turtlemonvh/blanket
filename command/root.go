@@ -57,6 +57,11 @@ func InitializeConfig() {
 	// FIXME: Why is this a slice? It makes sending a target result dir to a client pretty tough.
 	viper.SetDefault("tasks.resultsPath", []string{"results"})
 	viper.SetDefault("workers.logfileNameTemplate", "worker.{{.Id.Hex}}.log")
+	viper.SetDefault("mcp.enabled", true)
+	viper.SetDefault("mcp.mode", "all")
+	viper.SetDefault("mcp.writeTypesPath", "")
+	viper.SetDefault("mcp.validateStrict", false)
+	viper.SetDefault("mcp.maxLogLines", 200)
 
 	// Time multiplier can be used in tests to speed up tests
 	viper.SetDefault("timeMultiplier", "1.0")
