@@ -18,6 +18,11 @@
         <span class="spacer"></span>
         <span class="muted">htmx scaffold</span>
     </nav>
+    <div id="flash-area" class="flash-area"
+         hx-trigger="task-type-warnings from:body"
+         hx-get="/ui/partials/task-type-warnings"
+         hx-vals="js:{type: event.detail.type}"
+         hx-swap="none"></div>
     <main>
         {{template "content" .}}
     </main>

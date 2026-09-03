@@ -97,3 +97,36 @@ tr:hover td { background: #fafbfc; }
 .muted { color: var(--muted); }
 .row-actions a { margin-right: 0.5rem; cursor: pointer; color: var(--accent); }
 .row-actions a.danger { color: var(--danger); }
+
+.flash-area {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+}
+.flash-area:empty { display: none; }
+.flash {
+  position: relative;
+  margin-top: 1rem;
+  padding: 0.6rem 2rem 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+.flash-warning {
+  background: #fff6e0;
+  border-color: #ead59a;
+  color: var(--warn);
+}
+.flash ul { margin: 0.35rem 0 0; padding-left: 1.25rem; }
+.flash-dismiss {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.5rem;
+  border: none;
+  background: transparent;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  color: inherit;
+  padding: 0.1rem 0.35rem;
+}
