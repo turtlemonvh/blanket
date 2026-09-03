@@ -177,7 +177,7 @@ func (s *ServerConfig) claimTask(c *gin.Context) {
 			"workerId": workerId,
 		}).Debug(errMsg)
 		errMsg = MakeErrorString(fmt.Sprintf("%s :: %s", errMsg, err.Error()))
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(statusForDBError(err, http.StatusInternalServerError), errMsg)
 		return
 	}
 
@@ -361,7 +361,10 @@ func (s *ServerConfig) markTaskAsFinished(c *gin.Context) {
 
 	err = s.DB.FinishTask(taskId, newState)
 	if err != nil {
-		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
+		// A missing task id maps to 404; any other FinishTask error (e.g. the
+		// task isn't in a state it can be finished from) keeps the historical
+		// 400.
+		c.String(statusForDBError(err, http.StatusBadRequest), MakeErrorString(err.Error()))
 		return
 	}
 
@@ -379,17 +382,30 @@ func (s *ServerConfig) updateTaskProgress(c *gin.Context) {
 		return
 	}
 
-	// FIXME: Ensure it is in the running state
-
 	progress, err := cast.ToIntE(c.Query("progress"))
 	if err != nil || progress > 100 || progress < 0 {
 		c.String(http.StatusBadRequest, MakeErrorString("The required parameter 'progress' is not a valid integer between 0 and 100."))
 		return
 	}
 
+	// Ensure the task exists and is in the RUNNING state before touching its
+	// progress. A missing id maps to 404; a task that exists but isn't
+	// RUNNING (e.g. it's already terminal) is rejected with 400 rather than
+	// silently accepted.
+	task, err := s.DB.GetTask(taskId)
+	if err != nil {
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
+		return
+	}
+	if task.State != "RUNNING" {
+		errMsg := fmt.Sprintf("Cannot update progress on task '%s': task is in state '%s', not RUNNING", taskId.Hex(), task.State)
+		c.String(http.StatusBadRequest, MakeErrorString(errMsg))
+		return
+	}
+
 	err = s.DB.UpdateTaskProgress(taskId, progress)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
 		return
 	}
 	c.String(http.StatusOK, "{}")
