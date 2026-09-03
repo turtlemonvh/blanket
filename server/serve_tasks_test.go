@@ -10,6 +10,7 @@
 //   - PUT /task/:id/progress (valid + out-of-range): TestUpdateProgress_Valid,
 //     TestUpdateProgress_InvalidValue
 //   - PUT /task/:id/progress (missing task): TestUpdateProgress_MissingTask
+//   - PUT /task/:id/progress (wrong state): TestUpdateProgress_WrongState
 //   - PUT /task/:id/finish: TestFinishTask_Valid, TestFinishTask_MissingTask,
 //     TestFinishTask_WrongState, TestFinishTask_InvalidState
 //   - POST /task/claim/:workerid edges: TestClaim_MissingWorker,
@@ -25,8 +26,6 @@
 //     and should signal the worker)
 //   - cancel-then-still-try-to-run: ensure the worker observes the tombstone
 //     and refuses/stops the task cleanly
-//   - PUT /task/:id/progress: wrong-state rejection — the handler currently
-//     doesn't check state, see turtlemonvh/blanket#49
 
 package server
 
@@ -462,10 +461,46 @@ func TestUpdateProgress_Valid(t *testing.T) {
 	var createdTask tasks.Task
 	json.Unmarshal(created.Body.Bytes(), &createdTask)
 
+	// Progress updates are only accepted for RUNNING tasks; move it there
+	// directly since going through claim+run isn't the point of this test.
+	createdTask.State = "RUNNING"
+	assert.NoError(t, s.DB.SaveTask(&createdTask))
+
 	req, _ := http.NewRequest("PUT", fmt.Sprintf("/task/%s/progress?progress=50", createdTask.Id.Hex()), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestUpdateProgress_WrongState(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	// Create then cancel so the task is in STOPPED (terminal) state.
+	created := postTask(r, "echo_task")
+	var createdTask tasks.Task
+	json.Unmarshal(created.Body.Bytes(), &createdTask)
+
+	cancelReq, _ := http.NewRequest("PUT", fmt.Sprintf("/task/%s/cancel", createdTask.Id.Hex()), nil)
+	cancelW := httptest.NewRecorder()
+	r.ServeHTTP(cancelW, cancelReq)
+	assert.Equal(t, http.StatusOK, cancelW.Code)
+
+	// A progress update on a terminal task should be rejected, not silently
+	// accepted. Regression test for turtlemonvh/blanket#49.
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("/task/%s/progress?progress=50", createdTask.Id.Hex()), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	got, err := s.DB.GetTask(createdTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", got.State)
+	assert.NotEqual(t, 50, got.Progress)
 }
 
 // --- GET /task/ with filters ---
@@ -533,9 +568,8 @@ func TestFinishTask_MissingTask(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Current handler returns 400 for any DB error. turtlemonvh/blanket#49
-	// tracks normalizing this to 404 for ItemNotFoundError.
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	// Missing task id maps to 404 via database.ItemNotFoundError.
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestFinishTask_WrongState(t *testing.T) {
@@ -596,9 +630,8 @@ func TestUpdateProgress_MissingTask(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Current handler returns 500 for any DB error; turtlemonvh/blanket#49
-	// tracks normalizing this to 404 for ItemNotFoundError.
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	// Missing task id maps to 404 via database.ItemNotFoundError.
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 // --- POST /task/claim/:workerid ---
@@ -621,9 +654,9 @@ func TestClaim_MissingWorker(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Worker not in DB → handler returns 500 with a descriptive error string.
-	// Ideally this would be 404; tracked in turtlemonvh/blanket#49.
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	// Worker not in DB maps to 404 via database.ItemNotFoundError, with a
+	// descriptive error string.
+	assert.Equal(t, http.StatusNotFound, w.Code)
 	assert.Contains(t, w.Body.String(), "worker")
 }
 
