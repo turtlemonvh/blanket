@@ -158,6 +158,37 @@ test.describe('Submit task via UI', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0].type).toBe('echo_task');
   });
+
+  test('task-type validation warnings surface as a dismissible flash message', async ({
+    page,
+    request,
+  }) => {
+    await page.goto('/ui/');
+
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    const typeSelect = page.getByLabel(/new task type/i);
+    await expect(typeSelect).toBeVisible();
+    await typeSelect.selectOption({ label: 'echo_task' });
+    await page.getByRole('button', { name: /launch task/i }).click();
+
+    // testdata/types/echo_task.toml has neither a description nor
+    // documentation, which tasks.ValidateTaskType flags as warnings (codes
+    // 006/007). Warnings must not block submission, but should surface to
+    // the user rather than only going to the server log (#64).
+    const flash = page.getByRole('alert');
+    await expect(flash).toContainText(/warnings/i);
+    await expect(flash).toContainText('description is missing');
+    await expect(flash).toContainText('documentation is missing');
+
+    const res = await request.get('/task/');
+    const tasks = (await res.json()) as Array<{ type: string }>;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].type).toBe('echo_task');
+
+    // Dismissible.
+    await page.getByRole('button', { name: /dismiss warnings/i }).click();
+    await expect(flash).toHaveCount(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,32 @@
+{{/*
+flash-oob is an out-of-band swap that replaces the *contents* of #flash-area
+(see _layout.html) with any warning-level findings, wherever #flash-area
+lives in the current page. It's rendered by uiTaskTypeWarningsPartial, a
+follow-up GET fired by the "task-type-warnings" HX-Trigger event set on the
+task-create response (see triggerTaskTypeWarnings in ui.go).
+
+The outer <div> here is a disposable carrier, not the target: htmx's
+"innerHTML:#flash-area" swap style moves this div's *children* into the
+live #flash-area element and discards the wrapper. That matters because
+#flash-area's own hx-trigger/hx-get keep it listening for the next
+submission — an outerHTML swap would replace the whole element, listener
+attributes included, breaking the mechanism after the very first warning.
+
+It always emits (even with no findings, i.e. empty children) so a later
+warning-free submission clears a stale message left by an earlier one.
+*/}}
+{{define "flash-oob"}}
+<div hx-swap-oob="innerHTML:#flash-area">
+{{if .Findings}}
+<div class="flash flash-warning" role="alert">
+    <button type="button" class="flash-dismiss" aria-label="dismiss warnings" onclick="this.closest('.flash').remove()">&times;</button>
+    <strong>Task created, but task type &ldquo;{{.TaskType}}&rdquo; has warnings:</strong>
+    <ul>
+        {{range .Findings}}
+        <li><code>{{.Code}}</code> {{.Message}}</li>
+        {{end}}
+    </ul>
+</div>
+{{end}}
+</div>
+{{end}}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -527,8 +528,9 @@ func (s *ServerConfig) uiSubmitTask(c *gin.Context) {
 	// blanket has no task-type authoring UI, so this is where a broken
 	// TOML (bad template, missing executor) first surfaces to a user
 	// rather than failing later at exec time. Errors block submission;
-	// warnings are logged but don't block, since there's no flash-message
-	// UI yet to surface them inline (tracked in turtlemonvh/blanket#64).
+	// warnings don't block, but are surfaced to the user via a flash
+	// message in addition to the server log — see triggerTaskTypeWarnings
+	// and turtlemonvh/blanket#64.
 	findings := tasks.ValidateTaskType(tt, nil)
 	var errMsgs []string
 	for _, f := range findings {
@@ -603,7 +605,64 @@ func (s *ServerConfig) uiSubmitTask(c *gin.Context) {
 		return
 	}
 	s.TaskEvents.Notify()
+
+	// The response body below is (and must stay) raw <tr> rows: htmx infers
+	// the parsing context for an ajax response from the first tag it sees,
+	// and picks a <table><tbody>…wrapping for a leading <tr> so the browser
+	// will actually build table rows out of it. An hx-swap-oob element
+	// appended after those rows gets caught by that same table-parsing
+	// context and silently foster-parented out of the fragment htmx swaps
+	// in — it never reaches the live DOM. So warnings can't be inlined into
+	// this response; instead fire a client-side event and let a tiny
+	// follow-up request (a plain, table-free response) render them. See
+	// triggerTaskTypeWarnings and turtlemonvh/blanket#64.
+	s.triggerTaskTypeWarnings(c, taskType)
 	s.uiTasksRowsPartial(c)
+}
+
+// triggerTaskTypeWarnings sets an HX-Trigger response header that fires a
+// "task-type-warnings" client-side event naming the just-submitted task
+// type. #flash-area (see _layout.html) listens for that event and issues
+// its own follow-up GET to uiTaskTypeWarningsPartial, which re-validates
+// the type and renders any warning-level findings. Always fires (even when
+// there are no warnings) so a later warning-free submission clears a stale
+// message left by an earlier one.
+func (s *ServerConfig) triggerTaskTypeWarnings(c *gin.Context, taskType string) {
+	payload, err := json.Marshal(gin.H{
+		"task-type-warnings": gin.H{"type": taskType},
+	})
+	if err != nil {
+		log.WithField("err", err).Warn("ui: marshal HX-Trigger payload")
+		return
+	}
+	c.Header("HX-Trigger", string(payload))
+}
+
+// uiTaskTypeWarningsPartial re-validates the named task type and renders
+// any warning-level findings into #flash-area via a self-referential
+// out-of-band swap. It's the follow-up request triggered by
+// triggerTaskTypeWarnings, kept separate from the task-create response
+// itself — see the comment in uiSubmitTask for why. See turtlemonvh/blanket#64.
+func (s *ServerConfig) uiTaskTypeWarningsPartial(c *gin.Context) {
+	typeName := c.Query("type")
+	var findings []tasks.Finding
+	if typeName != "" {
+		if tt, err := tasks.FetchTaskType(typeName); err == nil {
+			for _, f := range tasks.ValidateTaskType(tt, nil) {
+				if f.Level != tasks.LevelError {
+					findings = append(findings, f)
+				}
+			}
+		}
+	}
+	t := mustParsePartial("flash-oob", "flash.html")
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	if err := t.ExecuteTemplate(c.Writer, "flash-oob", gin.H{
+		"TaskType": typeName,
+		"Findings": findings,
+	}); err != nil {
+		log.WithField("err", err).Warn("ui: render flash-oob")
+	}
 }
 
 // renderUI executes the layout with the page's content block bound.
