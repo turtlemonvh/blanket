@@ -52,11 +52,13 @@ of the claim loop. Workers can only be deleted once stopped.
 ```mermaid
 stateDiagram-v2
     [*] --> RUNNING: blanket worker / POST /worker/
-    RUNNING --> RUNNING: claim loop tick
     RUNNING --> STOPPED: PUT /worker/:id/stop
     RUNNING --> STOPPED: process exits (SIGTERM, crash)
     STOPPED --> [*]: DELETE /worker/:id
 ```
+
+(The claim loop itself — what `RUNNING` is doing between transitions — is
+its own diagram in the next section.)
 
 A worker that has stopped reporting heartbeats (`lastHeardTs`) is
 considered "lost" by the UI but is not a distinct state in the data
@@ -65,8 +67,8 @@ delete it explicitly.
 
 ## Worker claim loop
 
-`WorkerConf.ProcessTasks` (`worker/worker.go`) is the loop behind the
-`RUNNING --> RUNNING` self-transition above. Each iteration: refresh
+`WorkerConf.ProcessTasks` (`worker/worker.go`) is the loop a worker runs
+while in the `RUNNING` state above. Each iteration: refresh
 the worker's own config from the server (so a `stop` request lands
 before the next claim attempt), try to claim a task, and — if one was
 claimed — run it via `ProcessOne` before looping again. Every step is
@@ -201,13 +203,13 @@ sequenceDiagram
         TFC-->>Srv: existing TailedFile
     end
     Srv->>TF: Subscribe()
-    TF->>TF: lock; assign subscriber id; register in Subscribers map
+    TF->>TF: lock, assign subscriber id, register in Subscribers map
     TF->>C: backfill: walk PastLines ring buffer oldest->newest, push non-empty lines
     TF->>TF: mark subscriber IsCaughtUp = true
 
     loop while task/worker keeps writing
         Log->>TF: new line appended (poll picks it up)
-        TF->>TF: lock; append to PastLines ring; advance FileOffset
+        TF->>TF: lock, append to PastLines ring, advance FileOffset
         TF->>C: send line on subscriber's NewLines channel
         Srv->>C: SSE event with log line
     end
