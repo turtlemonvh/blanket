@@ -87,6 +87,46 @@ func TestWorkers(t *testing.T) {
 	assert.Equal(t, len(workers), 1)
 }
 
+// TestStopWorker covers the atomic read-modify-write StopWorker helper:
+// it should flip Stopped, bump LastHeardTs, persist both, and leave
+// unrelated fields (like Tags) untouched.
+func TestStopWorker(t *testing.T) {
+	DB, closefn := NewTestDB()
+	defer closefn()
+
+	w := &worker.WorkerConf{
+		Id:      objectid.NewObjectId(),
+		Stopped: false,
+		Pid:     123,
+		Tags:    []string{"exec:bash"},
+	}
+	assert.NoError(t, DB.UpdateWorker(w))
+	assert.Zero(t, w.LastHeardTs)
+
+	before := time.Now().Unix()
+	updated, err := DB.StopWorker(w.Id)
+	assert.NoError(t, err)
+	assert.True(t, updated.Stopped)
+	assert.GreaterOrEqual(t, updated.LastHeardTs, before)
+	assert.Equal(t, w.Tags, updated.Tags)
+
+	// Persisted, not just returned.
+	fetched, err := DB.GetWorker(w.Id)
+	assert.NoError(t, err)
+	assert.True(t, fetched.Stopped)
+	assert.Equal(t, updated.LastHeardTs, fetched.LastHeardTs)
+}
+
+// TestStopWorker_UnknownId confirms StopWorker surfaces the same
+// not-found error GetWorker would, instead of silently creating a record.
+func TestStopWorker_UnknownId(t *testing.T) {
+	DB, closefn := NewTestDB()
+	defer closefn()
+
+	_, err := DB.StopWorker(objectid.NewObjectId())
+	assert.Error(t, err)
+}
+
 /*
 func TestTasks(t *testing.T) {
 	DB, closefn := NewTestDB()

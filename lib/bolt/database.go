@@ -113,6 +113,19 @@ func (DB *BlanketBoltDB) UpdateWorker(w *worker.WorkerConf) error {
 	})
 }
 
+// StopWorker atomically marks a worker as stopped and bumps its
+// LastHeardTs in a single bolt transaction, avoiding the read-then-write
+// race a separate GetWorker/UpdateWorker pair would have (e.g. a
+// concurrent self-registration from the worker overwriting the stop with
+// stale data, or vice versa).
+func (DB *BlanketBoltDB) StopWorker(workerId objectid.ObjectId) (worker.WorkerConf, error) {
+	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
+		w.Stopped = true
+		w.LastHeardTs = time.Now().Unix()
+		return nil
+	})
+}
+
 func (DB *BlanketBoltDB) DeleteWorker(workerId objectid.ObjectId) error {
 	return DB.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(BOLTDB_WORKER_BUCKET))
