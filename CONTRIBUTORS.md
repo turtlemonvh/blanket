@@ -144,6 +144,123 @@ curl -sSfL https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js \
     -o server/ui_next/static/htmx-sse.js
 ```
 
+## Issue Workflow
+
+GitHub issues + `status:` labels are authoritative for what's actionable.
+`docs/next_up.md` is narrative-only, not a source of truth.
+
+### Labels
+
+Every open issue carries **exactly one** `status:` label. Closed issues
+keep whatever label they had for history.
+
+| Label | Meaning | Typical next action |
+|---|---|---|
+| `status: needs-triage` | Disposition unclear. | Read it, move it on. |
+| `status: needs-design` | Enough uncertainty to need a full design pass. | Brainstorm, then a Word doc. |
+| `status: needs-info` | Executable in principle; light open questions block it. | Whoever is assigned answers. |
+| `status: in-review` | Something is awaiting review. | Reviewer named by the assignee. |
+| `status: ready` | Clear criteria, no input needed. | Claude executes. |
+| `status: in-progress` | Actively being worked; a branch/worktree exists. | Finish and open a PR. |
+
+### Ownership: assignee = whose turn
+
+Labels say what kind of work is needed; the assignee says who owns the
+next action. Claude has no GitHub account, so "Claude's turn" is the
+*absence* of an assignee.
+
+```bash
+gh issue list -l "status: ready"     -S "no:assignee"   # Claude can pick these up
+gh issue list -l "status: in-review" -a turtlemonvh     # waiting on Timothy
+gh issue list -l "status: in-review" -S "no:assignee"   # waiting on Claude
+```
+
+### Justification comments
+
+Every `status:` label application gets a comment explaining why —
+whoever applied it. Claude-written notes carry a hidden marker so the
+audit can tell them apart from a human's, since both currently post as
+`turtlemonvh` via `gh`:
+
+```markdown
+<!-- blanket-label-note label="status: ready" by="claude" -->
+**`status: ready`** — acceptance criteria are fully specified in the
+issue body; the change is confined to `server/serve_tasks.go` and its
+test. No open questions.
+```
+
+`by` is `claude` or `human`; add `via="claude-backfill"` when Claude
+wrote up a human's reasoning after the fact. A human's own plain-prose
+comment after their label event counts as justification without a
+marker.
+
+Per-label content requirements:
+
+- `needs-triage` — state what would unblock it (questions, preconditions).
+- `in-review` — state the review scope and link the Word doc.
+- `needs-info` — enumerate the actual questions.
+- Others — a sentence or two on why the state fits.
+
+The audit's actor allowlist is `turtlemonvh` plus configured bot
+logins. Comments/label events from anyone else are ignored — not a
+finding, not a justification. This is a deliberate simplicity-over-
+precision tradeoff for a single-maintainer repo; expand it if the repo
+takes outside contributions.
+
+### State machine
+
+```
+new issue -> needs-triage -> needs-info -\
+                           -> needs-design -> in-review (assignee: timothy) -> ready
+                           -> ready (agent claims) -> in-progress -> in-review (PR, assignee: timothy) -> closed
+```
+
+A design review can loop back to `needs-design`, or fan out into new
+`status: ready` child issues.
+
+### Design workflow (needs-design -> in-review)
+
+1. `superpowers:brainstorming` — interview, approaches, sectioned design.
+2. `tvh-core:publishing-plans-to-word` — publish to OneDrive for inline
+   comments. The Word doc is the record; nothing design-shaped is
+   committed to the repo.
+3. Label `status: in-review`, assign `turtlemonvh`, justification note
+   with the doc link and review scope.
+4. On approval, move to `status: ready` (or child issues).
+
+### PR / merge workflow
+
+`blanket-ready-batch` opens a PR and stops — it never auto-merges, even
+on green CI. Flow: agent claims a `status: ready` issue (label ->
+`in-progress`), opens a PR (label -> `in-review`, assignee: `turtlemonvh`).
+Timothy reviews and approves the PR; Claude merges it after approval.
+(Future: a risk-rating tag may let low-risk PRs skip the approval step
+— not implemented yet.)
+
+### Audit
+
+Read-only by default; two `gh` calls per issue:
+
+```bash
+gh api repos/turtlemonvh/blanket/issues/N/timeline --paginate   # labeled/unlabeled events: actor + timestamp
+gh issue view N --json labels,assignees,comments                # current state
+```
+
+Findings: no status label, multiple status labels, an unjustified
+label, `status: ready` carrying an assignee, `status: in-progress`
+stale >7 days with no linked branch/PR activity, or `status: in-review`
+whose note has no URL. The audit proposes a fix per finding and asks
+before writing anything.
+
+### Skills
+
+- **`blanket-issue-triage`** — the only sanctioned way to change a
+  `status:` label. Applies label + assignee + justification comment as
+  one step.
+- **`blanket-issue-audit`** — runs the audit above; guided repair.
+- **`blanket-ready-batch`** — dispatches up to 3 concurrent subagents
+  (in worktrees) against `status: ready` + unassigned issues.
+
 ## Task Type Schema
 
 TOML files under any directory in `tasks.typesPaths` (config). Loader

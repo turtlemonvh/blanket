@@ -35,8 +35,9 @@ binary invoked with different subcommands.
   Kept tiny on purpose; don't add examples here.
 - `docs/` — user and maintainer docs. Filenames are `snake_case.md`.
   Index is `docs/README.md`.
-  - `docs/next_up.md` — the living backlog. Add/reorder items as priorities
-    shift. Entries must be self-contained so a cold reader can pick them up.
+  - `docs/next_up.md` — narrative backlog notes only. **Not authoritative.**
+    GitHub issues + `status:` labels are the source of truth for what's
+    actionable — see "Issue workflow" below.
   - `docs/api.md` — REST endpoint reference. **Keep in sync with
     `server/server.go`** — when you add, remove, or change a route,
     update `docs/api.md` in the same PR. Easy to drift; easy to catch
@@ -103,6 +104,18 @@ if in doubt. Don't create commits without explicit user approval.
   rename to `server/ui/` (and drop the `uiNext*` func prefixes). Don't
   add new `uiNext*`-prefixed names in fresh code unless you're adjacent
   to existing ones.
+
+## Issue workflow
+
+Every open issue carries exactly one `status:` label
+(`needs-triage`/`needs-design`/`needs-info`/`in-review`/`ready`/
+`in-progress`), and the assignee says whose turn it is — assigned to
+`turtlemonvh` means the human acts next, unassigned means Claude may.
+Every label change is justified with a comment; Claude's carry a
+`<!-- blanket-label-note -->` marker. Full rules, the state machine, and
+the merge workflow live in [CONTRIBUTORS.md](CONTRIBUTORS.md#issue-workflow).
+Use the `blanket-issue-triage`, `blanket-issue-audit`, and
+`blanket-ready-batch` skills rather than applying labels ad hoc.
 
 ## Working with the user
 
