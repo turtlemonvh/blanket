@@ -72,16 +72,68 @@ of the claim loop. Workers can only be deleted once stopped.
 ```mermaid
 stateDiagram-v2
     [*] --> RUNNING: blanket worker / POST /worker/
-    RUNNING --> RUNNING: claim loop tick
     RUNNING --> STOPPED: PUT /worker/:id/stop
     RUNNING --> STOPPED: process exits (SIGTERM, crash)
     STOPPED --> [*]: DELETE /worker/:id
 ```
 
+(The claim loop itself — what `RUNNING` is doing between transitions — is
+its own diagram in the next section.)
+
 A worker that has stopped reporting heartbeats (`lastHeardTs`) is
 considered "lost" by the UI but is not a distinct state in the data
 model — there is no automatic transition; an operator must stop or
 delete it explicitly.
+
+## Worker claim loop
+
+`WorkerConf.ProcessTasks` (`worker/worker.go`) is the loop a worker runs
+while in the `RUNNING` state above. Each iteration: refresh
+the worker's own config from the server (so a `stop` request lands
+before the next claim attempt), try to claim a task, and — if one was
+claimed — run it via `ProcessOne` before looping again. Every step is
+a plain HTTP call to the server (`tasks/task_client.go`); the worker
+process never touches BoltDB directly. An empty queue or a transient
+error is not fatal — the loop sleeps `CheckInterval` and retries. No
+sleep happens after successfully processing a task, so the worker
+drains a backlog without waiting out the interval between each one.
+
+```mermaid
+sequenceDiagram
+    participant W as Worker (ProcessTasks)
+    participant S as Server
+    participant Q as Queue (lib/queue)
+    participant DB as BoltDB
+    participant P as Task subprocess
+
+    loop until Stopped
+        W->>S: GET /worker/:id (Refetch)
+        S-->>W: worker config (incl. Stopped)
+        alt refetch failed
+            W->>W: sleep(CheckInterval)
+        else refreshed ok
+            W->>S: POST /task/claim/:workerId
+            S->>Q: ClaimTask(worker)
+            Q-->>S: task (or ErrQueueEmpty)
+            S->>DB: SaveTask (state -> CLAIMED)
+            S-->>W: 200 + task JSON, or 204 No Content
+            alt no matching task
+                W->>W: sleep(CheckInterval)
+            else task claimed
+                W->>P: start task command (exec.Cmd)
+                W->>S: PUT /task/:id/run
+                S->>DB: RunTask (state -> RUNNING)
+                loop while process runs
+                    W->>S: GET /task/:id (Refresh, check for cancel)
+                    W->>P: poll ProcessState / kill on cancel or timeout
+                end
+                P-->>W: process exits
+                W->>S: PUT /task/:id/finish?state=SUCCESS|ERROR|TIMEDOUT
+                S->>DB: FinishTask
+            end
+        end
+    end
+```
 
 ## Basic task flow
 
@@ -137,3 +189,55 @@ or being stopped by the user, the worker will then:
 
 1. Send a request to `PUT /task/:id/finish` to mark the task as complete.
 2. Ask the server for another task.
+
+## Log tailing (`lib/tailed_file`)
+
+`GET /task/:id/log` and `GET /worker/:id/log` (`server/serve_tasks.go`,
+`server/serve_workers.go`) stream a running task's or worker's log file
+to the browser over SSE. Both call `tailed_file.Follow(path)`, which is
+backed by a single `TailedFileCollection`: the first subscriber for a
+given path starts a `TailedFile` — an `hpcloud/tail` goroutine that
+seeks to end-of-file minus `DefaultFileOffset` (5000 bytes, or the
+start of the file if it's smaller) and polls for new lines — and later
+subscribers on the same path reuse it. A `TailedFile` keeps the last
+`DefaultLinesKept` (100) lines in a ring buffer (`PastLines`), so a new
+subscriber can be **backfilled** with recent history instead of only
+seeing lines written after it subscribed. The file stops being tailed
+5 seconds after its last subscriber unsubscribes (`StopIfNoSubscribers`).
+
+```mermaid
+sequenceDiagram
+    participant C as Client (SSE)
+    participant Srv as Server handler
+    participant TFC as TailedFileCollection
+    participant TF as TailedFile (tail goroutine)
+    participant Log as Log file on disk
+
+    C->>Srv: GET /task/:id/log
+    Srv->>TFC: Follow(stdoutPath)
+    alt file not yet tailed
+        TFC->>TF: StartTailedFile(path)
+        TF->>Log: seek to EOF-5000B (or start if smaller)
+        Note over TF: hpcloud/tail, Poll:true, Follow:true
+    else already tailed
+        TFC-->>Srv: existing TailedFile
+    end
+    Srv->>TF: Subscribe()
+    TF->>TF: lock, assign subscriber id, register in Subscribers map
+    TF->>C: backfill: walk PastLines ring buffer oldest->newest, push non-empty lines
+    TF->>TF: mark subscriber IsCaughtUp = true
+
+    loop while task/worker keeps writing
+        Log->>TF: new line appended (poll picks it up)
+        TF->>TF: lock, append to PastLines ring, advance FileOffset
+        TF->>C: send line on subscriber's NewLines channel
+        Srv->>C: SSE event with log line
+    end
+
+    C->>Srv: connection closes / isComplete() true
+    Srv->>TF: subscriber.Stop() (deregister, close channel)
+    alt no subscribers left after 5s
+        TF->>TFC: StopIfNoSubscribers -> StopTailedFile(path)
+        TFC->>TF: tailer.Stop()
+    end
+```
