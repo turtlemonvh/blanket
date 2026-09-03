@@ -13,7 +13,10 @@ binary invoked with different subcommands.
 
 ## Tech stack
 
-- **Go 1.25** (pinned in Dockerfile), `go.mod`-managed.
+- **Go 1.25** (pinned in Dockerfile), `go.mod`-managed. The exact patch
+  version is also pinned via `go.mod`'s `toolchain` directive, so `go
+  build`/`go test` auto-download the right toolchain even if the
+  ambient system `go` has drifted (see Gotchas below).
 - **BoltDB** for storage (`lib/bolt`); internal queue abstraction at
   `lib/queue` + `lib/bolt/queue.go`.
 - **Gin** for HTTP routing; `//go:embed` bakes the UI into the binary.
@@ -103,6 +106,19 @@ convention and were left as-is; this applies going forward.)
   host" is the project's main promise. Before landing platform-sensitive
   code, run `make docker-build` locally — the master-only CI job will
   otherwise catch it post-merge.
+- **Three Go version pins must stay in sync:** `go.mod`'s `toolchain`
+  directive, the Dockerfile's `ARG GO_VERSION`, and `scripts/setup.sh`'s
+  `GO_VERSION`. They drifted once (system Go upgraded to 1.27 mid-session
+  while all three were still pinned to 1.25.9, and a bare `gofmt` on
+  `PATH` reformatted differently than CI expected — broke #73 and #75).
+  `go.mod`'s `toolchain` directive is the load-bearing fix: with
+  `GOTOOLCHAIN=auto` (the Go default), any `go` subcommand — `go build`,
+  `go test`, `go env`, etc. — re-execs into the pinned toolchain even
+  when the ambient system `go` has drifted. That's also why `make
+  check-fmt` resolves gofmt via `` $(go env GOROOT)/bin/gofmt `` instead
+  of a bare `gofmt` on `PATH` — a raw `gofmt` binary isn't a `go`
+  subcommand, so it doesn't get toolchain-switched on its own. When
+  bumping the Go version, update all three pins in the same PR.
 
 ## Issue workflow
 

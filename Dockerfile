@@ -7,8 +7,9 @@
 # `make test-smoke`, and the cross-compile targets.
 #
 # Bump PLAYWRIGHT_VERSION alongside tests/e2e/package-lock.json.
-# Bump GO_VERSION alongside scripts/setup.sh (and stay >= the `go` directive
-# in go.mod).
+# Bump GO_VERSION alongside scripts/setup.sh's GO_VERSION and go.mod's
+# `toolchain` directive (and stay >= the `go` directive in go.mod). All
+# three should name the same exact version.
 
 ARG PLAYWRIGHT_VERSION=v1.59.1
 FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-noble
