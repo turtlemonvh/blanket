@@ -34,12 +34,32 @@ stateDiagram-v2
     RUNNING --> SUCCESS: PUT /task/:id/finish (exit 0)
     RUNNING --> ERROR: PUT /task/:id/finish (exit non-zero)
     RUNNING --> TIMEDOUT: timeout exceeded
-    RUNNING --> STOPPED: cancel + worker aborts
+    RUNNING --> STOPPED: PUT /task/:id/cancel?force=true
     SUCCESS --> [*]
     ERROR --> [*]
     TIMEDOUT --> [*]
     STOPPED --> [*]
 ```
+
+### Stopping a RUNNING task
+
+`PUT /task/:id/cancel` on a WAITING task is a pure database transition — the
+task was never claimed, so there's nothing else to signal. On a RUNNING task
+it's more consequential: the task's OS process is a subprocess of some
+*worker*, not the server, so the server can't kill it directly. Cancelling a
+RUNNING task therefore requires an explicit `?force=true`; without it the
+endpoint returns 400 and leaves the task alone.
+
+With `force=true`, the server does its half — flip the task to `STOPPED` in
+the database — and relies on the worker to do the rest. Each worker's
+`ProcessOne` (`worker/worker.go`) runs a monitor goroutine alongside the
+subprocess that polls the task's state every `CheckInterval` (same interval
+the worker already uses for its claim loop); when it observes `STOPPED` it
+kills the subprocess (`cmd.Process.Kill()`) and returns. So "stopping" a
+RUNNING task is: server sets the tombstone, worker's next poll notices it and
+kills the process — no direct server-to-worker RPC involved. Worst case, the
+subprocess keeps running for up to one `CheckInterval` after the cancel call
+before it's killed.
 
 ## Worker state machine
 
