@@ -58,16 +58,16 @@ func NewTestServer() (*ServerConfig, func()) {
 	Q, QCloser := bolt.NewTestQueue()
 
 	return &ServerConfig{
-		DB:           DB,
-		Q:            Q,
-		ResultsPath:  "/tmp/x", // FIMXE: Replace with temp dir and cleanup
-		Version:      "blanket (test)",
-		TaskEvents:   NewEventHub(),
-		WorkerEvents: NewEventHub(),
-	}, func() {
-		defer DBCloser()
-		defer QCloser()
-	}
+			DB:           DB,
+			Q:            Q,
+			ResultsPath:  "/tmp/x", // FIMXE: Replace with temp dir and cleanup
+			Version:      "blanket (test)",
+			TaskEvents:   NewEventHub(),
+			WorkerEvents: NewEventHub(),
+		}, func() {
+			defer DBCloser()
+			defer QCloser()
+		}
 }
 
 // Assert that the request object passed generated an empty list json response
