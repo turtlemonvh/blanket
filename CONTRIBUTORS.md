@@ -131,17 +131,17 @@ if in doubt.
 ## Single-binary Architecture
 
 `go build` produces a single static binary with the web UI baked in.
-Templates, CSS, and vendored htmx live under `server/ui_next/` and are
-pulled into the binary via `//go:embed` (see `server/ui_next.go`). No
+Templates, CSS, and vendored htmx live under `server/ui/` and are
+pulled into the binary via `//go:embed` (see `server/ui.go`). No
 separate asset deploy, no runtime filesystem lookups.
 
 To refresh the vendored htmx bundle:
 
 ```bash
 curl -sSfL https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js \
-    -o server/ui_next/static/htmx.min.js
+    -o server/ui/static/htmx.min.js
 curl -sSfL https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js \
-    -o server/ui_next/static/htmx-sse.js
+    -o server/ui/static/htmx-sse.js
 ```
 
 ## Issue Workflow

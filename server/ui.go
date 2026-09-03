@@ -25,12 +25,12 @@ import (
 	"github.com/turtlemonvh/blanket/worker"
 )
 
-//go:embed all:ui_next/templates all:ui_next/static
-var uiNextFS embed.FS
+//go:embed all:ui/templates all:ui/static
+var uiFS embed.FS
 
-// uiNextStaticFS serves /ui-next/static/*.
-func uiNextStaticFS() http.FileSystem {
-	sub, err := fs.Sub(uiNextFS, "ui_next/static")
+// uiStaticFS serves /ui/static/*.
+func uiStaticFS() http.FileSystem {
+	sub, err := fs.Sub(uiFS, "ui/static")
 	if err != nil {
 		panic(err)
 	}
@@ -38,7 +38,7 @@ func uiNextStaticFS() http.FileSystem {
 }
 
 // Template funcs shared across all pages.
-var uiNextFuncs = template.FuncMap{
+var uiFuncs = template.FuncMap{
 	"add":  func(a, b int) int { return a + b },
 	"join": strings.Join,
 	"shortId": func(id objectid.ObjectId) string {
@@ -68,41 +68,41 @@ var uiNextFuncs = template.FuncMap{
 	},
 }
 
-// uiNextTemplates is populated lazily per page so the partial templates
+// uiTemplates is populated lazily per page so the partial templates
 // (tasks-rows, workers-rows, …) can be included alongside their parent.
-var uiNextTemplates = map[string]*template.Template{}
+var uiTemplates = map[string]*template.Template{}
 
-// mustParseUINextPage parses layout + the named page (+ optional partial files)
+// mustParseUIPage parses layout + the named page (+ optional partial files)
 // and caches the result. Panics on error — templates are embedded, so any
 // parse failure is a build-time bug.
-func mustParseUINextPage(name string, files ...string) *template.Template {
-	if t, ok := uiNextTemplates[name]; ok {
+func mustParseUIPage(name string, files ...string) *template.Template {
+	if t, ok := uiTemplates[name]; ok {
 		return t
 	}
-	paths := append([]string{"ui_next/templates/_layout.html"}, files...)
-	t, err := template.New(name).Funcs(uiNextFuncs).ParseFS(uiNextFS, paths...)
+	paths := append([]string{"ui/templates/_layout.html"}, files...)
+	t, err := template.New(name).Funcs(uiFuncs).ParseFS(uiFS, paths...)
 	if err != nil {
-		panic(fmt.Errorf("ui-next: parse %s: %w", name, err))
+		panic(fmt.Errorf("ui: parse %s: %w", name, err))
 	}
-	uiNextTemplates[name] = t
+	uiTemplates[name] = t
 	return t
 }
 
 // mustParsePartial parses standalone partial template(s) without the layout.
 func mustParsePartial(name string, files ...string) *template.Template {
 	key := "partial:" + name
-	if t, ok := uiNextTemplates[key]; ok {
+	if t, ok := uiTemplates[key]; ok {
 		return t
 	}
 	paths := make([]string, 0, len(files))
 	for _, f := range files {
-		paths = append(paths, "ui_next/templates/"+f)
+		paths = append(paths, "ui/templates/"+f)
 	}
-	t, err := template.New(name).Funcs(uiNextFuncs).ParseFS(uiNextFS, paths...)
+	t, err := template.New(name).Funcs(uiFuncs).ParseFS(uiFS, paths...)
 	if err != nil {
-		panic(fmt.Errorf("ui-next: parse partial %s: %w", name, err))
+		panic(fmt.Errorf("ui: parse partial %s: %w", name, err))
 	}
-	uiNextTemplates[key] = t
+	uiTemplates[key] = t
 	return t
 }
 
@@ -148,7 +148,7 @@ func buildTaskTypeView(tt *tasks.TaskType) TaskTypeView {
 func readTaskTypeViews() []TaskTypeView {
 	tts, err := tasks.ReadTypes()
 	if err != nil {
-		log.WithField("err", err).Warn("ui-next: read task types")
+		log.WithField("err", err).Warn("ui: read task types")
 		return nil
 	}
 	views := make([]TaskTypeView, 0, len(tts))
@@ -159,8 +159,8 @@ func readTaskTypeViews() []TaskTypeView {
 	return views
 }
 
-// uiNextTasksPage renders the tasks list page.
-func (s *ServerConfig) uiNextTasksPage(c *gin.Context) {
+// uiTasksPage renders the tasks list page.
+func (s *ServerConfig) uiTasksPage(c *gin.Context) {
 	tks, _, err := s.DB.GetTasks(database.TaskSearchConfFromContext(c))
 	if err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
@@ -171,8 +171,8 @@ func (s *ServerConfig) uiNextTasksPage(c *gin.Context) {
 	for _, v := range views {
 		typeNames = append(typeNames, v.Name)
 	}
-	t := mustParseUINextPage("tasks", "ui_next/templates/tasks.html", "ui_next/templates/tasks_rows.html")
-	s.renderUINext(c, t, gin.H{
+	t := mustParseUIPage("tasks", "ui/templates/tasks.html", "ui/templates/tasks_rows.html")
+	s.renderUI(c, t, gin.H{
 		"Title":         "Tasks",
 		"Tasks":         tks,
 		"TaskStates":    tasks.ValidTaskStates,
@@ -180,8 +180,8 @@ func (s *ServerConfig) uiNextTasksPage(c *gin.Context) {
 	})
 }
 
-// uiNextTaskDetailPage renders one task's metadata, env vars, and log stream.
-func (s *ServerConfig) uiNextTaskDetailPage(c *gin.Context) {
+// uiTaskDetailPage renders one task's metadata, env vars, and log stream.
+func (s *ServerConfig) uiTaskDetailPage(c *gin.Context) {
 	taskId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
 		c.String(http.StatusBadRequest, err.Error())
@@ -192,12 +192,12 @@ func (s *ServerConfig) uiNextTaskDetailPage(c *gin.Context) {
 		c.String(http.StatusNotFound, err.Error())
 		return
 	}
-	t := mustParseUINextPage("task-detail", "ui_next/templates/task_detail.html")
-	s.renderUINext(c, t, gin.H{"Title": "Task " + taskId.Hex()[:8], "Task": task})
+	t := mustParseUIPage("task-detail", "ui/templates/task_detail.html")
+	s.renderUI(c, t, gin.H{"Title": "Task " + taskId.Hex()[:8], "Task": task})
 }
 
-// uiNextTasksRowsPartial renders just the tbody for htmx swaps.
-func (s *ServerConfig) uiNextTasksRowsPartial(c *gin.Context) {
+// uiTasksRowsPartial renders just the tbody for htmx swaps.
+func (s *ServerConfig) uiTasksRowsPartial(c *gin.Context) {
 	tks, _, err := s.DB.GetTasks(database.TaskSearchConfFromContext(c))
 	if err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
@@ -206,22 +206,22 @@ func (s *ServerConfig) uiNextTasksRowsPartial(c *gin.Context) {
 	t := mustParsePartial("tasks-rows", "tasks_rows.html")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(c.Writer, "tasks-rows", gin.H{"Tasks": tks}); err != nil {
-		log.WithField("err", err).Warn("ui-next: render tasks-rows")
+		log.WithField("err", err).Warn("ui: render tasks-rows")
 	}
 }
 
-func (s *ServerConfig) uiNextWorkersPage(c *gin.Context) {
+func (s *ServerConfig) uiWorkersPage(c *gin.Context) {
 	ws, err := s.DB.GetWorkers()
 	if err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
-	t := mustParseUINextPage("workers", "ui_next/templates/workers.html", "ui_next/templates/workers_rows.html")
-	s.renderUINext(c, t, gin.H{"Title": "Workers", "Workers": ws})
+	t := mustParseUIPage("workers", "ui/templates/workers.html", "ui/templates/workers_rows.html")
+	s.renderUI(c, t, gin.H{"Title": "Workers", "Workers": ws})
 }
 
-// uiNextWorkerDetailPage renders one worker's metadata and log stream.
-func (s *ServerConfig) uiNextWorkerDetailPage(c *gin.Context) {
+// uiWorkerDetailPage renders one worker's metadata and log stream.
+func (s *ServerConfig) uiWorkerDetailPage(c *gin.Context) {
 	workerId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
 		c.String(http.StatusBadRequest, err.Error())
@@ -232,23 +232,23 @@ func (s *ServerConfig) uiNextWorkerDetailPage(c *gin.Context) {
 		c.String(http.StatusNotFound, err.Error())
 		return
 	}
-	t := mustParseUINextPage("worker-detail", "ui_next/templates/worker_detail.html")
-	s.renderUINext(c, t, gin.H{"Title": "Worker " + workerId.Hex()[:8], "Worker": w})
+	t := mustParseUIPage("worker-detail", "ui/templates/worker_detail.html")
+	s.renderUI(c, t, gin.H{"Title": "Worker " + workerId.Hex()[:8], "Worker": w})
 }
 
-// uiNextNewWorkerPartial returns the "new worker" form.
-func (s *ServerConfig) uiNextNewWorkerPartial(c *gin.Context) {
+// uiNewWorkerPartial returns the "new worker" form.
+func (s *ServerConfig) uiNewWorkerPartial(c *gin.Context) {
 	t := mustParsePartial("new-worker-form", "new_worker_form.html")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(c.Writer, "new-worker-form", nil); err != nil {
-		log.WithField("err", err).Warn("ui-next: render new-worker-form")
+		log.WithField("err", err).Warn("ui: render new-worker-form")
 	}
 }
 
-// uiNextSubmitWorker spawns a daemon worker from form input and returns
+// uiSubmitWorker spawns a daemon worker from form input and returns
 // the refreshed rows partial. Mirrors server.launchWorker without the JSON
 // response shape.
-func (s *ServerConfig) uiNextSubmitWorker(c *gin.Context) {
+func (s *ServerConfig) uiSubmitWorker(c *gin.Context) {
 	rawTags := strings.TrimSpace(c.PostForm("tags"))
 	tags := []string{}
 	if rawTags != "" {
@@ -289,10 +289,10 @@ func (s *ServerConfig) uiNextSubmitWorker(c *gin.Context) {
 		time.Sleep(time.Duration(250*s.TimeMultiplier) * time.Millisecond)
 	}
 	s.WorkerEvents.Notify()
-	s.uiNextWorkersRowsPartial(c)
+	s.uiWorkersRowsPartial(c)
 }
 
-func (s *ServerConfig) uiNextWorkersRowsPartial(c *gin.Context) {
+func (s *ServerConfig) uiWorkersRowsPartial(c *gin.Context) {
 	ws, err := s.DB.GetWorkers()
 	if err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
@@ -301,36 +301,36 @@ func (s *ServerConfig) uiNextWorkersRowsPartial(c *gin.Context) {
 	t := mustParsePartial("workers-rows", "workers_rows.html")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(c.Writer, "workers-rows", gin.H{"Workers": ws}); err != nil {
-		log.WithField("err", err).Warn("ui-next: render workers-rows")
+		log.WithField("err", err).Warn("ui: render workers-rows")
 	}
 }
 
-func (s *ServerConfig) uiNextTaskTypesPage(c *gin.Context) {
-	t := mustParseUINextPage("task-types",
-		"ui_next/templates/task_types.html",
-		"ui_next/templates/task_types_rows.html")
-	s.renderUINext(c, t, gin.H{"Title": "Task Types", "TaskTypes": readTaskTypeViews()})
+func (s *ServerConfig) uiTaskTypesPage(c *gin.Context) {
+	t := mustParseUIPage("task-types",
+		"ui/templates/task_types.html",
+		"ui/templates/task_types_rows.html")
+	s.renderUI(c, t, gin.H{"Title": "Task Types", "TaskTypes": readTaskTypeViews()})
 }
 
-// uiNextTaskTypeDetailPage renders one task type's description, documentation,
+// uiTaskTypeDetailPage renders one task type's description, documentation,
 // and settings.
-func (s *ServerConfig) uiNextTaskTypeDetailPage(c *gin.Context) {
+func (s *ServerConfig) uiTaskTypeDetailPage(c *gin.Context) {
 	name := c.Param("name")
 	tt, err := tasks.FetchTaskType(name)
 	if err != nil {
 		c.String(http.StatusNotFound, err.Error())
 		return
 	}
-	t := mustParseUINextPage("task-type-detail", "ui_next/templates/task_type_detail.html")
+	t := mustParseUIPage("task-type-detail", "ui/templates/task_type_detail.html")
 	view := buildTaskTypeView(tt)
-	s.renderUINext(c, t, gin.H{"Title": "Task Type " + view.Name, "TaskType": view})
+	s.renderUI(c, t, gin.H{"Title": "Task Type " + view.Name, "TaskType": view})
 }
 
-func (s *ServerConfig) uiNextTaskTypesRowsPartial(c *gin.Context) {
+func (s *ServerConfig) uiTaskTypesRowsPartial(c *gin.Context) {
 	t := mustParsePartial("task-types-rows", "task_types_rows.html")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(c.Writer, "task-types-rows", gin.H{"TaskTypes": readTaskTypeViews()}); err != nil {
-		log.WithField("err", err).Warn("ui-next: render task-types-rows")
+		log.WithField("err", err).Warn("ui: render task-types-rows")
 	}
 }
 
@@ -365,7 +365,7 @@ func absPath(p string) string {
 	return abs
 }
 
-func (s *ServerConfig) uiNextAboutPage(c *gin.Context) {
+func (s *ServerConfig) uiAboutPage(c *gin.Context) {
 	keys := viper.AllKeys()
 	sort.Strings(keys)
 	settings := make([]SettingView, 0, len(keys))
@@ -393,7 +393,7 @@ func (s *ServerConfig) uiNextAboutPage(c *gin.Context) {
 
 	binaryPath, err := osext.Executable()
 	if err != nil {
-		log.WithField("err", err).Warn("ui-next: resolve binary path")
+		log.WithField("err", err).Warn("ui: resolve binary path")
 		binaryPath = "(unknown)"
 	}
 
@@ -407,8 +407,8 @@ func (s *ServerConfig) uiNextAboutPage(c *gin.Context) {
 		}
 	}
 
-	t := mustParseUINextPage("about", "ui_next/templates/about.html")
-	s.renderUINext(c, t, gin.H{
+	t := mustParseUIPage("about", "ui/templates/about.html")
+	s.renderUI(c, t, gin.H{
 		"Title":          "About",
 		"Version":        s.Version,
 		"BinaryPath":     binaryPath,
@@ -419,12 +419,12 @@ func (s *ServerConfig) uiNextAboutPage(c *gin.Context) {
 	})
 }
 
-// uiNextNewTaskPartial returns the "new task" form pre-populated with types.
-func (s *ServerConfig) uiNextNewTaskPartial(c *gin.Context) {
+// uiNewTaskPartial returns the "new task" form pre-populated with types.
+func (s *ServerConfig) uiNewTaskPartial(c *gin.Context) {
 	t := mustParsePartial("new-task-form", "new_task_form.html")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(c.Writer, "new-task-form", gin.H{"TaskTypes": readTaskTypeViews()}); err != nil {
-		log.WithField("err", err).Warn("ui-next: render new-task-form")
+		log.WithField("err", err).Warn("ui: render new-task-form")
 	}
 }
 
@@ -469,8 +469,8 @@ func toStr(v interface{}) string {
 	return fmt.Sprintf("%v", v)
 }
 
-// uiNextTaskTypeEnvPartial renders the env-var editor for a chosen task type.
-func (s *ServerConfig) uiNextTaskTypeEnvPartial(c *gin.Context) {
+// uiTaskTypeEnvPartial renders the env-var editor for a chosen task type.
+func (s *ServerConfig) uiTaskTypeEnvPartial(c *gin.Context) {
 	typeName := c.Query("type")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	if typeName == "" {
@@ -489,29 +489,29 @@ func (s *ServerConfig) uiNextTaskTypeEnvPartial(c *gin.Context) {
 	}
 	t := mustParsePartial("task-type-env", "task_type_env.html")
 	if err := t.ExecuteTemplate(c.Writer, "task-type-env", data); err != nil {
-		log.WithField("err", err).Warn("ui-next: render task-type-env")
+		log.WithField("err", err).Warn("ui: render task-type-env")
 	}
 }
 
-// uiNextBlankPartial is used to clear a target on Cancel.
-func (s *ServerConfig) uiNextBlankPartial(c *gin.Context) {
+// uiBlankPartial is used to clear a target on Cancel.
+func (s *ServerConfig) uiBlankPartial(c *gin.Context) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, "")
 }
 
-// uiNextCustomEnvRowPartial returns one empty "custom setting" row that
+// uiCustomEnvRowPartial returns one empty "custom setting" row that
 // the env editor appends to its tbody when the user clicks "Add custom setting".
-func (s *ServerConfig) uiNextCustomEnvRowPartial(c *gin.Context) {
+func (s *ServerConfig) uiCustomEnvRowPartial(c *gin.Context) {
 	t := mustParsePartial("custom-env-row", "custom_env_row.html")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(c.Writer, "custom-env-row", nil); err != nil {
-		log.WithField("err", err).Warn("ui-next: render custom-env-row")
+		log.WithField("err", err).Warn("ui: render custom-env-row")
 	}
 }
 
-// uiNextSubmitTask handles the New Task form submit and returns fresh rows.
+// uiSubmitTask handles the New Task form submit and returns fresh rows.
 // Form fields named `env.<NAME>` are collected into the task's ExecEnv.
-func (s *ServerConfig) uiNextSubmitTask(c *gin.Context) {
+func (s *ServerConfig) uiSubmitTask(c *gin.Context) {
 	taskType := c.PostForm("type")
 	if taskType == "" {
 		c.String(http.StatusBadRequest, "type is required")
@@ -603,14 +603,14 @@ func (s *ServerConfig) uiNextSubmitTask(c *gin.Context) {
 		return
 	}
 	s.TaskEvents.Notify()
-	s.uiNextTasksRowsPartial(c)
+	s.uiTasksRowsPartial(c)
 }
 
-// renderUINext executes the layout with the page's content block bound.
-func (s *ServerConfig) renderUINext(c *gin.Context, t *template.Template, data gin.H) {
+// renderUI executes the layout with the page's content block bound.
+func (s *ServerConfig) renderUI(c *gin.Context, t *template.Template, data gin.H) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(c.Writer, "layout", data); err != nil {
-		log.WithField("err", err).Warn("ui-next: render page")
+		log.WithField("err", err).Warn("ui: render page")
 	}
 }
 
