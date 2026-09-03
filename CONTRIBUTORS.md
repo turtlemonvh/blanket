@@ -175,6 +175,28 @@ gh issue list -l "status: in-review" -a turtlemonvh     # waiting on Timothy
 gh issue list -l "status: in-review" -S "no:assignee"   # waiting on Claude
 ```
 
+### Visible attribution
+
+Claude and Timothy both post GitHub comments as `turtlemonvh` (same
+login, no separate bot identity yet — see "PR / merge workflow" below),
+so a rendered issue/PR thread shows no author distinction and reads as
+Timothy arguing with himself. Every comment Claude posts — justification
+comments and any other issue/PR comment — opens with a visible marker
+line, blank line, then the body:
+
+```markdown
+**🤖 Claude**
+
+<comment body>
+```
+
+This is separate from the hidden `<!-- blanket-label-note ... -->`
+marker below, which stays machine-only and unchanged — the two solve
+different problems (audit tooling vs. human readability) and both
+apply. Applies going forward only; comments already posted before this
+convention aren't backfilled. PR *descriptions* already carry their own
+"Generated with Claude Code" footer and don't need this too.
+
 ### Justification comments
 
 Every `status:` label application gets a comment explaining why —
@@ -184,6 +206,8 @@ audit can tell them apart from a human's, since both currently post as
 
 ```markdown
 <!-- blanket-label-note label="status: ready" by="claude" -->
+**🤖 Claude**
+
 **`status: ready`** — acceptance criteria are fully specified in the
 issue body; the change is confined to `server/serve_tasks.go` and its
 test. No open questions.
