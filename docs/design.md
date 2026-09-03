@@ -50,4 +50,48 @@ some Windows users to install. Go was chosen for the rewrite since:
 * Gin for HTTP routing
 * Single binary — server and worker are the same binary invoked with different subcommands
 
+### Components
+
+`blanket serve` and `blanket worker` are the same binary, but they are
+**separate processes**, and only the server process touches storage.
+`command/serve.go` is the only place that calls
+`bolt.MustOpenBoltDatabase()`, wiring the resulting `*bolt.DB` handle into
+both `bolt.NewBlanketBoltDB` (the `tasks`/`workers` buckets) and
+`bolt.NewBlanketBoltQueue` (the queue bucket) — one `.db` file, one
+process holding the lock (see the BoltDB single-writer gotcha in
+[`CLAUDE.md`](../CLAUDE.md)). A worker process never opens that file; it
+talks to the server exclusively over `localhost` HTTP (`tasks/task_client.go`,
+`worker/worker.go`), the same API a browser or `curl` client uses. This
+matters when reading the diagram below: "worker → server" is a real
+network hop (loopback, but HTTP), not an in-process call, while
+"server → BoltDB" is a direct library call in one process.
+
+```mermaid
+flowchart LR
+    client["Browser UI / CLI / curl"]
+
+    subgraph serverproc["blanket serve (server process)"]
+        router["Gin HTTP router<br/>(server/server.go)"]
+        tf["tailed_file collection<br/>(lib/tailed_file)"]
+    end
+
+    db[("BoltDB — single .db file<br/>tasks + workers buckets (lib/bolt)<br/>queue bucket (lib/bolt/queue.go)")]
+
+    subgraph workerproc["blanket worker (worker process, one per worker)"]
+        claimloop["Claim loop<br/>(worker.ProcessTasks)"]
+        subcmd["Task subprocess<br/>(exec.Cmd)"]
+    end
+
+    logs[/"Result dir: blanket.stdout.log / blanket.stderr.log"/]
+
+    client -- "HTTP: submit/list/cancel tasks,<br/>SSE log/event streams" --> router
+    router -- "direct calls: DB.*, Q.*" --> db
+    router -- "reads lines from" --> tf
+    tf -- "tails" --> logs
+
+    claimloop -- "HTTP: POST /task/claim/:workerId,<br/>PUT /task/:id/run|progress|finish" --> router
+    claimloop -- "starts, monitors" --> subcmd
+    subcmd -- "writes" --> logs
+```
+
 See the [docs index](./README.md) for more detailed information, including the [task flow and state machines](./task_flow.md).
