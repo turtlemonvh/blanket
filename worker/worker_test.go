@@ -181,9 +181,12 @@ func (h *workerHarness) fetch(id objectid.ObjectId) tasks.Task {
 	return task
 }
 
+// cancel calls PUT /task/:id/cancel with ?force=true, the parameter required
+// to stop a RUNNING task (see turtlemonvh/blanket#52). A WAITING task also
+// accepts the param harmlessly, so tests can always use this helper.
 func (h *workerHarness) cancel(id objectid.ObjectId) {
 	h.t.Helper()
-	req, _ := http.NewRequest("PUT", fmt.Sprintf("%s/task/%s/cancel", h.srv.URL, id.Hex()), nil)
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("%s/task/%s/cancel?force=true", h.srv.URL, id.Hex()), nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		h.t.Fatalf("cancel task: %v", err)
