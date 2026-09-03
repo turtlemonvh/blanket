@@ -70,8 +70,14 @@ fmt:
 
 # Fails if any Go file isn't gofmt-clean. Wired into CI so formatting drift
 # gets caught at review time instead of piling up.
+#
+# Resolve gofmt via `go env GOROOT` rather than a bare `gofmt` on PATH:
+# `go` re-execs into the toolchain pinned by go.mod's `toolchain` directive
+# (GOTOOLCHAIN=auto, the default) even when the ambient system go has
+# drifted, so this stays aligned with the pinned version without that step.
 check-fmt:
-	@out=$$(gofmt -l $$(find . -name '*.go' -not -path './tests/e2e/*' -not -path './vendor/*')); \
+	@gofmt="$$(go env GOROOT)/bin/gofmt"; \
+	out=$$($$gofmt -l $$(find . -name '*.go' -not -path './tests/e2e/*' -not -path './vendor/*')); \
 	if [ -n "$$out" ]; then \
 		echo "gofmt would reformat these files (run 'make fmt'):"; \
 		echo "$$out"; \
