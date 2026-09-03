@@ -20,7 +20,7 @@ binary invoked with different subcommands.
 - **BoltDB** for storage (`lib/bolt`); internal queue abstraction at
   `lib/queue` + `lib/bolt/queue.go`.
 - **Gin** for HTTP routing; `//go:embed` bakes the UI into the binary.
-- **Server-rendered Go templates + htmx** under `server/ui_next/` —
+- **Server-rendered Go templates + htmx** under `server/ui/` —
   there is no SPA, no JS build step.
 - **Playwright (TS)** for the browser journey suite under `tests/e2e/`.
 
@@ -28,7 +28,7 @@ binary invoked with different subcommands.
 
 - `server/` — HTTP handlers, UI rendering, embedded assets.
   Handler files are split by resource: `serve_tasks.go`, `serve_workers.go`,
-  `serve_task_types.go`, `serve_config.go`, `ui_next.go`.
+  `serve_task_types.go`, `serve_config.go`, `ui.go`.
 - `worker/` — claim loop, task exec, daemonization.
 - `tasks/` — `Task` + `TaskType` types and TOML loading.
 - `lib/` — `bolt/`, `database/`, `queue/`, `objectid/`, `tailed_file/`.
@@ -106,10 +106,6 @@ convention and were left as-is; this applies going forward.)
   host" is the project's main promise. Before landing platform-sensitive
   code, run `make docker-build` locally — the master-only CI job will
   otherwise catch it post-merge.
-- **UI paths still carry `ui_next` naming.** There's a tracked cosmetic
-  rename to `server/ui/` (and drop the `uiNext*` func prefixes). Don't
-  add new `uiNext*`-prefixed names in fresh code unless you're adjacent
-  to existing ones.
 - **Three Go version pins must stay in sync:** `go.mod`'s `toolchain`
   directive, the Dockerfile's `ARG GO_VERSION`, and `scripts/setup.sh`'s
   `GO_VERSION`. They drifted once (system Go upgraded to 1.27 mid-session
