@@ -39,7 +39,7 @@ Nine tools, gated by `mcp.mode`:
 | `blanket_write_task_type` | `name`, `toml` | create |
 | `blanket_submit_task` | `type`, `env?` | create |
 | `blanket_launch_worker` | `tags`, `count?` | create |
-| `blanket_cancel_task` | `id`, `delete?` | all |
+| `blanket_cancel_task` | `id`, `force?`, `delete?` | all |
 | `blanket_stop_worker` | `id`, `delete?` | all |
 
 `create` mode includes `readonly`'s tools; `all` includes both.
