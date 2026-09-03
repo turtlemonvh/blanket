@@ -233,9 +233,20 @@ A design review can loop back to `needs-design`, or fan out into new
 `blanket-ready-batch` opens a PR and stops — it never auto-merges, even
 on green CI. Flow: agent claims a `status: ready` issue (label ->
 `in-progress`), opens a PR (label -> `in-review`, assignee: `turtlemonvh`).
-Timothy reviews and approves the PR; Claude merges it after approval.
-(Future: a risk-rating tag may let low-risk PRs skip the approval step
-— not implemented yet.)
+**GitHub does not copy an issue's labels/assignee onto its linked PR** —
+apply `status: in-review` + assignee to *both* the issue and the PR, or
+Timothy reviewing the PR sees neither.
+
+Claude authenticates to GitHub as `turtlemonvh` (the same account,
+since there's no separate bot identity yet), so **every PR Claude opens
+is self-authored** — GitHub refuses to let an author approve their own
+PR, and branch protection on `master` doesn't require reviews anyway
+(only the `test` status check), so there is no native "Approve" button
+to use here. Timothy's review signal is a plain PR comment (e.g.
+"approved" / "LGTM") rather than a GitHub review; Claude merges after
+seeing it. (Future: a separate bot account/GitHub App would restore a
+real Approve button; a risk-rating tag may also let low-risk PRs skip
+the signal entirely — neither implemented yet.)
 
 ### Audit
 

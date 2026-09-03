@@ -37,12 +37,21 @@ first if this is the first batch run this session.
      `Closes #N` in the PR body, and to run the relevant `make docker-*`
      targets before declaring done — don't claim success without running
      them.
-5. **On each PR opening**, move that issue to `status: in-review`,
-   assign `turtlemonvh`, justification comment linking the PR.
-6. **Stop there.** No auto-merge, even on green CI — Timothy reviews and
-   approves the PR, then Claude merges after approval. Report the batch
-   result: issue #, PR #, one-line summary of what changed, CI status if
-   known.
+5. **On each PR opening**, move the issue to `status: in-review`, assign
+   `turtlemonvh`, justification comment linking the PR — **and apply the
+   same label + assignee to the PR itself** (`gh pr edit N --add-label
+   "status: in-review" --add-assignee turtlemonvh`). GitHub does not
+   copy an issue's labels/assignee onto its linked PR; skipping this
+   leaves Timothy looking at an unlabeled, unassigned PR.
+6. **Stop there — wait for a review signal, then merge yourself.** No
+   auto-merge on green CI alone. Claude authenticates as `turtlemonvh`,
+   so PRs are self-authored and GitHub won't offer a native Approve
+   button; the signal is a plain PR comment ("approved"/"LGTM"), not a
+   GitHub review. Once Timothy signals approval, merge the PR (matching
+   the repo's existing merge style — regular merge commit, not squash;
+   check `git log --oneline` if unsure), delete the branch, and move the
+   issue to closed. Report the batch result: issue #, PR #, one-line
+   summary of what changed, CI status if known.
 
 ## What this skill does not do
 
