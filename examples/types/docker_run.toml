@@ -1,0 +1,81 @@
+# Shells out to `docker run` — lets a caller run any published image as a
+# blanket task without authoring a dedicated TOML per tool. See issue #60:
+# this is deliberately the bash-executor version, not a first-class
+# `executor = "docker"`; promote to a real executor later if usage
+# warrants the extra complexity.
+#
+# Mounts, env-passthrough into the container, and other `docker run` flags
+# are not modeled as separate structured fields — that would need a
+# handful of fields per concern (one for mounts, one for -e, one for
+# network, ...) and blow past the 2-5 input target fast. Instead
+# DOCKER_ARGS is a single free-text field the caller fills with whatever
+# extra `docker run` flags they need (-e, -v, --network, ...). The
+# tradeoff: less guardrail/validation on what gets passed to `docker run`
+# (a caller could pass anything), in exchange for staying a 3-input type
+# that covers arbitrary images instead of a handful of hardcoded shapes.
+#
+# Requires the `docker` CLI on $PATH and a reachable daemon; tagged
+# "runtime:docker" so workers without Docker won't claim it.
+
+description = "Run a published Docker image as a task via `docker run`."
+
+documentation = '''
+Runs `docker run --rm $DOCKER_ARGS {{.DOCKER_IMAGE}} $CONTAINER_COMMAND`.
+Requires the `docker` CLI on the worker's $PATH and a Docker daemon it
+can reach (local socket or DOCKER_HOST) — tagged "runtime:docker" so
+workers that don't advertise that capability won't claim this task.
+The container is always run with `--rm` so blanket doesn't leak stopped
+containers across runs; the task's own timeout bounds how long
+`docker run` (and therefore the container) is allowed to stay up.
+
+DOCKER_IMAGE is substituted via {{.DOCKER_IMAGE}} (submit-time template,
+not just $VAR at exec time) so it's a required, always-present part of
+the command blanket's own validator can see — the other two inputs use
+$VAR since they're optional and only affect arguments, not the shape of
+the command.
+
+DOCKER_ARGS is a free-text field, not structured mount/env-passthrough
+inputs — it's appended directly to `docker run` before the image name,
+so it's where volume mounts (`-v /host/path:/container/path`), env vars
+passed into the container (`-e FOO=bar`), networking flags, etc. all go.
+This keeps the type at 3 inputs instead of growing a field per `docker
+run` flag, at the cost of no validation on what a caller puts there —
+treat this type the same as the `bash_task` escape hatch: convenient for
+trusted callers, not a sandboxed surface.
+
+Example: pull and run redis with a mounted config and forwarded env var:
+  DOCKER_IMAGE = "redis:7"
+  DOCKER_ARGS = "-e REDIS_PASSWORD=$REDIS_PASSWORD -v /host/redis.conf:/usr/local/etc/redis/redis.conf"
+  CONTAINER_COMMAND = "redis-server /usr/local/etc/redis/redis.conf"
+
+Caveat: DOCKER_ARGS and CONTAINER_COMMAND are unquoted shell expansions
+(`$VAR`), so bash word-splits them on whitespace — fine for flags and
+simple commands, but a value containing its own quoted string (e.g.
+CONTAINER_COMMAND = sh -c "echo $FOO") won't nest the way it would if
+typed directly into a shell. Keep each field to space-separated tokens;
+for anything that needs real quoting, wrap it in a script baked into
+the image instead of trying to express it through these fields.
+'''
+
+tags = ["exec:bash", "os:unix", "runtime:docker", "resource:internet"]
+timeout = 900
+
+command = '''
+docker run --rm $DOCKER_ARGS {{.DOCKER_IMAGE}} $CONTAINER_COMMAND
+'''
+
+executor = "bash"
+
+  [[environment.required]]
+  name = "DOCKER_IMAGE"
+  description = "Image (and optional tag) to run, e.g. 'alpine:3.19' or 'ghcr.io/org/tool:latest'."
+
+  [[environment.default]]
+  name = "CONTAINER_COMMAND"
+  value = ""
+  description = "Command and args to run inside the container, overriding the image's default CMD. Leave blank to use the image's default."
+
+  [[environment.default]]
+  name = "DOCKER_ARGS"
+  value = ""
+  description = "Extra flags appended to `docker run` before the image: volume mounts (-v host:container), env vars (-e FOO=bar), networking, etc."
