@@ -7,6 +7,12 @@
 //   - GET /task/ + state filter: TestTaskList_FilterByState
 //   - DELETE /task/:id:         TestDeleteTask
 //   - PUT /task/:id/cancel from WAITING: TestCancelTask_Waiting
+//   - PUT /task/:id/cancel from RUNNING without force (rejected, no-op):
+//     TestCancelTask_RunningWithoutForce
+//   - PUT /task/:id/cancel?force=true from RUNNING: TestCancelTask_RunningWithForce
+//   - cancelTaskById RUNNING force gate: TestCancelTaskById_RunningRequiresForce
+//   - worker observing the STOPPED tombstone mid-run and killing the
+//     subprocess: TestProcessOne_StoppedMidFlight (worker/worker_test.go)
 //   - PUT /task/:id/progress (valid + out-of-range): TestUpdateProgress_Valid,
 //     TestUpdateProgress_InvalidValue
 //   - PUT /task/:id/progress (missing task): TestUpdateProgress_MissingTask
@@ -22,10 +28,6 @@
 //     placed at the task's working dir root)
 //   - GET /task/ with the full filter flag set (not just state): type, tags,
 //     created-before/after, limit, offset, sort order, etc.
-//   - PUT /task/:id/stop (distinct from cancel: stop applies to a RUNNING task
-//     and should signal the worker)
-//   - cancel-then-still-try-to-run: ensure the worker observes the tombstone
-//     and refuses/stops the task cleanly
 
 package server
 
@@ -43,6 +45,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/lib/objectid"
@@ -390,7 +393,7 @@ func TestCancelTaskById_Waiting(t *testing.T) {
 	tsk, err := s.createTask(context.Background(), "echo_task", nil)
 	assert.NoError(t, err)
 
-	err = s.cancelTaskById(context.Background(), tsk.Id)
+	err = s.cancelTaskById(context.Background(), tsk.Id, false)
 	assert.NoError(t, err)
 
 	updated, err := s.DB.GetTask(tsk.Id)
@@ -408,8 +411,120 @@ func TestCancelTaskById_AlreadyTerminal(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, s.DB.FinishTask(tsk.Id, "SUCCESS"))
 
-	err = s.cancelTaskById(context.Background(), tsk.Id)
+	err = s.cancelTaskById(context.Background(), tsk.Id, false)
 	assert.ErrorIs(t, err, ErrTaskNotCancelable)
+}
+
+// putTaskInRunningState registers a worker matching echo_task's tags, claims
+// createdTask for it, and marks the task RUNNING — all through the same
+// handlers a real worker would call (POST /task/claim/:workerid, PUT
+// /task/:id/run). Used by the cancel-a-RUNNING-task tests below, since
+// cancelTaskById's RUNNING branch is only reachable from that state.
+func putTaskInRunningState(t *testing.T, s *ServerConfig, r *gin.Engine, createdTask tasks.Task) {
+	t.Helper()
+
+	wconf := worker.WorkerConf{
+		Id:      objectid.NewObjectId(),
+		Tags:    []string{"bash", "unix"},
+		Stopped: false,
+	}
+	assert.NoError(t, s.DB.UpdateWorker(&wconf))
+
+	claimReq, _ := http.NewRequest("POST", fmt.Sprintf("/task/claim/%s", wconf.Id.Hex()), nil)
+	claimW := httptest.NewRecorder()
+	r.ServeHTTP(claimW, claimReq)
+	assert.Equal(t, http.StatusOK, claimW.Code)
+
+	runReq, _ := http.NewRequest("PUT", fmt.Sprintf("/task/%s/run", createdTask.Id.Hex()), nil)
+	runW := httptest.NewRecorder()
+	r.ServeHTTP(runW, runReq)
+	assert.Equal(t, http.StatusOK, runW.Code)
+}
+
+// TestCancelTask_RunningWithoutForce is the regression test for
+// turtlemonvh/blanket#52: cancelling a RUNNING task without ?force=true must
+// be rejected (not silently no-op'd or silently applied), since it would
+// otherwise kill a subprocess actively executing on a worker.
+func TestCancelTask_RunningWithoutForce(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	created := postTask(r, "echo_task")
+	var createdTask tasks.Task
+	json.Unmarshal(created.Body.Bytes(), &createdTask)
+	putTaskInRunningState(t, s, r, createdTask)
+
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("/task/%s/cancel", createdTask.Id.Hex()), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "force")
+
+	// No-op: task is still RUNNING.
+	got, err := s.DB.GetTask(createdTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "RUNNING", got.State)
+}
+
+// TestCancelTask_RunningWithForce is the companion regression test: with
+// ?force=true, cancelling a RUNNING task transitions it to STOPPED — the
+// server-side half of turtlemonvh/blanket#52. The worker-side half (the
+// worker noticing STOPPED and killing the subprocess) is covered by
+// TestProcessOne_StoppedMidFlight in worker/worker_test.go.
+func TestCancelTask_RunningWithForce(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	created := postTask(r, "echo_task")
+	var createdTask tasks.Task
+	json.Unmarshal(created.Body.Bytes(), &createdTask)
+	putTaskInRunningState(t, s, r, createdTask)
+
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("/task/%s/cancel?force=true", createdTask.Id.Hex()), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	got, err := s.DB.GetTask(createdTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", got.State)
+}
+
+// TestCancelTaskById_RunningRequiresForce exercises the same force gate at
+// the cancelTaskById level (used directly by the MCP cancel tool).
+func TestCancelTaskById_RunningRequiresForce(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+	r := s.GetRouter()
+
+	created := postTask(r, "echo_task")
+	var createdTask tasks.Task
+	json.Unmarshal(created.Body.Bytes(), &createdTask)
+	putTaskInRunningState(t, s, r, createdTask)
+
+	err := s.cancelTaskById(context.Background(), createdTask.Id, false)
+	assert.ErrorIs(t, err, ErrRunningTaskRequiresForce)
+
+	got, err := s.DB.GetTask(createdTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "RUNNING", got.State)
+
+	err = s.cancelTaskById(context.Background(), createdTask.Id, true)
+	assert.NoError(t, err)
+
+	got, err = s.DB.GetTask(createdTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", got.State)
 }
 
 func TestRemoveTaskById(t *testing.T) {

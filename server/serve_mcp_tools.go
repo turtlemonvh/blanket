@@ -91,7 +91,7 @@ func clampLogLines(n int) int {
 
 type blanketTasksArgs struct {
 	Id       string   `json:"id,omitempty" jsonschema:"task id; if set, returns detail with a log tail"`
-	States   []string `json:"states,omitempty" jsonschema:"filter by state (WAITING, CLAIMED, RUNNING, SUCCESS, ERROR, STOPPED, TIMEDOUT)"`
+	States   []string `json:"states,omitempty" jsonschema:"filter by task state"`
 	Types    []string `json:"types,omitempty" jsonschema:"filter by type name"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"max tasks to list, default 20, max 100"`
 	LogLines int      `json:"log_lines,omitempty" jsonschema:"log tail lines when id set, default 50"`
@@ -310,7 +310,8 @@ func (s *ServerConfig) mcpLaunchWorker(ctx context.Context, req *mcp.CallToolReq
 
 type blanketCancelTaskArgs struct {
 	Id     string `json:"id" jsonschema:"task id"`
-	Delete bool   `json:"delete,omitempty" jsonschema:"also delete the task and its result dir"`
+	Force  bool   `json:"force,omitempty" jsonschema:"required to stop RUNNING"`
+	Delete bool   `json:"delete,omitempty" jsonschema:"also delete the task + result dir"`
 }
 
 func (s *ServerConfig) mcpCancelTask(ctx context.Context, req *mcp.CallToolRequest, args blanketCancelTaskArgs) (*mcp.CallToolResult, any, error) {
@@ -319,7 +320,7 @@ func (s *ServerConfig) mcpCancelTask(ctx context.Context, req *mcp.CallToolReque
 	}
 	taskId := objectid.ObjectIdHex(args.Id)
 
-	cancelErr := s.cancelTaskById(ctx, taskId)
+	cancelErr := s.cancelTaskById(ctx, taskId, args.Force)
 	wasCanceled := cancelErr == nil
 	if cancelErr != nil && !(args.Delete && errors.Is(cancelErr, ErrTaskNotCancelable)) {
 		return nil, nil, cancelErr

@@ -49,13 +49,35 @@ func (s *ServerConfig) getTaskId(c *gin.Context) (objectid.ObjectId, error) {
 // REST handler, MCP) can each decide how to present it.
 var ErrTaskNotCancelable = errors.New("task is not in a cancelable state (must be RUNNING or WAITING)")
 
-// cancelTaskById transitions a RUNNING or WAITING task to STOPPED.
-func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.ObjectId) error {
+// ErrRunningTaskRequiresForce is returned by cancelTaskById when a task is
+// RUNNING and the caller didn't opt in to stopping it. Cancelling a WAITING
+// (still-queued) task never has side effects beyond removing it from the
+// queue, but cancelling a RUNNING task kills a subprocess that's actively
+// executing on some worker — that's a more consequential action a caller
+// shouldn't trigger by accident (e.g. by cancelling a task that was claimed
+// a moment after the caller looked at its state). See
+// turtlemonvh/blanket#52.
+var ErrRunningTaskRequiresForce = errors.New("task is RUNNING; pass force=true to stop it")
+
+// cancelTaskById transitions a WAITING task, or a RUNNING task when force is
+// true, to STOPPED. For a RUNNING task this only flips the database record —
+// the worker actually running the task's subprocess notices the STOPPED
+// tombstone on its own poll loop (see WorkerConf.ProcessOne's monitor
+// goroutine in worker/worker.go) and kills the process group; there's no
+// direct RPC from server to worker.
+func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.ObjectId, force bool) error {
 	task, err := s.DB.GetTask(taskId)
 	if err != nil {
 		return err
 	}
-	if task.State != "RUNNING" && task.State != "WAITING" {
+	switch task.State {
+	case "WAITING":
+		// Still queued; no running subprocess to worry about.
+	case "RUNNING":
+		if !force {
+			return ErrRunningTaskRequiresForce
+		}
+	default:
 		return ErrTaskNotCancelable
 	}
 	if err := s.DB.FinishTask(taskId, "STOPPED"); err != nil {
@@ -280,7 +302,10 @@ func (s *ServerConfig) markTaskAsRunning(c *gin.Context) {
 	c.JSON(http.StatusOK, "{}")
 }
 
-// Called for stopping
+// Called for stopping. Cancelling a WAITING task always works. Cancelling a
+// RUNNING task additionally requires ?force=true, since it kills a
+// subprocess actively executing on a worker rather than just dequeueing —
+// see cancelTaskById and turtlemonvh/blanket#52.
 func (s *ServerConfig) cancelTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
@@ -290,10 +315,14 @@ func (s *ServerConfig) cancelTask(c *gin.Context) {
 		return
 	}
 
-	err = s.cancelTaskById(c.Request.Context(), taskId)
+	force := cast.ToBool(c.Query("force"))
+
+	err = s.cancelTaskById(c.Request.Context(), taskId, force)
 	switch {
 	case err == nil:
 		c.String(http.StatusOK, `{}`)
+	case errors.Is(err, ErrRunningTaskRequiresForce):
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 	case errors.Is(err, ErrTaskNotCancelable):
 		// Preserves the historical (non-404, non-2xx) response for a task
 		// that exists but can't be canceled from its current state — see
