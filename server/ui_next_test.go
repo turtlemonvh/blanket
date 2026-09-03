@@ -183,6 +183,83 @@ func TestUI_SubmitTask_MergesCustomEnv(t *testing.T) {
 	}
 }
 
+// TestUI_SubmitTask_TriggersWarningsFollowup covers #64: submitting against
+// a task type with warning-level validation findings (missing
+// description/documentation, here) must not block task creation, but must
+// tell the client to fetch and display them. The POST response's body is
+// (and must stay) raw <tr> rows for #tasks-rows — htmx's table-parsing
+// context would silently drop an <hx-swap-oob> element appended there (see
+// the comment in uiSubmitTask) — so warnings are signaled via an HX-Trigger
+// header instead, naming the task type for a follow-up GET.
+func TestUI_SubmitTask_TriggersWarningsFollowup(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	// minimalTaskTypeToml (from serve_tasks_test.go) has neither a
+	// description nor documentation, tripping the 006/007 warn-level checks.
+	form := url.Values{}
+	form.Set("type", "echo_task")
+
+	w := postForm(r, "/ui/tasks", form)
+	assert.Equal(t, http.StatusOK, w.Code,
+		"warnings must not block submission; body: %s", w.Body.String())
+
+	trigger := w.Header().Get("HX-Trigger")
+	assert.Contains(t, trigger, "task-type-warnings")
+	assert.Contains(t, trigger, "echo_task")
+
+	// The task itself was still created despite the warnings.
+	rows := getUI(r, "/ui/partials/tasks-rows")
+	assert.Equal(t, http.StatusOK, rows.Code)
+	assert.Contains(t, rows.Body.String(), "WAITING")
+}
+
+// TestUI_TaskTypeWarningsPartial_RendersFindings is the follow-up request
+// #flash-area issues after seeing the HX-Trigger event above: it
+// re-validates the named task type and should render its warning-level
+// findings into the self-referential OOB swap.
+func TestUI_TaskTypeWarningsPartial_RendersFindings(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/partials/task-type-warnings?type=echo_task")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	assert.Contains(t, body, `hx-swap-oob="innerHTML:#flash-area"`)
+	assert.Contains(t, body, "006")
+	assert.Contains(t, body, "007")
+	assert.Contains(t, body, "description is missing or empty")
+	assert.Contains(t, body, "documentation is missing or empty")
+}
+
+// TestUI_TaskTypeWarningsPartial_NoWarningsIsEmpty confirms a clean task
+// type still swaps (clearing any stale message from an earlier submission)
+// but with no warning content.
+func TestUI_TaskTypeWarningsPartial_NoWarningsIsEmpty(t *testing.T) {
+	cleanup := setupDocsTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/partials/task-type-warnings?type=greet_task")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	assert.Contains(t, body, `hx-swap-oob="innerHTML:#flash-area"`)
+	assert.NotContains(t, body, "flash-warning")
+}
+
 // --- POST /ui/workers ---
 
 // TestUI_SubmitWorker_RejectsLowCheckInterval is the UI side of the
