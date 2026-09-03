@@ -65,6 +65,8 @@ Lifecycle.
 POST   /worker/                 # launch a new worker (used by the UI)
 PUT    /worker/:id              # initial creation + status updates from worker
 PUT    /worker/:id/stop         # stop after current task; sets Stopped=true
+                                 # ?force=true also sends an immediate kill
+                                 # signal to the worker process
 PUT    /worker/:id/restart      # re-start an existing stopped worker
 DELETE /worker/:id              # remove from DB; only valid if stopped
 ```

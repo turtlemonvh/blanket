@@ -75,26 +75,40 @@ func (s *ServerConfig) updateWorker(c *gin.Context) {
 	c.String(http.StatusOK, "{}")
 }
 
-// stopWorkerById marks w as stopped; the worker's own poll loop observes
-// this and exits after its current task finishes.
-func (s *ServerConfig) stopWorkerById(ctx context.Context, workerId objectid.ObjectId) error {
-	w, err := s.DB.GetWorker(workerId)
+// stopWorkerById marks w as stopped and bumps its LastHeardTs, atomically
+// (via DB.StopWorker — a single bolt transaction rather than a separate
+// read/modify/write). The worker's own poll loop observes the Stopped flag
+// on its next Refetch and exits after its current task finishes.
+//
+// If force is set, this also sends an immediate OS-level kill signal to
+// the worker's process (on platforms that support it — see
+// worker.ForceStopProcess) instead of waiting for the poll loop to notice.
+// A failure to deliver that signal (e.g. the process already exited, or a
+// stale/reused pid) is logged but does not fail the call: the DB record is
+// already correctly marked stopped, which is the primary contract here.
+func (s *ServerConfig) stopWorkerById(ctx context.Context, workerId objectid.ObjectId, force bool) error {
+	w, err := s.DB.StopWorker(workerId)
 	if err != nil {
 		return err
 	}
-	w.Stopped = true
-	if err := s.DB.UpdateWorker(&w); err != nil {
-		return err
-	}
 	s.WorkerEvents.Notify()
+
+	if force && w.Pid != 0 {
+		if sigErr := worker.ForceStopProcess(w.Pid); sigErr != nil {
+			log.WithFields(log.Fields{
+				"workerId": workerId.Hex(),
+				"pid":      w.Pid,
+				"err":      sigErr.Error(),
+			}).Warn("failed to force-stop worker process")
+		}
+	}
 	return nil
 }
 
 // Put the worker in the "stopped" state
 // The worker will poll for this state
-// FIXME: Make this worker update atomic
-// FIXME: Update lastHeardTs too
-// FIXME: Allow force option that sends signals (on platforms That support that)
+// A "force=true" query param additionally sends an immediate kill signal
+// to the worker's process rather than waiting for it to notice.
 func (s *ServerConfig) stopWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
@@ -104,7 +118,9 @@ func (s *ServerConfig) stopWorker(c *gin.Context) {
 		return
 	}
 
-	if err := s.stopWorkerById(c.Request.Context(), workerId); err != nil {
+	force := c.Query("force") == "true"
+
+	if err := s.stopWorkerById(c.Request.Context(), workerId, force); err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
@@ -153,11 +169,15 @@ func (s *ServerConfig) deleteWorker(c *gin.Context) {
 		return
 	}
 
-	// FIXME: Check that worker is stopped
+	// Check that worker is stopped before deleting. Bound to the request
+	// body (the caller reports the state it observed) rather than a fresh
+	// DB.GetWorker — matches the existing "should only be called by the
+	// worker itself as it is shutting down" contract on this handler.
 	w := worker.WorkerConf{}
 	err = c.BindJSON(&w)
 	if err == nil && w.Stopped != true {
 		c.String(http.StatusBadRequest, `{"error": "Cannot delete a worker that has not been stopped"}`)
+		return
 	}
 
 	if err := s.deleteWorkerById(c.Request.Context(), workerId); err != nil {

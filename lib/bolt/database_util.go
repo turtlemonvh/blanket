@@ -9,6 +9,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
+	"github.com/turtlemonvh/blanket/worker"
 	bolt "go.etcd.io/bbolt"
 	"time"
 )
@@ -48,6 +49,41 @@ func fetchWorkerBytes(workerId objectid.ObjectId, tx *bolt.Tx) ([]byte, error) {
 		return result, database.ItemNotFoundError(fmt.Sprintf("No item for id %v", workerId))
 	}
 	return result, nil
+}
+
+// ModifyWorkerInBoltTransaction fetches, mutates, and saves a worker record
+// inside a single bolt read-write transaction, so callers get atomic
+// read-modify-write semantics instead of separate Get/Update calls that can
+// race against a concurrent writer (e.g. the worker's own periodic
+// self-registration). Mirrors ModifyTaskInBoltTransaction below.
+func ModifyWorkerInBoltTransaction(db *bolt.DB, workerId *objectid.ObjectId, f func(w *worker.WorkerConf) error) (worker.WorkerConf, error) {
+	var w worker.WorkerConf
+	err := db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(BOLTDB_WORKER_BUCKET))
+		if b == nil {
+			return MakeBucketDNEError(BOLTDB_WORKER_BUCKET)
+		}
+
+		bts, err := fetchWorkerBytes(*workerId, tx)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(bts, &w); err != nil {
+			return err
+		}
+
+		// Main function; accepts a worker object and can perform checks and modify it
+		if err := f(&w); err != nil {
+			return err
+		}
+
+		out, err := json.Marshal(&w)
+		if err != nil {
+			return err
+		}
+		return b.Put(IdBytes(w.Id), out)
+	})
+	return w, err
 }
 
 // TASKS

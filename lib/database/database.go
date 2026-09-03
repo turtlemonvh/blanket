@@ -40,6 +40,12 @@ type BlanketDB interface {
 	GetWorker(workerId objectid.ObjectId) (worker.WorkerConf, error)
 	DeleteWorker(workerId objectid.ObjectId) error
 	UpdateWorker(worker *worker.WorkerConf) error
+	// StopWorker atomically marks a worker as stopped and bumps its
+	// LastHeardTs, returning the updated record. Atomic in the sense that
+	// the read, mutate, and write happen inside a single transaction —
+	// unlike UpdateWorker, which requires the caller to already hold the
+	// full desired state and simply overwrites the record.
+	StopWorker(workerId objectid.ObjectId) (worker.WorkerConf, error)
 	CleanupStalledWorkers() error
 	// Task functions
 	GetTask(taskId objectid.ObjectId) (tasks.Task, error)
