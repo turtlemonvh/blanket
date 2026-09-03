@@ -2,7 +2,9 @@ package server
 
 import (
 	"fmt"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"net/http"
 )
 
 const (
@@ -31,6 +33,16 @@ func SafeObjectId(workerIdStr string) (objectid.ObjectId, error) {
 		return oid, fmt.Errorf("Invalid worker id")
 	}
 	return objectid.ObjectIdHex(workerIdStr), nil
+}
+
+// statusForDBError maps a database.ItemNotFoundError (a missing worker or
+// task id) to 404, consistently across handlers. Any other error keeps
+// whatever status the caller was already using for it (fallback).
+func statusForDBError(err error, fallback int) int {
+	if _, ok := err.(database.ItemNotFoundError); ok {
+		return http.StatusNotFound
+	}
+	return fallback
 }
 
 // Error types
