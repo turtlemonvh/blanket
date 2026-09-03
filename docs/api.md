@@ -14,7 +14,9 @@ GET    /task/                   # list tasks (filterable via query string)
 GET    /task/:id                # fetch a single task
 POST   /task/                   # submit a new task (JSON or multipart form)
 DELETE /task/:id                # delete a task; kills it if running
-PUT    /task/:id/cancel         # cancel a task; transitions to STOPPED
+PUT    /task/:id/cancel         # cancel a WAITING task; transitions to STOPPED.
+                                 # For a RUNNING task, requires ?force=true —
+                                 # otherwise 400. See task_flow.md.
 GET    /task/:id/log            # stream stdout (SSE)
 GET    /task/:id/log/tail       # last N lines of stdout
 ```

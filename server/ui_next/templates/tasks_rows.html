@@ -11,12 +11,22 @@
     <td><span class="badge state-{{$t.State}}">{{$t.State}}</span></td>
     <td class="row-actions">
         {{if isCancelable $t.State}}
+        {{if eq $t.State "RUNNING"}}
+        <a class="danger"
+           hx-put="/task/{{hex $t.Id}}/cancel?force=true"
+           hx-confirm="This task is RUNNING; cancelling will kill its process. Continue?"
+           hx-swap="none"
+           hx-on::after-request="htmx.ajax('GET', '/ui/partials/tasks-rows', '#tasks-rows')">
+            Cancel
+        </a>
+        {{else}}
         <a class="danger"
            hx-put="/task/{{hex $t.Id}}/cancel"
            hx-swap="none"
            hx-on::after-request="htmx.ajax('GET', '/ui/partials/tasks-rows', '#tasks-rows')">
             Cancel
         </a>
+        {{end}}
         {{end}}
         {{if isTerminal $t.State}}
         <a class="danger"
