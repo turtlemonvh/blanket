@@ -31,15 +31,22 @@ binary invoked with different subcommands.
   `serve_task_types.go`, `serve_config.go`, `ui.go`.
 - `worker/` — claim loop, task exec, daemonization.
 - `tasks/` — `Task` + `TaskType` types and TOML loading.
-- `lib/` — `bolt/`, `database/`, `queue/`, `objectid/`, `tailed_file/`.
+- `lib/` — `bolt/`, `database/`, `queue/`, `objectid/`, `tailed_file/`,
+  `docs/` (see below).
 - `command/` — Cobra CLI subcommands (`submit`, `ps`, `rm`, `worker`).
 - `examples/types/` — realistic task-type TOMLs users can copy.
 - `testdata/types/echo_task.toml` — the minimal smoke-test fixture.
   Kept tiny on purpose; don't add examples here.
-- `docs/` — user and maintainer docs. Filenames are `snake_case.md`.
-  Index is `docs/README.md`. Planned/backlog work lives as GitHub issues
-  with `status:` labels, not a docs file — there's no `docs/next_up.md`
+- `docs/` — user and maintainer docs, markdown only (plus the vendored
+  `docs/superpowers/` subtree). Filenames are `snake_case.md`. Index is
+  `docs/README.md`. Planned/backlog work lives as GitHub issues with
+  `status:` labels, not a docs file — there's no `docs/next_up.md`
   anymore (see #43). See "Issue workflow" below.
+  - The `blanket_docs` MCP tool serves these pages from a `go:embed`
+    of `docs/*.md` in `main.go` (the root package — the one place that
+    can embed outside its own directory) via `lib/docs.SetFS`; the
+    page-key map and lookup logic live in `lib/docs`, not `docs/` (see
+    #66 — `docs/` stays markdown-only).
   - `docs/api.md` — REST endpoint reference. **Keep in sync with
     `server/server.go`** — when you add, remove, or change a route,
     update `docs/api.md` in the same PR. Easy to drift; easy to catch

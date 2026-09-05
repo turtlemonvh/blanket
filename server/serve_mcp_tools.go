@@ -11,8 +11,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/viper"
-	"github.com/turtlemonvh/blanket/docs"
 	"github.com/turtlemonvh/blanket/lib/database"
+	"github.com/turtlemonvh/blanket/lib/docs"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
