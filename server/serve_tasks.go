@@ -718,7 +718,15 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 		return
 	}
 
-	finished, outcome, disconnected := s.waitForTerminalState(c, sub, t.Id, waitParams.Wait)
+	// &stream keeps the connection open and reports the task's life as it
+	// happens, ending with the same completion payload the blocking mode
+	// returns. See server/serve_stream.go.
+	if waitParams.Stream {
+		s.streamSyncSubmit(c, sub, t, waitParams)
+		return
+	}
+
+	finished, outcome, disconnected := s.waitForTerminalState(c.Request.Context(), sub, t.Id, waitParams.Wait)
 	if disconnected {
 		// Client hung up. The task keeps running and its results stay
 		// fetchable by id; there is nobody left to tell.
@@ -749,7 +757,14 @@ func (s *ServerConfig) removeTask(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, taskId.Hex()))
 }
 
-// Stream out task log
+// Stream out task log.
+//
+// Two shapes, chosen by content negotiation (turtlemonvh/blanket#27):
+// the historical default is raw stdout lines as SSE `event: message`
+// frames, which is what the htmx UI consumes and is unchanged; a caller
+// asking for `application/x-ndjson` (or passing ?format=ndjson) gets the
+// structured state/log/result event stream instead, from the same
+// encoder the synchronous submit uses. See server/serve_stream.go.
 func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 	var err error
 	var taskId objectid.ObjectId
@@ -766,6 +781,11 @@ func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 		return
 	}
 
+	if structuredLogStreamRequested(c) {
+		s.streamTaskLogEvents(c, task)
+		return
+	}
+
 	stdoutPath := path.Join(task.ResultDir, fmt.Sprintf("blanket.stdout.log"))
 	sub, err := tailed_file.Follow(stdoutPath)
 	if err != nil {
@@ -774,28 +794,40 @@ func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 	}
 	defer sub.Stop()
 
-	// Task is stopped when it is in a terminal state or we get an error fetching its information
+	// Task is stopped when it is in a terminal state or we get an error
+	// fetching its information.
+	//
+	// This closure used to `return true` on every path, including the one
+	// that had just decided the task was still live -- so every log
+	// stream closed after its first idle window (LOGLINE_WAIT_DURATION,
+	// 5s) no matter what the task was doing, and the database re-fetch
+	// above it was dead weight. Fixed as part of turtlemonvh/blanket#27,
+	// which is what put the structured stream in this same function.
+	//
+	// The live/finished test is terminal-state rather than the original
+	// `!= "RUNNING"`: a stream opened on a WAITING or CLAIMED task should
+	// wait for its output, not hang up before the task has started.
 	isComplete := func() bool {
-		task, err = s.DB.GetTask(taskId)
-		if err != nil {
+		current, ferr := s.DB.GetTask(taskId)
+		if ferr != nil {
 			log.WithFields(log.Fields{
+				"err":            ferr.Error(),
 				"taskId":         taskId,
 				"subscriptionId": sub.Id,
 				"tailedFile":     sub.TailedFile.Filepath,
-			}).Error("error refreshing worker state while processing logstreaming request")
+			}).Error("error refreshing task state while processing logstreaming request")
 			return true
-		} else {
-			if task.State != "RUNNING" {
-				log.WithFields(log.Fields{
-					"taskId":         taskId,
-					"taskState":      task.State,
-					"subscriptionId": sub.Id,
-					"tailedFile":     sub.TailedFile.Filepath,
-				}).Info("stopping logstreaming request because task is no longer running")
-				return true
-			}
 		}
-		return true
+		if tasks.IsTerminalState(current.State) {
+			log.WithFields(log.Fields{
+				"taskId":         taskId,
+				"taskState":      current.State,
+				"subscriptionId": sub.Id,
+				"tailedFile":     sub.TailedFile.Filepath,
+			}).Info("stopping logstreaming request because task reached a terminal state")
+			return true
+		}
+		return false
 	}
 	s.streamLog(c, sub, isComplete)
 }
