@@ -56,13 +56,18 @@ calls in favor of local paths:
 An offline machine also has no controlling terminal to prompt on in
 the usual case (or does, but you'd rather not be asked), so set
 `INSTALL_SKILLS=1` or `INSTALL_SKILLS=0` to decide up front instead of
-relying on the interactive prompt.
+relying on the interactive prompt. Same goes for
+`INSTALL_SHELL_INTEGRATION` — see [README](../README.md#installation)
+for what it does (PATH + shell completion via a marked block in your
+shell's rc file); set it to `1` or `0` rather than leaving it to the
+prompt.
 
 **Linux / macOS:**
 
 ```bash
 BINARY_PATH=./blanket-linux-amd64 TYPES_SRC=./types \
   INSTALL_SKILLS=1 SKILLS_SRC=./skills \
+  INSTALL_SHELL_INTEGRATION=1 \
   sh install.sh
 ```
 
@@ -73,6 +78,7 @@ $env:BINARY_PATH = ".\blanket-windows-amd64.exe"
 $env:TYPES_SRC = ".\types"
 $env:INSTALL_SKILLS = "1"
 $env:SKILLS_SRC = ".\skills"
+$env:INSTALL_SHELL_INTEGRATION = "1"
 .\install.ps1
 ```
 
