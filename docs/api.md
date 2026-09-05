@@ -70,8 +70,9 @@ filters (`states`, `types`, `limit`, etc.).
 returns `{"cron": "<expr>", "description": "<friendly text>", "next":
 ["<RFC3339>", "<RFC3339>", "<RFC3339>"]}` — the next three upcoming fire
 times, local time — or 400 with the parser's error message if `expr` is
-invalid or the `cron` query parameter is missing. Used by the create
-form's live preview.
+invalid or the `cron` query parameter is missing. This is the JSON
+version; the UI's create form renders its live preview from the HTML
+sibling under "Web UI" below.
 
 See [task_flow.md](task_flow.md#scheduling-scheduledts--recurring-tasks-turtlemonvhblanket61)
 for the full scheduling state machine, the pause/resume/cancel/change-schedule
@@ -135,6 +136,41 @@ GET /version                    # build info as JSON
 GET /config/                    # processed server config
 GET /ops/status/                # runtime metrics (goroutines, memory, etc.)
 ```
+
+## Web UI
+
+`/ui/*` serves the embedded HTMX UI: pages, static assets, SSE streams,
+and the `/ui/partials/*` HTML fragments the pages swap in. These return
+HTML, not JSON, and are an implementation detail of the UI rather than a
+client-facing API — with two worth knowing about because they mirror
+JSON endpoints above:
+
+```
+GET /ui/partials/schedule-preview?cron=<expr>
+                                # the live human-readable rendering of a
+                                # cron expression shown under the create
+                                # form's cron field: its description plus
+                                # the next three fire times, or the
+                                # parser's message as an inline error.
+                                # Always 200 — an invalid expression is
+                                # content to display, and htmx only swaps
+                                # 2xx responses. JSON equivalent:
+                                # GET /schedule/describe.
+GET /ui/partials/form-error?error=<message>
+                                # renders one rejected-submit message
+                                # into the new-task form. A 4xx response
+                                # body is never swapped by htmx, so
+                                # POST /ui/tasks returns the message on an
+                                # HX-Trigger event and the form fetches
+                                # this to display it.
+```
+
+`POST /ui/tasks` (the create form's submit) accepts the same scheduling
+inputs as `POST /task/`, as form fields: `scheduleMode` (`once` /
+`repeating`) selects which of `notBefore` / `cron` applies, `notBeforeISO`
+(an RFC3339 instant resolved in the browser's timezone) takes precedence
+over a bare `datetime-local` `notBefore` value, and an already-past start
+time is rejected rather than queued immediately.
 
 ## MCP
 

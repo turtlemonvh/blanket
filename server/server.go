@@ -129,6 +129,8 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/ui/partials/new-task", s.uiNewTaskPartial)
 	r.GET("/ui/partials/task-type-env", s.uiTaskTypeEnvPartial)
 	r.GET("/ui/partials/task-type-warnings", s.uiTaskTypeWarningsPartial)
+	r.GET("/ui/partials/schedule-preview", s.uiSchedulePreviewPartial)
+	r.GET("/ui/partials/form-error", s.uiFormErrorPartial)
 	r.GET("/ui/partials/custom-env-row", s.uiCustomEnvRowPartial)
 	r.GET("/ui/partials/new-worker", s.uiNewWorkerPartial)
 	r.GET("/ui/partials/blank", s.uiBlankPartial)

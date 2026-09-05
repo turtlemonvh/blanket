@@ -14,9 +14,20 @@ attributes included, breaking the mechanism after the very first warning.
 
 It always emits (even with no findings, i.e. empty children) so a later
 warning-free submission clears a stale message left by an earlier one.
+
+Data: .TaskType (string), .Findings ([]tasks.Finding), and .Scheduled — a
+"<STATE> - <friendly schedule description>" string set when the submission
+created a SCHEDULED or RECURRING task, so the user gets told the task is
+waiting on a schedule rather than queued right now.
 */}}
 {{define "flash-oob"}}
 <div hx-swap-oob="innerHTML:#flash-area">
+{{if .Scheduled}}
+<div class="flash flash-success" role="status">
+    <button type="button" class="flash-dismiss" aria-label="dismiss message" onclick="this.closest('.flash').remove()">&times;</button>
+    <strong>Task scheduled.</strong> {{.Scheduled}}
+</div>
+{{end}}
 {{if .Findings}}
 <div class="flash flash-warning" role="alert">
     <button type="button" class="flash-dismiss" aria-label="dismiss warnings" onclick="this.closest('.flash').remove()">&times;</button>
@@ -29,4 +40,19 @@ warning-free submission clears a stale message left by an earlier one.
 </div>
 {{end}}
 </div>
+{{end}}
+
+{{/*
+task-form-error renders one submit-rejected message into #task-form-error
+inside the new-task form (see new_task_form.html). Served by
+uiFormErrorPartial; data is {"Error": "<message>"}. Rendering server-side
+(rather than writing the text in with JS) keeps escaping in one place.
+*/}}
+{{define "task-form-error"}}
+{{if .Error}}
+<div class="flash flash-error" role="alert">
+    <button type="button" class="flash-dismiss" aria-label="dismiss error" onclick="this.closest('.flash').remove()">&times;</button>
+    <strong>Could not submit this task.</strong> {{.Error}}
+</div>
+{{end}}
 {{end}}
