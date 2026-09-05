@@ -75,7 +75,9 @@ form's live preview.
 
 See [task_flow.md](task_flow.md#scheduling-scheduledts--recurring-tasks-turtlemonvhblanket61)
 for the full scheduling state machine, the pause/resume/cancel/change-schedule
-lifecycle, and the scan limit.
+lifecycle, and the scan limit, and [usage.md](usage.md#web-ui) for the
+browser surfaces built on these endpoints (the Upcoming page and the series
+detail view).
 
 Worker-facing endpoints — used by `blanket worker` to advance task
 state.
@@ -135,6 +137,31 @@ GET /version                    # build info as JSON
 GET /config/                    # processed server config
 GET /ops/status/                # runtime metrics (goroutines, memory, etc.)
 ```
+
+### Web UI
+
+Everything under `/ui/` serves the embedded htmx UI — HTML pages and
+partials, not JSON — and isn't part of the client-facing API; see
+[usage.md](usage.md#web-ui) for what the pages do. The routes are all in
+`server/server.go`.
+
+One group is worth calling out because it *mutates*: the series lifecycle
+actions used by the series detail page.
+
+```
+PUT /ui/series/:id/pause        # -> PAUSED
+PUT /ui/series/:id/resume       # -> RECURRING
+PUT /ui/series/:id/cancel       # -> STOPPED (record kept)
+PUT /ui/series/:id/schedule     # form field `cron=<expr>`
+```
+
+They are thin wrappers over the same functions
+`PUT /task/:id/{pause,resume,cancel,schedule}` call, and exist only so the
+browser gets an HTML response it can swap in: each returns the re-rendered
+schedule block, carrying the parser's message inline when the action is
+rejected (the JSON endpoints return `{}` or an error string, which htmx
+can't place without a second round trip). Use the `/task/` endpoints
+above from any non-browser client.
 
 ## MCP
 

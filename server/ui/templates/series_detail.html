@@ -1,0 +1,84 @@
+{{/*
+Series detail (turtlemonvh/blanket#98). Served from /ui/tasks/<id> — the
+same URL as any other task record — but through this template rather than
+task_detail.html when the record is a cron template. A template has no
+worker, no progress, no stdout and no result dir of its own, so those
+sections aren't rendered here at all; what it does have is a schedule, a
+lifecycle, and the runs it spawned.
+
+The schedule/status/actions block lives in series_schedule.html because
+every action re-renders it; see that file.
+*/}}
+{{define "content"}}
+<section>
+    <div class="list-header">
+        <h2>Series Detail</h2>
+        <a class="btn" href="/ui/upcoming">← Back to Upcoming</a>
+    </div>
+
+    <h3>{{.Series.Task.TypeId}} · <span class="muted">{{.Series.Id}}</span></h3>
+
+    {{template "series-schedule" .}}
+
+    <h3>Details</h3>
+    <table>
+        <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+        <tbody>
+            <tr><td>ID</td><td>{{.Series.Id}}</td></tr>
+            <tr><td>Task Type</td><td><a href="/ui/task-types/{{.Series.Task.TypeId}}">{{.Series.Task.TypeId}}</a></td></tr>
+            <tr><td>State</td><td><span class="badge state-{{.Series.Task.State}}">{{.Series.Task.State}}</span></td></tr>
+            <tr><td>Cron Expression</td><td><code>{{.Series.Task.CronExpr}}</code></td></tr>
+            <tr><td>Created</td><td>{{fmtTs .Series.Task.CreatedTs}}</td></tr>
+            <tr><td>Last Updated</td><td>{{fmtTs .Series.Task.LastUpdatedTs}}</td></tr>
+            <tr><td>Run Timeout</td><td>{{.Series.Task.Timeout}} s</td></tr>
+            <tr><td>Tags</td><td>{{join .Series.Task.Tags ", "}}</td></tr>
+            <tr><td>JSON</td><td><a href="/task/{{.Series.Id}}">JSON representation</a></td></tr>
+        </tbody>
+    </table>
+
+    <h3>Environment Variables</h3>
+    <p class="muted">Passed to every run this series spawns.</p>
+    {{if .Series.Task.ExecEnv}}
+    <table>
+        <thead><tr><th>Key</th><th>Value</th></tr></thead>
+        <tbody>
+            {{range $k, $v := .Series.Task.ExecEnv}}
+            <tr><td>{{$k}}</td><td class="muted">{{$v}}</td></tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <p class="muted">No environment variables set.</p>
+    {{end}}
+
+    {{/*
+    Past runs: the Tasks list's own rows partial, filtered to this series'
+    children. Same columns, same actions, same SSE refresh — a run listed
+    here behaves exactly as it does on the Tasks page.
+    */}}
+    <h3 id="past-runs-heading">Past runs</h3>
+    <table hx-ext="sse" sse-connect="/ui/sse/tasks" aria-labelledby="past-runs-heading">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Id</th>
+                <th>Type</th>
+                <th>Tags</th>
+                <th>Created</th>
+                <th>Started</th>
+                <th>Updated</th>
+                <th>State</th>
+                <th>Scheduled / Next fire</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="tasks-rows"
+               hx-get="/ui/partials/tasks-rows?parentId={{.Series.Id}}&amp;reverseSort=true"
+               hx-trigger="sse:tasks-changed, refresh-rows"
+               hx-target="this"
+               hx-swap="innerHTML">
+            {{template "tasks-rows" .}}
+        </tbody>
+    </table>
+</section>
+{{end}}

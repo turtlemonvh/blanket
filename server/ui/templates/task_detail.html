@@ -7,6 +7,9 @@
 
     <h3>{{.Task.TypeId}} · <span class="muted">{{hex .Task.Id}}</span></h3>
 
+    {{/* Renders nothing unless this task was spawned by a series (#98). */}}
+    {{template "series-card" .Series}}
+
     <table>
         <thead><tr><th>Setting</th><th>Value</th></tr></thead>
         <tbody>
@@ -22,13 +25,12 @@
             {{if eq .Task.State "SCHEDULED"}}
             <tr><td>Scheduled For</td><td>{{fmtTs .Task.ScheduledTs}}</td></tr>
             {{end}}
-            {{if eq .Task.State "RECURRING"}}
-            <tr><td>Cron Expression</td><td>{{.Task.CronExpr}}</td></tr>
-            <tr><td>Next Fire</td><td>{{fmtTs .Task.NextFireTs}}</td></tr>
-            {{end}}
-            {{if not .Task.ParentId.IsZero}}
-            <tr><td>Recurring Template</td><td><a href="/ui/tasks/{{hex .Task.ParentId}}">{{hex .Task.ParentId}}</a></td></tr>
-            {{end}}
+            {{/*
+            A RECURRING/PAUSED/cancelled template never reaches this
+            template (uiTaskDetailPage routes it to series_detail.html),
+            and the link back to a child's originating series now lives in
+            the card above — so neither gets a metadata row here (#98).
+            */}}
             <tr><td>Worker ID</td><td class="muted">{{hex .Task.WorkerId}}</td></tr>
             <tr><td>Result Dir</td><td class="muted">{{.Task.ResultDir}}</td></tr>
             <tr><td>Stdout Log</td><td><a href="/results/{{hex .Task.Id}}/blanket.stdout.log">blanket.stdout.log</a></td></tr>

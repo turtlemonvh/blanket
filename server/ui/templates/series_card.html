@@ -1,0 +1,36 @@
+{{/*
+The series card (turtlemonvh/blanket#98): shown near the top of a task's
+detail page when that task was spawned by a scheduled series, so the
+question "where did this run come from, and is that series still running?"
+is answered without leaving the page.
+
+Rendered with a *SeriesView (nil when the task has no parent). A card whose
+.Found is false means the parent template's record has been deleted —
+DELETE /task/:id removes it outright, unlike cancel, which keeps it — so
+the card shows the id it can't resolve rather than pretending the link
+works.
+*/}}
+{{define "series-card"}}
+{{if .}}
+<div class="card series-card">
+    <div class="card-head">
+        <h3>Part of a scheduled series</h3>
+        {{if .Found}}
+        <span class="badge state-{{.Task.State}}" aria-label="series status">{{.StatusLabel}}</span>
+        {{end}}
+    </div>
+    {{if .Found}}
+    <dl class="card-fields">
+        <dt>Series</dt>
+        <dd><a href="/ui/tasks/{{.Id}}">{{.Task.TypeId}} · {{.Id}}</a></dd>
+        <dt>Schedule</dt>
+        <dd>{{.Description}} <span class="muted"><code>{{.Task.CronExpr}}</code></span></dd>
+    </dl>
+    {{else}}
+    <p class="muted">
+        Spawned by series <code>{{.Id}}</code>, whose record has since been deleted.
+    </p>
+    {{end}}
+</div>
+{{end}}
+{{end}}

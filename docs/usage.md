@@ -115,6 +115,58 @@ rendering of its schedule (e.g. `"Every 5 minutes"`, `"Once, at
 ["Scan limit"](task_flow.md#scan-limit-schedulermaxscheduled) section for
 the `scheduler.maxScheduled` cap (`POST /task/` returns 429 once hit).
 
+## Web UI
+
+Everything below is also doable in the browser at
+[http://localhost:8773/ui/](http://localhost:8773/ui/) — a
+server-rendered htmx UI baked into the binary, no separate deploy.
+
+| Page | What it's for |
+| ---- | ------------- |
+| **Tasks** (`/ui/`) | Every task record: filter by state/type/tags/date, submit a new one, cancel or delete. |
+| **Upcoming** (`/ui/upcoming`) | What hasn't run yet — see below. |
+| **Workers** (`/ui/workers`) | Launch, stop, restart workers; tail their logs. |
+| **Task Types** (`/ui/task-types`) | The loaded TOML types and their settings. |
+| **About** (`/ui/about`) | Version, config file, effective settings. |
+
+### Upcoming
+
+`/ui/upcoming` is the "what's queued on a schedule" view, split into the
+two things that behave differently:
+
+- **One-time** — tasks in state `SCHEDULED` (submitted with `notBefore`).
+  Each shows the time it will run and a friendly description, and can be
+  cancelled straight from the list.
+- **Series** — live (`RECURRING`) and `PAUSED` templates. Each shows its
+  friendly schedule, the raw cron expression, the next fire time (or when
+  it was paused), a status badge, and a link to its detail page. Paused
+  series stay listed; cancelled ones drop off, though their record — and
+  their past runs — remain reachable at `/ui/tasks/<id>`.
+
+### Series detail
+
+A recurring template's own `/ui/tasks/<id>` page is the series view. From
+it you can:
+
+- read the schedule in plain English alongside the raw cron expression and
+  the next fire time;
+- **pause** it (the page then shows when it was paused) and **resume** it,
+  which recomputes the next fire from now;
+- **change the schedule** — type a new cron expression and a live preview
+  shows what it means and its next three fire times before you save;
+- **cancel** it for good, which stops it firing but keeps the record and
+  its history (`DELETE`, via the Tasks page, removes the record instead);
+- browse **past runs** — every task the series has spawned, in the same
+  table as the main Tasks list.
+
+### Series membership
+
+A task spawned by a series carries a `parentId`, and the UI links back to
+where it came from: its detail page opens with a card naming the series,
+its schedule, and whether that series is currently live, paused, or
+cancelled, and its row in the Tasks list carries a compact
+"part of series …" link.
+
 ## File uploads
 
 Attach files to a task — they're placed in the task's working

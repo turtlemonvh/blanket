@@ -67,6 +67,14 @@ var uiFuncs = template.FuncMap{
 		}
 		return false
 	},
+	// scheduleDesc is the same friendly text the JSON API exposes as a
+	// task's "scheduleDescription" field, so the UI and API never disagree
+	// about how a schedule reads.
+	"scheduleDesc": tasks.ScheduleDescriptionFor,
+	// cronDesc is scheduleDesc's building block, without the trailing
+	// "(paused)"/"(stopped)" annotation — for the places that show a
+	// status badge right next to the schedule and don't want it twice.
+	"cronDesc": cronDescription,
 }
 
 // uiTemplates is populated lazily per page so the partial templates
@@ -182,6 +190,14 @@ func (s *ServerConfig) uiTasksPage(c *gin.Context) {
 }
 
 // uiTaskDetailPage renders one task's metadata, env vars, and log stream.
+//
+// A recurring *template* (the record a cron submission creates) is served
+// from this same URL but through series_detail.html instead — one URL per
+// task record, a different template for a record that has no worker, no
+// progress, no logs and no result dir of its own, but does have a
+// schedule, lifecycle actions, and a list of past runs. Branching inside
+// task_detail.html would have meant wrapping nearly every row and both log
+// sections in {{if}}; see renderSeriesDetail in ui_schedule.go.
 func (s *ServerConfig) uiTaskDetailPage(c *gin.Context) {
 	taskId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
@@ -193,20 +209,37 @@ func (s *ServerConfig) uiTaskDetailPage(c *gin.Context) {
 		c.String(http.StatusNotFound, err.Error())
 		return
 	}
-	t := mustParseUIPage("task-detail", "ui/templates/task_detail.html")
-	s.renderUI(c, t, gin.H{"Title": "Task " + taskId.Hex()[:8], "Task": task})
+	if isSeriesTemplate(task) {
+		s.renderSeriesDetail(c, task)
+		return
+	}
+	t := mustParseUIPage("task-detail",
+		"ui/templates/task_detail.html",
+		"ui/templates/series_card.html")
+	s.renderUI(c, t, gin.H{
+		"Title":  "Task " + taskId.Hex()[:8],
+		"Task":   task,
+		"Series": s.lookupSeries(task.ParentId),
+	})
 }
 
 // uiTasksRowsPartial renders just the tbody for htmx swaps.
 func (s *ServerConfig) uiTasksRowsPartial(c *gin.Context) {
-	tks, _, err := s.DB.GetTasks(database.TaskSearchConfFromContext(c))
+	tc := database.TaskSearchConfFromContext(c)
+	tks, _, err := s.DB.GetTasks(tc)
 	if err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
 	t := mustParsePartial("tasks-rows", "tasks_rows.html")
 	c.Header("Content-Type", "text/html; charset=utf-8")
-	if err := t.ExecuteTemplate(c.Writer, "tasks-rows", gin.H{"Tasks": tks}); err != nil {
+	if err := t.ExecuteTemplate(c.Writer, "tasks-rows", gin.H{
+		"Tasks": tks,
+		// ?parentId=<id> means the caller is already looking at one
+		// series' runs (the series detail page's Past runs table), so the
+		// per-row "part of series …" backlink would repeat on every row.
+		"HideSeriesLink": tc.FilterParentId,
+	}); err != nil {
 		log.WithField("err", err).Warn("ui: render tasks-rows")
 	}
 }

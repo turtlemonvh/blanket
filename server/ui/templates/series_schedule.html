@@ -1,0 +1,112 @@
+{{/*
+The schedule + status + actions block of the series detail page.
+
+It is its own partial because every action on this page answers with it:
+pause, resume, cancel and change-schedule all PUT to /ui/series/:id/* and
+swap the whole block (hx-swap="outerHTML" onto #series-schedule), so the
+status badge, the paused-at line, the next fire time and the editor's
+current value all move together and can't drift apart. A rejected action
+comes back as the same block with the server's message in .Error rather
+than as an error page.
+*/}}
+{{define "series-schedule"}}
+<div class="card" id="series-schedule">
+    <div class="card-head">
+        <h3>Schedule</h3>
+        <span class="badge state-{{.Series.Task.State}}" aria-label="series status">{{.Series.StatusLabel}}</span>
+    </div>
+
+    {{if .Error}}
+    <p class="inline-error" role="alert">{{.Error}}</p>
+    {{end}}
+
+    <dl class="card-fields">
+        <dt>Runs</dt>
+        <dd>{{.Series.Description}} <span class="muted"><code>{{.Series.Task.CronExpr}}</code></span></dd>
+
+        <dt>Next fire</dt>
+        <dd>
+            {{if .Series.Live}}{{fmtTs .Series.Task.NextFireTs}}
+            {{else if .Series.Cancelled}}<span class="muted">Cancelled &mdash; this series will not fire again.</span>
+            {{else}}<span class="muted">Paused &mdash; resuming recomputes the next fire time.</span>
+            {{end}}
+        </dd>
+
+        {{if eq .Series.Task.State "PAUSED"}}
+        <dt>Paused at</dt>
+        <dd>{{fmtTs .Series.Task.PausedTs}}</dd>
+        {{end}}
+    </dl>
+
+    {{/*
+    Pause / Resume / Cancel. Deliberately outside the editor <form> below:
+    an hx-put button inside a form would also fire the form's own request.
+    */}}
+    {{if not .Series.Cancelled}}
+    <div class="card-actions">
+        {{if .Series.Live}}
+        <button type="button"
+                hx-put="/ui/series/{{.Series.Id}}/pause"
+                hx-target="#series-schedule"
+                hx-swap="outerHTML">
+            Pause
+        </button>
+        {{end}}
+        {{if eq .Series.Task.State "PAUSED"}}
+        <button type="button" class="primary"
+                hx-put="/ui/series/{{.Series.Id}}/resume"
+                hx-target="#series-schedule"
+                hx-swap="outerHTML">
+            Resume
+        </button>
+        {{end}}
+        <button type="button" class="danger"
+                hx-put="/ui/series/{{.Series.Id}}/cancel"
+                hx-confirm="Cancel this series? It stops firing for good; the record and its past runs are kept."
+                hx-target="#series-schedule"
+                hx-swap="outerHTML">
+            Cancel series
+        </button>
+    </div>
+    {{end}}
+
+    {{if not .Series.Cancelled}}
+    {{/*
+    TEMPORARY schedule editor (turtlemonvh/blanket#98 / #97).
+
+    turtlemonvh/blanket#97 is adding a shared cron input + live preview as
+    ui/templates/schedule_editor.html for the new-task form. That branch
+    isn't on master yet, so this is a deliberately minimal stand-in with
+    the same shape (input + debounced hx-get preview). When #97 lands,
+    replace this whole block with `{{"{{"}}template "schedule-editor" .{{"}}"}}`
+    and delete uiSchedulePreviewPartial + schedule_preview.html.
+    */}}
+    <form class="schedule-editor"
+          hx-put="/ui/series/{{.Series.Id}}/schedule"
+          hx-target="#series-schedule"
+          hx-swap="outerHTML">
+        <label for="series-cron">Change schedule</label>
+        {{/*
+        The preview's trigger is `input`, not `keyup`: it also covers paste,
+        autofill, and programmatic value changes.
+        */}}
+        <input id="series-cron"
+               type="text"
+               name="cron"
+               value="{{.Series.Task.CronExpr}}"
+               placeholder="*/5 * * * *"
+               aria-label="cron expression"
+               autocomplete="off"
+               hx-get="/ui/partials/schedule-preview"
+               hx-trigger="load, input changed delay:300ms"
+               hx-target="#series-cron-preview"
+               hx-swap="innerHTML">
+        <button type="submit" class="primary">Save schedule</button>
+        <div id="series-cron-preview" class="schedule-preview" aria-live="polite"></div>
+        <p class="muted" style="margin:0.35rem 0 0;">
+            Standard 5-field cron: minute hour day-of-month month day-of-week.
+        </p>
+    </form>
+    {{end}}
+</div>
+{{end}}
