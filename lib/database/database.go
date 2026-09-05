@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cast"
@@ -46,6 +47,11 @@ type BlanketDB interface {
 	// unlike UpdateWorker, which requires the caller to already hold the
 	// full desired state and simply overwrites the record.
 	StopWorker(workerId objectid.ObjectId) (worker.WorkerConf, error)
+	// StartWorker is StopWorker's counterpart: it clears Stopped and bumps
+	// LastHeardTs atomically. Needed because UpdateWorker no longer lets a
+	// worker clear its own Stopped flag by re-registering; see the
+	// field-level merge documented on the bolt implementation.
+	StartWorker(workerId objectid.ObjectId) (worker.WorkerConf, error)
 	CleanupStalledWorkers() error
 	// Task functions
 	GetTask(taskId objectid.ObjectId) (tasks.Task, error)
@@ -191,25 +197,51 @@ type TaskRunConfig struct {
 	LastUpdatedTs int64
 	Pid           int
 	TypeDigest    string
+	// RunId is the worker's fencing token for this execution attempt; see
+	// tasks.Task.RunId. Empty means the caller is a worker predating the
+	// token and is handled leniently (see RunTask).
+	RunId string
 }
 
-// TaskFinishConfig carries everything set on a task as it moves to a
-// terminal state. Mirrors TaskRunConfig above: a struct rather than a
-// widening parameter list, so the next finish-time field doesn't churn
-// the BlanketDB interface again (turtlemonvh/blanket#27).
+// TaskFinishConfig carries everything PUT /task/:id/finish needs. It's an
+// options struct rather than a bare state string — mirroring TaskRunConfig
+// above — so the terminal transition can grow fields without churning the
+// BlanketDB interface again. Two features added fields at once: the
+// fencing token from turtlemonvh/blanket#23 phase 1 and the child
+// process's exit code from turtlemonvh/blanket#27.
 type TaskFinishConfig struct {
-	// NewState is the terminal state to move to; one of
+	// State is the terminal state to move the task to; one of
 	// tasks.ValidTerminalTaskStates.
-	NewState string
+	State string
+	// RunId is the worker's fencing token for the run being reported.
+	// Empty is legacy-permissive; see RunTask/FinishTask.
+	RunId string
 	// ExitCode is the process exit status, when it's known. nil (the
 	// zero value) leaves the task's ExitCode untouched — which is the
 	// right behavior for the paths that have no process to report on
-	// (PUT /task/:id/cancel, a task stopped before it ever ran).
+	// (PUT /task/:id/cancel, a task stopped before it ever ran) and for
+	// an idempotent repeat finish, which must not clobber the exit code
+	// the first report already stored.
 	ExitCode *int
 }
 
-// FinishState is the common case: a terminal state with no exit code to
-// record.
+// FinishState is the common case: a terminal state with no exit code and
+// no fencing token to record.
 func FinishState(newState string) *TaskFinishConfig {
-	return &TaskFinishConfig{NewState: newState}
+	return &TaskFinishConfig{State: newState}
 }
+
+// Errors that describe *why* a task transition was refused, so HTTP
+// handlers can map them to a status code without string matching.
+var (
+	// ErrRunIdMismatch means the caller's fencing token doesn't match the
+	// one stored on the task: two runners believe they own it. The caller
+	// must not retry — this maps to 409.
+	ErrRunIdMismatch = errors.New("task is owned by a different run (runId mismatch)")
+
+	// ErrTaskStateConflict means the task exists but is not in a state this
+	// transition can be applied from, in a way retrying will never fix
+	// (e.g. asking to start a task a user has already stopped). Maps to
+	// 409.
+	ErrTaskStateConflict = errors.New("task is not in a state this transition can be applied from")
+)

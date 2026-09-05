@@ -354,3 +354,47 @@ marker_count="$(grep -c '^# >>> blanket >>>$' "$INSTALL_HOME/.bashrc" || true)"
     || fail "expected exactly one blanket marked block in .bashrc after two installs, got $marker_count"
 grep -q 'blanket completion bash' "$INSTALL_HOME/.bashrc" \
     || fail ".bashrc missing bash completion sourcing line"
+
+# A real worker runs a real task end to end, and the outcome journal it
+# keeps while the task is in flight is gone afterwards
+# (turtlemonvh/blanket#23 phase 1). A leftover blanket.outcome.json after a
+# clean run means the worker never got its finish acknowledged — the exact
+# condition the phase 3 reaper will act on — so it must not happen here.
+"$REPO_ROOT/$BINARY" --config "$WORKDIR/config.json" worker \
+    --tags "exec:bash,os:unix" --checkinterval 0.5 \
+    > "$WORKDIR/worker.out" 2>&1 &
+WORKER_PID=$!
+
+worker_task_resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
+    -d '{"type":"echo_task"}' "$BASE/task/")"
+worker_task_id="$(jq -r '.id' <<<"$worker_task_resp")"
+[[ -n "$worker_task_id" && "$worker_task_id" != "null" ]] \
+    || fail "could not extract worker task id: $worker_task_resp"
+
+finished=0
+for _ in $(seq 1 60); do
+    check="$(curl -fsS "$BASE/task/$worker_task_id")"
+    if grep -q '"state":"SUCCESS"' <<<"$check"; then
+        finished=1
+        break
+    fi
+    sleep 0.25
+done
+[[ "$finished" -eq 1 ]] \
+    || fail "worker did not run the task to SUCCESS within 15s: ${check:-<no response>}; worker log: $(cat "$WORKDIR/worker.out")"
+
+# The run recorded a fencing token.
+grep -q '"runId":"[0-9a-f]\{24\}"' <<<"$check" \
+    || fail "finished task carries no runId fencing token: $check"
+
+journal="$WORKDIR/results/$worker_task_id/blanket.outcome.json"
+[[ ! -e "$journal" ]] \
+    || fail "outcome journal left behind after a clean run: $(cat "$journal")"
+
+# The task's logs are still there — only the journal is cleaned up.
+[[ -s "$WORKDIR/results/$worker_task_id/blanket.stdout.log" ]] \
+    || fail "task stdout log missing or empty at $WORKDIR/results/$worker_task_id"
+
+kill "$WORKER_PID" 2>/dev/null || true
+wait "$WORKER_PID" 2>/dev/null || true
+WORKER_PID=""

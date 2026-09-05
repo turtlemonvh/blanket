@@ -105,7 +105,7 @@ func TestSyncSubmit_Completes(t *testing.T) {
 		require.NoError(t, os.MkdirAll(tsk.ResultDir, 0755))
 		require.NoError(t, os.WriteFile(filepath.Join(tsk.ResultDir, "blanket.stdout.log"), []byte("hello world\n"), 0644))
 		require.NoError(t, os.WriteFile(filepath.Join(tsk.ResultDir, "blanket.stderr.log"), []byte("a warning\n"), 0644))
-		require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{NewState: "SUCCESS", ExitCode: intPtr(0)}))
+		require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "SUCCESS", ExitCode: intPtr(0)}))
 		s.TaskEvents.Notify()
 	})
 
@@ -316,7 +316,7 @@ func TestSyncSubmit_FailOnError(t *testing.T) {
 
 			w := syncSubmit(t, s, tc.query, func(tsk tasks.Task) {
 				require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{
-					NewState: tc.finalState,
+					State:    tc.finalState,
 					ExitCode: intPtr(1),
 				}))
 				s.TaskEvents.Notify()

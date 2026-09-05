@@ -38,6 +38,19 @@ windows:
 test:
 	go test -v -count=1 ./...
 
+# Race detector over the packages where goroutines actually interact: the
+# worker's monitor/claim goroutines, the server's handlers, and the bolt
+# transactions underneath them. Requires cgo and a C toolchain — both are in
+# the docker image (see Dockerfile), which is why `make docker-test-race` is
+# the supported way to run this.
+#
+# lib/tailed_file is deliberately not in this list: TestStreamLogSingleSub
+# reports a pre-existing race in TailedFileCollection that predates
+# turtlemonvh/blanket#23 and is out of scope for it. Add it here once that
+# is fixed.
+test-race:
+	CGO_ENABLED=1 go test -race -count=1 ./worker/... ./server/... ./lib/bolt/... ./lib/httpx/... ./lib/timing/... ./tasks/...
+
 # Integration tests spin up a real server + worker; skip with -short
 test-integration:
 	go test -v -count=1 -run TestProcessOne ./worker/...
@@ -122,6 +135,9 @@ docker-check-fmt: docker-image
 docker-test: docker-image
 	$(DOCKER_RUN) make test
 
+docker-test-race: docker-image
+	$(DOCKER_RUN) make test-race
+
 docker-test-browser: docker-image
 	$(DOCKER_RUN) make linux test-browser
 
@@ -146,4 +162,4 @@ docker-shell: docker-image
 docker-clean:
 	-docker volume rm blanket-dev-cache blanket-npm-cache
 
-.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e test-smoke install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-browser docker-test-smoke docker-build docker-shell docker-clean
+.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-shell docker-clean

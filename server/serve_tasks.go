@@ -89,6 +89,12 @@ func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.Objec
 	default:
 		return ErrTaskNotCancelable
 	}
+	// FinishState leaves both RunId and ExitCode unset. No RunId because
+	// this is a server-issued (user-initiated) transition, not a worker
+	// reporting on a run it owns: an empty token is legacy-permissive, so it
+	// applies regardless of which run is in flight — which is the intent, a
+	// user's STOPPED wins. No ExitCode because there is no process exit to
+	// report, and a nil one must not clobber a code a racing finish wrote.
 	if err := s.DB.FinishTask(taskId, database.FinishState("STOPPED")); err != nil {
 		return err
 	}
@@ -300,10 +306,15 @@ func (s *ServerConfig) markTaskAsRunning(c *gin.Context) {
 		LastUpdatedTs: time.Now().Unix(),
 		Pid:           cast.ToInt(c.Query("pid")),
 		TypeDigest:    c.Query("typeDigest"),
+		RunId:         c.Query("runId"),
 	}
 	err = s.DB.RunTask(taskId, tc)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		// A replay of a transition already applied comes back as nil (see
+		// bolt's RunTask), so anything here is a real refusal: 404 for a
+		// missing task, 409 for a fencing/state conflict the caller must
+		// not retry, 500 otherwise.
+		c.String(statusForTransitionError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
 		return
 	}
 
@@ -368,10 +379,15 @@ func (s *ServerConfig) markTaskAsFinished(c *gin.Context) {
 		return
 	}
 
-	// exitCode is optional and worker-supplied: absent (or empty) means
-	// "no exit status to record", e.g. a task killed by a signal. A
-	// present-but-unparseable value is a client bug, not a silent no-op.
-	fc := &database.TaskFinishConfig{NewState: newState}
+	// runId is the caller's fencing token for the run being reported; empty
+	// is legacy-permissive (see FinishTask). exitCode is optional and
+	// worker-supplied: absent (or empty) means "no exit status to record",
+	// e.g. a task killed by a signal. A present-but-unparseable value is a
+	// client bug, not a silent no-op.
+	fc := &database.TaskFinishConfig{
+		State: newState,
+		RunId: c.Query("runId"),
+	}
 	if raw, ok := c.GetQuery("exitCode"); ok && raw != "" {
 		code, convErr := strconv.Atoi(raw)
 		if convErr != nil {
@@ -382,12 +398,16 @@ func (s *ServerConfig) markTaskAsFinished(c *gin.Context) {
 		fc.ExitCode = &code
 	}
 
+	// FinishTask decides what actually lands: a repeat of a run already
+	// terminal is a 200 no-op that leaves the stored exit code alone, a
+	// contradicting runId is a 409, and only a genuine first terminal
+	// transition records the exit code above.
 	err = s.DB.FinishTask(taskId, fc)
 	if err != nil {
-		// A missing task id maps to 404; any other FinishTask error (e.g. the
-		// task isn't in a state it can be finished from) keeps the historical
-		// 400.
-		c.String(statusForDBError(err, http.StatusBadRequest), MakeErrorString(err.Error()))
+		// A missing task id maps to 404 and a fencing-token conflict to 409;
+		// any other FinishTask error (e.g. the task isn't in a state it can
+		// be finished from) keeps the historical 400.
+		c.String(statusForTransitionError(err, http.StatusBadRequest), MakeErrorString(err.Error()))
 		return
 	}
 
@@ -423,6 +443,18 @@ func (s *ServerConfig) updateTaskProgress(c *gin.Context) {
 	if task.State != "RUNNING" {
 		errMsg := fmt.Sprintf("Cannot update progress on task '%s': task is in state '%s', not RUNNING", taskId.Hex(), task.State)
 		c.String(http.StatusBadRequest, MakeErrorString(errMsg))
+		return
+	}
+
+	// Progress accepts the same fencing token as run/finish
+	// (turtlemonvh/blanket#23 phase 1). Reporting progress for a run that
+	// no longer owns this task is a 409, so a stale runner can't paint over
+	// the live one's numbers. Callers that send no token — including task
+	// scripts using BLANKET_APP_TASK_ID, which have no way to know it — are
+	// unaffected: empty is legacy-permissive here as everywhere else.
+	if runId := c.Query("runId"); runId != "" && task.RunId != "" && runId != task.RunId {
+		errMsg := fmt.Sprintf("Cannot update progress on task '%s': it is running as '%s', caller claims '%s'", taskId.Hex(), task.RunId, runId)
+		c.String(http.StatusConflict, MakeErrorString(errMsg))
 		return
 	}
 
