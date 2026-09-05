@@ -267,7 +267,7 @@ case "$INSTALL_AUTOSTART" in
   0) DO_INSTALL_AUTOSTART="no" ;;
   *)
     if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-      printf "Start blanket automatically on login (systemd user unit / launchd agent)? [y/N] " > /dev/tty
+      printf "Start blanket automatically on login (systemd user unit / launchd agent)? [y/N] " > /dev/tty 2>/dev/null || true
       REPLY=""
       read -r REPLY < /dev/tty || REPLY=""
       case "$REPLY" in
