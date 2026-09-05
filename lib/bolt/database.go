@@ -224,13 +224,22 @@ func (DB *BlanketBoltDB) RunTask(taskId objectid.ObjectId, fields *database.Task
 }
 
 // Set task to a terminal state
-// Checks that task is currently in the RUNNING state
+// Checks that task is currently in an eligible source state
 // Sets progress to 100 if the state is SUCCESS
+//
+// RECURRING and PAUSED are eligible sources (in addition to the original
+// RUNNING/WAITING/SCHEDULED) so PUT /task/:id/cancel can stop a recurring
+// template -- see cancelTaskById (server/serve_tasks.go) and
+// docs/task_flow.md's Scheduling section. Cancelling a template clears
+// PausedTs implicitly by leaving it as-is on the now-STOPPED record; it's
+// only meaningful while State == "PAUSED".
 func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, newState string) error {
 	// Set lots of fields
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
-		if t.State != "RUNNING" && t.State != "WAITING" {
-			return fmt.Errorf("Task found in unexpected state; found '%s', expected 'RUNNING'", t.State)
+		switch t.State {
+		case "RUNNING", "WAITING", "SCHEDULED", "RECURRING", "PAUSED":
+		default:
+			return fmt.Errorf("Task found in unexpected state; found '%s', expected one of 'RUNNING', 'WAITING', 'SCHEDULED', 'RECURRING', or 'PAUSED'", t.State)
 		}
 		t.State = newState
 		if t.State == "SUCCESS" {

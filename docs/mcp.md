@@ -37,7 +37,7 @@ Nine tools, gated by `mcp.mode`:
 | `blanket_tasks` | `id?`, `states?`, `types?`, `limit?`, `log_lines?` | readonly |
 | `blanket_workers` | `id?`, `log_lines?` | readonly |
 | `blanket_write_task_type` | `name`, `toml` | create |
-| `blanket_submit_task` | `type`, `env?` | create |
+| `blanket_submit_task` | `type`, `env?`, `notBefore?`, `cron?` | create |
 | `blanket_launch_worker` | `tags`, `count?` | create |
 | `blanket_cancel_task` | `id`, `force?`, `delete?` | all |
 | `blanket_stop_worker` | `id`, `delete?` | all |
@@ -50,12 +50,16 @@ small and just as readable to an agent.
 
 ## Context cost
 
-`tools/list` plus the server's instructions text is kept under **4,000
-characters (~1,000 tokens)** in the default `mcp.mode = "all"` — the
+`tools/list` plus the server's instructions text is kept under **4,400
+characters (~1,100 tokens)** in the default `mcp.mode = "all"` — the
 worst case, since narrower modes register fewer tools. This is a
 test-enforced budget (`TestToolListFitsContextBudget`), not just a
 target; the actual measured size is logged by that test on every run.
-As of this writing that measured size is 3,994 characters.
+As of this writing that measured size is 4,320 characters (the budget was
+bumped from 4,000 when `blanket_submit_task` gained `notBefore`/`cron`
+and `blanket_cancel_task`'s description grew to cover the new task
+states it can cancel — turtlemonvh/blanket#61's pause/resume/schedule
+rework).
 
 If you're tight on context budget elsewhere, set `mcp.mode = "readonly"`
 to cut this further, or wait for the tool-search / dynamic-discovery

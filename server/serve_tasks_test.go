@@ -114,6 +114,25 @@ func postTask(r http.Handler, taskType string) *httptest.ResponseRecorder {
 	return postJSON(r, "/task/", fmt.Sprintf(`{"type": %q}`, taskType))
 }
 
+// putJSON PUTs a JSON string to path and returns the recorder. Used by the
+// pause/resume/change-schedule handler tests (server/serve_schedule_test.go).
+func putJSON(r http.Handler, path string, body string) *httptest.ResponseRecorder {
+	req, _ := http.NewRequest("PUT", path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// putNoBody PUTs with no body -- for endpoints like /pause and /resume
+// that take no payload.
+func putNoBody(r http.Handler, path string) *httptest.ResponseRecorder {
+	req, _ := http.NewRequest("PUT", path, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
 // --- Infrastructure endpoints ---
 
 func TestVersionEndpoint(t *testing.T) {

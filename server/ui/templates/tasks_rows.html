@@ -9,6 +9,12 @@
     <td>{{if eq $t.StartedTs 0}}<span class="muted">None</span>{{else}}{{fmtTs $t.StartedTs}}{{end}}</td>
     <td>{{fmtTs $t.LastUpdatedTs}}</td>
     <td><span class="badge state-{{$t.State}}">{{$t.State}}</span></td>
+    <td>
+        {{if eq $t.State "SCHEDULED"}}{{fmtTs $t.ScheduledTs}}
+        {{else if eq $t.State "RECURRING"}}{{fmtTs $t.NextFireTs}} <span class="muted">({{$t.CronExpr}})</span>
+        {{else}}<span class="muted">&mdash;</span>
+        {{end}}
+    </td>
     <td class="row-actions">
         {{if isCancelable $t.State}}
         {{if eq $t.State "RUNNING"}}
@@ -39,6 +45,6 @@
     </td>
 </tr>
 {{else}}
-<tr><td colspan="9" class="muted">No tasks.</td></tr>
+<tr><td colspan="10" class="muted">No tasks.</td></tr>
 {{end}}
 {{end}}

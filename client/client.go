@@ -93,12 +93,36 @@ func GetActiveWorkerTagSets(port int) ([][]string, error) {
 	return sets, nil
 }
 
+// SubmitTaskOptions carries the optional scheduling fields for SubmitTask.
+// Zero value means "run immediately, once" (blanket's original behavior).
+type SubmitTaskOptions struct {
+	// NotBefore delays a one-shot task: a Go duration ("10m"), an RFC3339
+	// timestamp, or a unix-seconds integer. Mutually exclusive with Cron.
+	NotBefore string
+	// Cron is a standard 5-field cron expression. Setting it makes this a
+	// recurring template that spawns a child task at each fire time
+	// instead of running itself. Mutually exclusive with NotBefore.
+	Cron string
+}
+
 func SubmitTask(taskType string, env map[string]interface{}, port int) (tasks.Task, error) {
+	return SubmitTaskWithOptions(taskType, env, port, SubmitTaskOptions{})
+}
+
+// SubmitTaskWithOptions is SubmitTask plus optional scheduling fields; see
+// turtlemonvh/blanket#61 and docs/task_flow.md.
+func SubmitTaskWithOptions(taskType string, env map[string]interface{}, port int, opts SubmitTaskOptions) (tasks.Task, error) {
 	var t tasks.Task
 
 	body := make(map[string]interface{})
 	body["type"] = taskType
 	body["environment"] = env
+	if opts.NotBefore != "" {
+		body["notBefore"] = opts.NotBefore
+	}
+	if opts.Cron != "" {
+		body["cron"] = opts.Cron
+	}
 
 	bts, err := json.Marshal(body)
 	if err != nil {

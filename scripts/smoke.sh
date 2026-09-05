@@ -130,6 +130,30 @@ grep -q '"state":"WAITING"' <<<"$create_resp" || fail "new task not WAITING: $cr
 tasks_body="$(curl -fsS "$BASE/task/")"
 grep -q '"type":"echo_task"' <<<"$tasks_body" || fail "/task/ missing submitted task: $tasks_body"
 
+# Scheduled tasks (turtlemonvh/blanket#61): a task submitted with a future
+# notBefore starts SCHEDULED (not WAITING/claimable), and the background
+# scheduler loop (default 2s tick) promotes it to WAITING once due.
+scheduled_resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
+    -d '{"type":"echo_task","notBefore":"2s"}' "$BASE/task/")"
+grep -q '"state":"SCHEDULED"' <<<"$scheduled_resp" || fail "notBefore task not SCHEDULED: $scheduled_resp"
+
+scheduled_id="$(jq -r '.id' <<<"$scheduled_resp")"
+[[ -n "$scheduled_id" && "$scheduled_id" != "null" ]] || fail "could not extract scheduled task id: $scheduled_resp"
+
+immediate_check="$(curl -fsS "$BASE/task/$scheduled_id")"
+grep -q '"state":"SCHEDULED"' <<<"$immediate_check" || fail "scheduled task promoted before its notBefore time: $immediate_check"
+
+promoted=0
+for _ in $(seq 1 40); do
+    check="$(curl -fsS "$BASE/task/$scheduled_id")"
+    if grep -q '"state":"WAITING"' <<<"$check"; then
+        promoted=1
+        break
+    fi
+    sleep 0.25
+done
+[[ "$promoted" -eq 1 ]] || fail "scheduled task was not promoted to WAITING within 10s: $check"
+
 # task-validate --json runs against the fixture type and produces a JSON
 # array (the fixture is intentionally minimal, so warnings are expected —
 # this only checks the command runs and emits well-formed JSON, not that

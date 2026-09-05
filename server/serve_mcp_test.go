@@ -314,6 +314,79 @@ func TestMcpSubmitTask_UnknownType(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestMcpSubmitTask_NotBefore confirms the MCP submit tool mirrors REST's
+// notBefore handling: a future notBefore starts the task SCHEDULED
+// (rather than WAITING), and the result text echoes both state and the
+// schedule description.
+func TestMcpSubmitTask_NotBefore(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	res, _, err := s.mcpSubmitTask(context.Background(), nil, blanketSubmitTaskArgs{Type: "echo_task", NotBefore: "1h"})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "state=SCHEDULED")
+	assert.Contains(t, text, "schedule: Once, at")
+}
+
+// TestMcpSubmitTask_Cron confirms cron makes the submitted task a
+// RECURRING template and the result echoes both the schedule description
+// and the next fire time.
+func TestMcpSubmitTask_Cron(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	res, _, err := s.mcpSubmitTask(context.Background(), nil, blanketSubmitTaskArgs{Type: "echo_task", Cron: "*/5 * * * *"})
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "state=RECURRING")
+	assert.Contains(t, text, "schedule:")
+	assert.Contains(t, text, "next fire:")
+}
+
+// TestMcpSubmitTask_NotBeforeAndCronMutuallyExclusive mirrors
+// TestPostTask_NotBeforeAndCronMutuallyExclusive (scheduler_test.go) at
+// the MCP layer.
+func TestMcpSubmitTask_NotBeforeAndCronMutuallyExclusive(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	_, _, err := s.mcpSubmitTask(context.Background(), nil, blanketSubmitTaskArgs{Type: "echo_task", NotBefore: "10m", Cron: "*/5 * * * *"})
+	assert.Error(t, err)
+}
+
+// TestMcpSubmitTask_InvalidCron confirms a bad cron expression surfaces
+// the parser's error rather than silently submitting a plain task.
+func TestMcpSubmitTask_InvalidCron(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	_, _, err := s.mcpSubmitTask(context.Background(), nil, blanketSubmitTaskArgs{Type: "echo_task", Cron: "not a cron expr"})
+	assert.Error(t, err)
+}
+
+// TestMcpSubmitTask_ScheduledCapacityLimit confirms the MCP tool is
+// subject to the same scheduler.maxScheduled capacity check as
+// POST /task/, via the shared applyScheduleChecked helper.
+func TestMcpSubmitTask_ScheduledCapacityLimit(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+	s.SchedulerMaxScheduled = 1
+
+	_, _, err := s.mcpSubmitTask(context.Background(), nil, blanketSubmitTaskArgs{Type: "echo_task", NotBefore: "1h"})
+	assert.ErrorIs(t, err, ErrScheduledCapacityExceeded)
+}
+
 func TestMcpLaunchWorker_RequiresTags(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()

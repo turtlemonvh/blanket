@@ -86,6 +86,8 @@ tr:hover td { background: #fafbfc; }
   color: var(--fg);
   border: 1px solid var(--border);
 }
+.badge.state-SCHEDULED { background: #f1edfa; color: #6c4bd1; border-color: #d3c5f0; }
+.badge.state-RECURRING { background: #f1edfa; color: #6c4bd1; border-color: #d3c5f0; }
 .badge.state-WAITING  { background: #eef3fb; color: var(--accent); border-color: #c4d7ec; }
 .badge.state-CLAIMED  { background: #eef3fb; color: var(--accent); border-color: #c4d7ec; }
 .badge.state-RUNNING  { background: #fff6e0; color: var(--warn); border-color: #ead59a; }

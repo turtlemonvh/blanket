@@ -19,6 +19,16 @@
             <tr><td>Last Updated</td><td>{{fmtTs .Task.LastUpdatedTs}}</td></tr>
             <tr><td>Timeout</td><td>{{.Task.Timeout}} s</td></tr>
             <tr><td>Tags</td><td>{{join .Task.Tags ", "}}</td></tr>
+            {{if eq .Task.State "SCHEDULED"}}
+            <tr><td>Scheduled For</td><td>{{fmtTs .Task.ScheduledTs}}</td></tr>
+            {{end}}
+            {{if eq .Task.State "RECURRING"}}
+            <tr><td>Cron Expression</td><td>{{.Task.CronExpr}}</td></tr>
+            <tr><td>Next Fire</td><td>{{fmtTs .Task.NextFireTs}}</td></tr>
+            {{end}}
+            {{if not .Task.ParentId.IsZero}}
+            <tr><td>Recurring Template</td><td><a href="/ui/tasks/{{hex .Task.ParentId}}">{{hex .Task.ParentId}}</a></td></tr>
+            {{end}}
             <tr><td>Worker ID</td><td class="muted">{{hex .Task.WorkerId}}</td></tr>
             <tr><td>Result Dir</td><td class="muted">{{.Task.ResultDir}}</td></tr>
             <tr><td>Stdout Log</td><td><a href="/results/{{hex .Task.Id}}/blanket.stdout.log">blanket.stdout.log</a></td></tr>

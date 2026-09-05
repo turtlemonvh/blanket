@@ -63,6 +63,18 @@ func InitializeConfig() {
 	viper.SetDefault("mcp.validateStrict", false)
 	viper.SetDefault("mcp.maxLogLines", 200)
 
+	// How often the scheduler loop checks for due SCHEDULED tasks and
+	// RECURRING task templates (turtlemonvh/blanket#61). Accepts anything
+	// time.ParseDuration understands, e.g. "2s", "500ms".
+	viper.SetDefault("scheduler.interval", "2s")
+
+	// Upper bound on how many SCHEDULED+RECURRING+PAUSED tasks may be
+	// live at once. POST /task/ returns 429 once a new notBefore-future or
+	// cron submission would reach this many; it also bounds how many rows
+	// a single scheduler tick will scan (server.DefaultSchedulerMaxScheduled's
+	// doc comment explains why the same number serves both purposes).
+	viper.SetDefault("scheduler.maxScheduled", 10000)
+
 	// Time multiplier can be used in tests to speed up tests
 	viper.SetDefault("timeMultiplier", "1.0")
 

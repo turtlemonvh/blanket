@@ -12,6 +12,7 @@ Launch blanket server
 package server
 
 import (
+	"context"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
@@ -60,6 +61,17 @@ type ServerConfig struct {
 	Version        string
 	TaskEvents     *EventHub
 	WorkerEvents   *EventHub
+	// SchedulerInterval controls how often the background scheduler loop
+	// (server/scheduler.go) checks for due SCHEDULED tasks and RECURRING
+	// templates. Zero means DefaultSchedulerInterval.
+	SchedulerInterval time.Duration
+	// SchedulerMaxScheduled bounds both how many SCHEDULED/RECURRING/
+	// PAUSED tasks a single scheduler tick will scan (server/scheduler.go)
+	// and how many are allowed to be live at once -- POST /task/ returns
+	// 429 once accepting a new SCHEDULED or RECURRING submission would
+	// reach this many. Zero means DefaultSchedulerMaxScheduled. Backed by
+	// the scheduler.maxScheduled config key.
+	SchedulerMaxScheduled int
 }
 
 func (s *ServerConfig) GetRouter() *gin.Engine {
@@ -142,13 +154,17 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/task_type/:name", s.getTaskType)
 
 	// Called by user
-	r.GET("/task/", s.getTasks)                // list tasks in db
-	r.GET("/task/:id", s.getTask)              // fetch just 1 by id
-	r.POST("/task/", s.postTask)               // add a new task to the queue
-	r.DELETE("/task/:id", s.removeTask)        // delete all information from db, including killing if running
-	r.GET("/task/:id/log", s.streamTaskLog)    // stream stdout log
-	r.GET("/task/:id/log/tail", s.tailTaskLog) // last N lines of stdout
-	r.PUT("/task/:id/cancel", s.cancelTask)    // stop execution of a task; will be moved to state STOPPED
+	r.GET("/task/", s.getTasks)                       // list tasks in db
+	r.GET("/task/:id", s.getTask)                     // fetch just 1 by id
+	r.POST("/task/", s.postTask)                      // add a new task to the queue
+	r.DELETE("/task/:id", s.removeTask)               // delete all information from db, including killing if running
+	r.GET("/task/:id/log", s.streamTaskLog)           // stream stdout log
+	r.GET("/task/:id/log/tail", s.tailTaskLog)        // last N lines of stdout
+	r.PUT("/task/:id/cancel", s.cancelTask)           // stop execution of a task; will be moved to state STOPPED
+	r.PUT("/task/:id/pause", s.pauseTask)             // pause a RECURRING template; sets pausedTs
+	r.PUT("/task/:id/resume", s.resumeTask)           // resume a PAUSED template back to RECURRING
+	r.PUT("/task/:id/schedule", s.changeTaskSchedule) // change a SCHEDULED task's notBefore, or a RECURRING/PAUSED template's cron
+	r.GET("/schedule/describe", s.describeSchedule)   // {"cron": ..., "description": ..., "next": [...]}; live preview for a create form
 
 	// Called by worker
 	r.POST("/task/claim/:workerid", s.claimTask)      // claim a task
@@ -180,10 +196,12 @@ func (s *ServerConfig) Serve() *graceful.Server {
 		"port": s.Port,
 	}).Info("Starting main server")
 
-	// FIXME: Launch background process for automatically
-	// - cleaning queue
-	// - cleaning db
-	// - cleaning workers
+	// Background loops: currently just the task scheduler (SCHEDULED /
+	// RECURRING tasks; see server/scheduler.go). Also the place a future
+	// reaper loop for cleaning the queue/db/workers (turtlemonvh/blanket#23
+	// phase 3) should be added -- startBackgroundLoops is structured so
+	// that's one more `go s.xLoop(ctx)` call, not new start/stop plumbing.
+	stopBackgroundLoops := s.startBackgroundLoops(context.Background())
 
 	// Graceful shutdown, leaving up to 2 seconds for requests to complete
 	return &graceful.Server{
@@ -195,6 +213,7 @@ func (s *ServerConfig) Serve() *graceful.Server {
 		BeforeShutdown: func() bool {
 			// Called first
 			log.Warn("Called BeforeShutdown")
+			stopBackgroundLoops()
 			tailed_file.StopAll()
 			return true
 		},

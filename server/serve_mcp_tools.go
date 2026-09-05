@@ -270,16 +270,48 @@ func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRe
 }
 
 type blanketSubmitTaskArgs struct {
-	Type string            `json:"type" jsonschema:"task type name"`
-	Env  map[string]string `json:"env,omitempty" jsonschema:"env vars for the task"`
+	Type      string            `json:"type" jsonschema:"task type name"`
+	Env       map[string]string `json:"env,omitempty" jsonschema:"env vars for the task"`
+	NotBefore string            `json:"notBefore,omitempty" jsonschema:"delay: duration/RFC3339/unix-seconds; excl. w/ cron"`
+	Cron      string            `json:"cron,omitempty" jsonschema:"5-field cron; makes this a recurring template"`
 }
 
+// mcpSubmitTask mirrors REST/CLI submit semantics: same optional
+// notBefore/cron fields (mutually exclusive, same accepted shapes, same
+// errors), applied the same way (newTaskForType, then
+// applyScheduleChecked -- which also enforces scheduler.maxScheduled, same
+// as POST /task/'s 429). The result echoes the resulting state plus the
+// schedule description / next fire time, so an agent can see whether it
+// got a SCHEDULED/RECURRING task without a follow-up blanket_tasks call.
 func (s *ServerConfig) mcpSubmitTask(ctx context.Context, req *mcp.CallToolRequest, args blanketSubmitTaskArgs) (*mcp.CallToolResult, any, error) {
-	t, err := s.createTask(ctx, args.Type, args.Env)
+	t, err := s.newTaskForType(args.Type, args.Env)
 	if err != nil {
 		return nil, nil, err
 	}
-	return textResult(fmt.Sprintf("submitted task %s (type=%s, state=%s)", t.Id.Hex(), t.TypeId, t.State))
+
+	scheduleReq := map[string]interface{}{}
+	if args.NotBefore != "" {
+		scheduleReq["notBefore"] = args.NotBefore
+	}
+	if args.Cron != "" {
+		scheduleReq["cron"] = args.Cron
+	}
+	if err := s.applyScheduleChecked(&t, scheduleReq, time.Now()); err != nil {
+		return nil, nil, err
+	}
+
+	if err := s.enqueueTask(ctx, &t); err != nil {
+		return nil, nil, err
+	}
+
+	msg := fmt.Sprintf("submitted task %s (type=%s, state=%s)", t.Id.Hex(), t.TypeId, t.State)
+	if desc := tasks.ScheduleDescriptionFor(t); desc != "" {
+		msg += fmt.Sprintf("; schedule: %s", desc)
+	}
+	if t.State == "RECURRING" {
+		msg += fmt.Sprintf("; next fire: %s", time.Unix(t.NextFireTs, 0).Local().Format(time.RFC3339))
+	}
+	return textResult(msg)
 }
 
 type blanketLaunchWorkerArgs struct {

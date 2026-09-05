@@ -59,20 +59,28 @@ var ErrTaskNotCancelable = errors.New("task is not in a cancelable state (must b
 // turtlemonvh/blanket#52.
 var ErrRunningTaskRequiresForce = errors.New("task is RUNNING; pass force=true to stop it")
 
-// cancelTaskById transitions a WAITING task, or a RUNNING task when force is
-// true, to STOPPED. For a RUNNING task this only flips the database record —
-// the worker actually running the task's subprocess notices the STOPPED
-// tombstone on its own poll loop (see WorkerConf.ProcessOne's monitor
-// goroutine in worker/worker.go) and kills the process group; there's no
-// direct RPC from server to worker.
+// cancelTaskById transitions a WAITING, SCHEDULED, RECURRING, or PAUSED
+// task, or a RUNNING task when force is true, to STOPPED. For a RUNNING
+// task this only flips the database record — the worker actually running
+// the task's subprocess notices the STOPPED tombstone on its own poll loop
+// (see WorkerConf.ProcessOne's monitor goroutine in worker/worker.go) and
+// kills the process group; there's no direct RPC from server to worker.
+//
+// Cancelling a RECURRING or PAUSED template stops it from ever firing
+// again (fireDueRecurringTasks only ever looks at templates in state
+// RECURRING) while keeping its record around — unlike DELETE /task/:id,
+// which removes it. Either way, a child the template already spawned
+// keeps running to its own completion, unaffected. See docs/task_flow.md.
 func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.ObjectId, force bool) error {
 	task, err := s.DB.GetTask(taskId)
 	if err != nil {
 		return err
 	}
 	switch task.State {
-	case "WAITING":
-		// Still queued; no running subprocess to worry about.
+	case "WAITING", "SCHEDULED", "RECURRING", "PAUSED":
+		// Not yet queued (SCHEDULED), queued but unclaimed (WAITING), or a
+		// template that never runs itself (RECURRING/PAUSED); no running
+		// subprocess to worry about in any of these cases.
 	case "RUNNING":
 		if !force {
 			return ErrRunningTaskRequiresForce
@@ -440,17 +448,108 @@ func (s *ServerConfig) newTaskForType(typeName string, env map[string]string) (t
 	return tt.NewTask(env)
 }
 
-// enqueueTask saves t to the database and pushes it onto the queue, making
-// it visible to workers. Call after any pre-run setup (e.g. writing
-// uploaded files into t.ResultDir) is complete.
+// enqueueTask saves t to the database and, if it's immediately runnable,
+// pushes it onto the queue, making it visible to workers. Call after any
+// pre-run setup (e.g. writing uploaded files into t.ResultDir) is complete.
+//
+// A task in the SCHEDULED or RECURRING state is deliberately NOT queued
+// here: SCHEDULED tasks wait for the scheduler loop (server/scheduler.go)
+// to promote them once their ScheduledTs is due, and a RECURRING template
+// never runs itself at all -- only the children the scheduler spawns from
+// it ever reach the queue.
 func (s *ServerConfig) enqueueTask(ctx context.Context, t *tasks.Task) error {
 	if err := s.DB.SaveTask(t); err != nil {
 		return fmt.Errorf("error saving to database: %w", err)
 	}
-	if err := s.Q.AddTask(t); err != nil {
-		return err
+	if t.State == "WAITING" {
+		if err := s.Q.AddTask(t); err != nil {
+			return err
+		}
 	}
 	s.TaskEvents.Notify()
+	return nil
+}
+
+// applySchedule reads the optional "notBefore" and "cron" scheduling
+// fields out of req and applies them to t, which must already be in its
+// default WAITING state (i.e. called after newTaskForType, before
+// enqueueTask). At most one of the two may be set.
+//
+//   - "cron": a standard 5-field cron expression. t becomes a RECURRING
+//     template: it is never itself queued: the scheduler spawns a fresh
+//     child task at every fire time (see fireDueRecurringTasks).
+//   - "notBefore": a Go duration ("10m"), an RFC3339 timestamp, or a
+//     unix-seconds integer, naming the earliest time t may be queued. If
+//     that time is already in the past, t stays WAITING (identical to not
+//     specifying "notBefore" at all -- it's still recorded on ScheduledTs
+//     for visibility, but nothing delays it). Otherwise t becomes
+//     SCHEDULED until the scheduler promotes it.
+func applySchedule(t *tasks.Task, req map[string]interface{}, now time.Time) error {
+	notBefore, _ := req["notBefore"].(string)
+	cronExpr, _ := req["cron"].(string)
+
+	if notBefore != "" && cronExpr != "" {
+		return fmt.Errorf("'notBefore' and 'cron' are mutually exclusive; a recurring task's children run at their own scheduled cron time")
+	}
+
+	if cronExpr != "" {
+		next, err := tasks.NextCronFire(cronExpr, now)
+		if err != nil {
+			return err
+		}
+		t.CronExpr = cronExpr
+		t.NextFireTs = next.Unix()
+		t.State = "RECURRING"
+		return nil
+	}
+
+	if notBefore != "" {
+		ts, err := tasks.ParseNotBefore(notBefore, now)
+		if err != nil {
+			return err
+		}
+		t.ScheduledTs = ts
+		if ts > now.Unix() {
+			t.State = "SCHEDULED"
+		}
+		return nil
+	}
+
+	return nil
+}
+
+// ErrScheduledCapacityExceeded is returned by applyScheduleChecked when
+// accepting a SCHEDULED or RECURRING submission would push the number of
+// live SCHEDULED+RECURRING+PAUSED tasks to or past scheduler.maxScheduled
+// (ServerConfig.SchedulerMaxScheduled). Callers (the REST handler, MCP) map
+// it to HTTP 429 / a plain error, respectively. See scheduledLiveCount and
+// DefaultSchedulerMaxScheduled in server/scheduler.go.
+var ErrScheduledCapacityExceeded = errors.New("scheduled/recurring task limit reached")
+
+// applyScheduleChecked is applySchedule plus the scheduler.maxScheduled
+// capacity check: after applySchedule decides t's state, if that state is
+// SCHEDULED or RECURRING (i.e. this submission would add to the live
+// scheduled/recurring/paused count), it counts the existing live total and
+// refuses with ErrScheduledCapacityExceeded if adding t would reach the
+// configured limit. An immediately-WAITING submission (no schedule, or a
+// past notBefore) never hits this check — it was never going to occupy a
+// "live scheduled" slot.
+func (s *ServerConfig) applyScheduleChecked(t *tasks.Task, req map[string]interface{}, now time.Time) error {
+	if err := applySchedule(t, req, now); err != nil {
+		return err
+	}
+	if t.State != "SCHEDULED" && t.State != "RECURRING" {
+		return nil
+	}
+
+	limit := s.maxScheduledLimit()
+	count, err := s.scheduledLiveCount(limit)
+	if err != nil {
+		return fmt.Errorf("error checking scheduled/recurring task count: %w", err)
+	}
+	if count+1 >= limit {
+		return fmt.Errorf("%w: scheduler.maxScheduled is %d live SCHEDULED/RECURRING/PAUSED tasks; cancel, delete, or wait for some to complete before submitting another scheduled or recurring task", ErrScheduledCapacityExceeded, limit)
+	}
 	return nil
 }
 
@@ -525,6 +624,15 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 
 	t, err := s.newTaskForType(typeName, envVars)
 	if err != nil {
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
+		return
+	}
+
+	if err := s.applyScheduleChecked(&t, req, time.Now()); err != nil {
+		if errors.Is(err, ErrScheduledCapacityExceeded) {
+			c.String(http.StatusTooManyRequests, MakeErrorString(err.Error()))
+			return
+		}
 		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}

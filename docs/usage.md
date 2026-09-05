@@ -56,6 +56,65 @@ $ blanket submit -t echo_task -e '{"GREETING": "hi"}' -q
 69ded2adce42aa8a11ac9de0
 ```
 
+## Scheduling tasks
+
+Delay a one-shot task, or make it recurring, with `notBefore` / `cron`
+(REST) or `--not-before` / `--cron` (CLI) — mutually exclusive. See
+[task_flow.md](task_flow.md#scheduling-scheduledts--recurring-tasks-turtlemonvhblanket61)
+for the full state machine.
+
+```bash
+# Run in 10 minutes
+curl -s -X POST localhost:8773/task/ \
+    -d '{"type": "echo_task", "notBefore": "10m"}'
+$ blanket submit -t echo_task --not-before 10m
+
+# Run at a specific time (RFC3339)
+$ blanket submit -t echo_task --not-before 2026-09-05T08:00:00Z
+
+# Recurring: fire every 5 minutes. Each fire spawns its own child task
+# with its own log/result dir; the submitted task itself is a template
+# and never runs.
+curl -s -X POST localhost:8773/task/ \
+    -d '{"type": "echo_task", "cron": "*/5 * * * *"}'
+$ blanket submit -t echo_task --cron "*/5 * * * *"
+
+# Stop a recurring task for good, keeping the record around (it'll show
+# STOPPED in `blanket ps` / GET /task/:id): cancel it, same as any other
+# task. Its already-spawned children are unaffected and run to completion
+# normally.
+curl -s -X PUT localhost:8773/task/<template-task-id>/cancel
+# Or remove the record outright instead:
+$ blanket rm <template-task-id>
+
+# Pause a recurring task (it stops firing but the record stays RECURRING-
+# adjacent, as PAUSED) / resume it later. There's no CLI flag for these
+# yet -- REST only:
+curl -s -X PUT localhost:8773/task/<template-task-id>/pause
+curl -s -X PUT localhost:8773/task/<template-task-id>/resume
+
+# Change a live series' schedule without resubmitting it:
+curl -s -X PUT localhost:8773/task/<template-task-id>/schedule \
+    -d '{"cron": "0 * * * *"}'
+curl -s -X PUT localhost:8773/task/<scheduled-task-id>/schedule \
+    -d '{"notBefore": "2h"}'
+
+# Preview a cron expression's friendly description and next fire times
+# before submitting (used by the create form's live preview):
+curl -s "localhost:8773/schedule/describe?cron=*/5+*+*+*+*" | jq .
+
+# List a series' past runs (its spawned children):
+curl -s "localhost:8773/task/?parentId=<template-task-id>" | jq .
+```
+
+Every task response includes a `scheduleDescription` field — a friendly
+rendering of its schedule (e.g. `"Every 5 minutes"`, `"Once, at
+2026-09-05T08:00:00-04:00"`), shown in the `SCHEDULE` column of
+`blanket ps`'s default output. See
+[task_flow.md](task_flow.md#friendly-schedule-text) for details, and its
+["Scan limit"](task_flow.md#scan-limit-schedulermaxscheduled) section for
+the `scheduler.maxScheduled` cap (`POST /task/` returns 429 once hit).
+
 ## File uploads
 
 Attach files to a task — they're placed in the task's working
