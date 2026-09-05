@@ -20,6 +20,23 @@
 
     <div id="task-type-env"></div>
 
+    {{template "schedule-editor" .Schedule}}
+
+    {{/*
+    A rejected submit (an invalid or past start time, a bad cron
+    expression, a missing required env var) answers 4xx, which htmx never
+    swaps — so the error rides back on an HX-Trigger event instead and this
+    element fetches its own rendering of it. Lives inside the form, next to
+    the fields the user has to fix, and disappears with the form when the
+    submit finally succeeds. See uiFormError in server/ui.go.
+    */}}
+    <div id="task-form-error" class="task-form-error"
+         hx-trigger="task-form-error from:body"
+         hx-get="/ui/partials/form-error"
+         hx-vals="js:{error: event.detail.error}"
+         hx-target="this"
+         hx-swap="innerHTML"></div>
+
     <button type="submit" class="primary" aria-label="launch task">Launch Task</button>
     <button type="button" hx-get="/ui/partials/blank" hx-target="#new-task-form" hx-swap="innerHTML">
         Cancel
