@@ -438,7 +438,7 @@ func TestMcpCancelTask_DeleteOnTerminalTask(t *testing.T) {
 
 	tsk, err := s.createTask(context.Background(), "echo_task", nil)
 	assert.NoError(t, err)
-	assert.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "SUCCESS"}))
+	assert.NoError(t, s.DB.FinishTask(tsk.Id, database.FinishState("SUCCESS")))
 
 	res, _, err := s.mcpCancelTask(context.Background(), nil, blanketCancelTaskArgs{Id: tsk.Id.Hex(), Delete: true})
 	assert.NoError(t, err)

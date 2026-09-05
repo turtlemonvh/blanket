@@ -350,6 +350,11 @@ func (DB *BlanketBoltDB) RunTask(taskId objectid.ObjectId, fields *database.Task
 // an error, retries into the same rejection, and eventually gives up
 // having reported nothing. A RunId that contradicts the stored one is the
 // one case that is still refused, with ErrRunIdMismatch.
+//
+// A no-op repeat deliberately leaves every stored field alone, including
+// the ExitCode a first report may already have written
+// (turtlemonvh/blanket#27) — a retry must never downgrade a recorded exit
+// status to "unknown".
 func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, fields *database.TaskFinishConfig) error {
 	// Set lots of fields
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
@@ -382,6 +387,12 @@ func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, fields *database.T
 		t.State = fields.State
 		if t.State == "SUCCESS" {
 			t.Progress = 100
+		}
+		// Only overwrite the exit code when the caller actually has one;
+		// a cancel has no process to report on and shouldn't clobber an
+		// exit code a racing finish already wrote.
+		if fields.ExitCode != nil {
+			t.ExitCode = fields.ExitCode
 		}
 		t.LastUpdatedTs = time.Now().Unix()
 		return nil

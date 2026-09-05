@@ -67,6 +67,16 @@ type Task struct {
 	// in phase 4.
 	RunId string `json:"runId"`
 
+	// ExitCode is the process exit status the worker observed after
+	// cmd.Wait() (turtlemonvh/blanket#27). A pointer so "not known yet"
+	// (null) stays distinguishable from a genuine exit 0: a task that
+	// hasn't finished, one whose process was killed by a signal
+	// (STOPPED/TIMEDOUT), and one that never started all report null.
+	// Tasks are stored as whole-object JSON blobs, so records written
+	// before this field existed decode with a nil ExitCode and no
+	// migration is needed.
+	ExitCode *int `json:"exitCode"`
+
 	// Scheduling (turtlemonvh/blanket#61). All additive: zero values
 	// (0, "", zero ObjectId) mean "no scheduling", so records written
 	// before this feature existed still load and behave exactly as
@@ -76,6 +86,19 @@ type Task struct {
 	NextFireTs  int64             `json:"nextFireTs"`  // next time a RECURRING template should fire; meaningful only when CronExpr != "" and State == "RECURRING"
 	ParentId    objectid.ObjectId `json:"parentId"`    // id of the RECURRING template that spawned this task, if any; zero ObjectId for a task submitted directly or a template itself
 	PausedTs    int64             `json:"pausedTs"`    // unix ts this template was paused at; 0 unless State == "PAUSED". Set by PUT /task/:id/pause, cleared by /resume.
+}
+
+// IsTerminalState reports whether a task state is one a task never leaves
+// (see ValidTerminalTaskStates). The synchronous-wait handler
+// (server/serve_sync.go) polls on this, hence a shared helper rather than
+// another inline loop over the slice.
+func IsTerminalState(state string) bool {
+	for _, s := range ValidTerminalTaskStates {
+		if state == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *Task) String() string {

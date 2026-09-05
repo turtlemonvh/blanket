@@ -19,10 +19,13 @@
 //   - PUT /task/:id/progress (wrong state): TestUpdateProgress_WrongState
 //   - PUT /task/:id/finish: TestFinishTask_Valid, TestFinishTask_MissingTask,
 //     TestFinishTask_AlreadyTerminalIsNoop, TestFinishTask_InvalidState,
-//     TestFinishTask_FromClaimedIsBadRequest
+//     TestFinishTask_FromClaimedIsBadRequest,
+//     TestFinishTask_InvalidExitCode (serve_sync_test.go)
 //   - PUT /task/:id/run + /finish idempotency and the RunId fencing token
 //     (turtlemonvh/blanket#23 phase 1): TestRunTask_*, TestFinishTask_*RunId*,
-//     TestFinishTask_LateErrorAfterUserStopKeepsStopped
+//     TestFinishTask_LateErrorAfterUserStopKeepsStopped,
+//     TestFinishTask_RepeatKeepsStoredExitCode
+//   - POST /task/?wait (synchronous submission): server/serve_sync_test.go
 //   - POST /task/claim/:workerid edges: TestClaim_MissingWorker,
 //     TestClaim_NoMatchingTask, TestClaim_DeletedTaskDoesNotPanic
 //   - claim-task happy path: covered by worker integration test TestProcessOne
@@ -433,7 +436,7 @@ func TestCancelTaskById_AlreadyTerminal(t *testing.T) {
 
 	tsk, err := s.createTask(context.Background(), "echo_task", nil)
 	assert.NoError(t, err)
-	assert.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "SUCCESS"}))
+	assert.NoError(t, s.DB.FinishTask(tsk.Id, database.FinishState("SUCCESS")))
 
 	err = s.cancelTaskById(context.Background(), tsk.Id, false)
 	assert.ErrorIs(t, err, ErrTaskNotCancelable)
@@ -1300,6 +1303,45 @@ func TestFinishTask_LateErrorAfterUserStopKeepsStopped(t *testing.T) {
 	got, err := s.DB.GetTask(taskId)
 	assert.NoError(t, err)
 	assert.Equal(t, "STOPPED", got.State)
+}
+
+// TestFinishTask_RepeatKeepsStoredExitCode is the seam between the two
+// features that landed on this handler at once: the idempotent finish
+// (turtlemonvh/blanket#23 phase 1) and the recorded exit code
+// (turtlemonvh/blanket#27). A retried finish is a 200 no-op, and a no-op
+// must leave the exit code the first report stored exactly as it is —
+// whether the retry carries no code, a different code, or no runId at all.
+// Downgrading a recorded exit status back to "unknown" would be a silent
+// data loss for any caller waiting on POST /task/?wait.
+func TestFinishTask_RepeatKeepsStoredExitCode(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "finish", "state=ERROR&runId=RUN1&exitCode=3"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "ERROR", got.State)
+	if assert.NotNil(t, got.ExitCode) {
+		assert.Equal(t, 3, *got.ExitCode)
+	}
+
+	// The retries a worker actually makes after a lost response.
+	for _, params := range []string{
+		"state=ERROR&runId=RUN1",            // same run, no code this time
+		"state=ERROR&runId=RUN1&exitCode=9", // same run, contradicting code
+		"state=ERROR",                       // legacy worker, no token at all
+		"state=SUCCESS&runId=RUN1",          // a late, different terminal state
+	} {
+		assert.Equal(t, http.StatusOK, putTransition(r, taskId, "finish", params), params)
+		got, err = s.DB.GetTask(taskId)
+		assert.NoError(t, err)
+		assert.Equal(t, "ERROR", got.State, params)
+		if assert.NotNil(t, got.ExitCode, params) {
+			assert.Equal(t, 3, *got.ExitCode, params)
+		}
+	}
 }
 
 // A CLAIMED task has not started yet, so a finish for it is a genuine

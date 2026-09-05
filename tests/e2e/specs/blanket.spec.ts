@@ -115,6 +115,47 @@ test.describe('Task API lifecycle', () => {
     expect(res.status()).toBe(400);
   });
 
+  // Synchronous submission (turtlemonvh/blanket#27). No worker runs in
+  // this suite -- the webServer block starts only the server -- so a
+  // submitted task is never claimed and the wait always expires. That
+  // makes this a real test of the timeout path: 504, with enough in the
+  // body to go pick the task up asynchronously. Anything that needs the
+  // task to actually complete lives in scripts/smoke.sh, which runs a
+  // worker.
+  test('POST /task/?wait times out with 504 on an unclaimed task', async ({ request, baseURL }) => {
+    const types = await getTaskTypes(baseURL!);
+    if (types.length === 0) {
+      test.skip(true, 'no task types configured on this server');
+      return;
+    }
+
+    const res = await request.post('/task/?wait=2s', { data: { type: types[0].name } });
+    expect(res.status()).toBe(504);
+
+    const body = await res.json();
+    expect(body.waitOutcome).toBe('wait_timeout');
+    expect(body.id).toMatch(/^[0-9a-f]{24}$/);
+    expect(body.state).toBe('WAITING');
+    expect(body.pollUrl).toBe(`/task/${body.id}`);
+
+    // The task is left alone and is still there to poll.
+    const after = await request.get(`/task/${body.id}`);
+    expect(after.ok()).toBeTruthy();
+    expect((await after.json()).state).toBe('WAITING');
+
+    await request.delete(`/task/${body.id}`);
+  });
+
+  test('POST /task/ with a wait over the cap returns 400', async ({ request, baseURL }) => {
+    const types = await getTaskTypes(baseURL!);
+    if (types.length === 0) {
+      test.skip(true, 'no task types configured on this server');
+      return;
+    }
+    const res = await request.post('/task/?wait=99h', { data: { type: types[0].name } });
+    expect(res.status()).toBe(400);
+  });
+
   // This test only runs if the server has at least one task type configured.
   test('task round-trip: submit -> get -> cancel', async ({ request, baseURL }) => {
     const types = await getTaskTypes(baseURL!);

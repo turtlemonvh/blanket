@@ -185,6 +185,95 @@ func TestGetTask_OldFormatRecordStillLoads(t *testing.T) {
 	assert.Equal(t, "", task.CronExpr)
 	assert.Equal(t, int64(0), task.NextFireTs)
 	assert.True(t, task.ParentId.IsZero())
+	// exitCode is likewise additive: a record written before the field
+	// existed decodes with nil, no migration needed
+	// (turtlemonvh/blanket#27).
+	assert.Nil(t, task.ExitCode)
+}
+
+// TestFinishTask_ExitCode covers the FinishTask(taskId,
+// *TaskFinishConfig) contract (turtlemonvh/blanket#27): a supplied exit
+// code is stored, and a nil one leaves whatever is there alone rather
+// than clearing it -- a cancel has no process to report on.
+func TestFinishTask_ExitCode(t *testing.T) {
+	DB, closefn := NewTestDB()
+	defer closefn()
+
+	newWaitingTask := func() objectid.ObjectId {
+		tsk := tasks.Task{
+			Id:        objectid.NewObjectId(),
+			TypeId:    "echo_task",
+			State:     "WAITING",
+			CreatedTs: time.Now().Unix(),
+		}
+		assert.NoError(t, DB.SaveTask(&tsk))
+		return tsk.Id
+	}
+
+	// A supplied exit code is recorded alongside the terminal state.
+	code := 3
+	withCode := newWaitingTask()
+	assert.NoError(t, DB.FinishTask(withCode, &database.TaskFinishConfig{State: "ERROR", ExitCode: &code}))
+	stored, err := DB.GetTask(withCode)
+	assert.NoError(t, err)
+	assert.Equal(t, "ERROR", stored.State)
+	if assert.NotNil(t, stored.ExitCode) {
+		assert.Equal(t, 3, *stored.ExitCode)
+	}
+
+	// No exit code supplied: the field stays nil, and the state change
+	// still lands.
+	withoutCode := newWaitingTask()
+	assert.NoError(t, DB.FinishTask(withoutCode, database.FinishState("STOPPED")))
+	stored, err = DB.GetTask(withoutCode)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", stored.State)
+	assert.Nil(t, stored.ExitCode)
+
+	// SUCCESS still forces progress to 100.
+	zero := 0
+	success := newWaitingTask()
+	assert.NoError(t, DB.FinishTask(success, &database.TaskFinishConfig{State: "SUCCESS", ExitCode: &zero}))
+	stored, err = DB.GetTask(success)
+	assert.NoError(t, err)
+	assert.Equal(t, 100, stored.Progress)
+	if assert.NotNil(t, stored.ExitCode) {
+		assert.Equal(t, 0, *stored.ExitCode)
+	}
+
+	// A task not in a finishable state is still rejected. CLAIMED is the
+	// genuine case now: a task that never started can't be finished. (An
+	// *already terminal* task is a 200 no-op instead, since
+	// turtlemonvh/blanket#23 phase 1 made the transition idempotent -- see
+	// the repeat-finish case below and TestFinishTask_FirstTerminalStateWins.)
+	claimed := tasks.Task{
+		Id:        objectid.NewObjectId(),
+		TypeId:    "echo_task",
+		State:     "CLAIMED",
+		CreatedTs: time.Now().Unix(),
+	}
+	assert.NoError(t, DB.SaveTask(&claimed))
+	assert.Error(t, DB.FinishTask(claimed.Id, database.FinishState("ERROR")))
+
+	// A repeat finish of an already-terminal task is a no-op, and must not
+	// clobber the exit code the first report stored -- the interaction
+	// between the idempotent finish (turtlemonvh/blanket#23 phase 1) and
+	// the recorded exit code (turtlemonvh/blanket#27). Neither a report
+	// carrying no exit code nor one carrying a different code overwrites it.
+	assert.NoError(t, DB.FinishTask(withCode, database.FinishState("ERROR")))
+	stored, err = DB.GetTask(withCode)
+	assert.NoError(t, err)
+	if assert.NotNil(t, stored.ExitCode, "a repeat finish must not clear a stored exit code") {
+		assert.Equal(t, 3, *stored.ExitCode)
+	}
+
+	other := 9
+	assert.NoError(t, DB.FinishTask(withCode, &database.TaskFinishConfig{State: "ERROR", ExitCode: &other}))
+	stored, err = DB.GetTask(withCode)
+	assert.NoError(t, err)
+	if assert.NotNil(t, stored.ExitCode) {
+		assert.Equal(t, 3, *stored.ExitCode, "the first terminal report's exit code is the one that sticks")
+	}
 }
 
 /*

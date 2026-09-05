@@ -234,7 +234,7 @@ func TestMarkAsFinished_DoesNotRetryConflict(t *testing.T) {
 	require.NoError(t, tasks.MarkAsRunning(&claimed, "RUN1", map[string]string{"timeout": "10"}))
 
 	started := time.Now()
-	err := tasks.MarkAsFinished(&claimed, "SUCCESS", "RUN2")
+	err := tasks.MarkAsFinished(&claimed, "SUCCESS", "RUN2", nil)
 	elapsed := time.Since(started)
 
 	assert.Error(t, err)

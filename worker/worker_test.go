@@ -12,6 +12,8 @@
 //     timeout, ends in TIMEDOUT
 //   - task api-stopped mid-flight: TestProcessOne_StoppedMidFlight
 //   - log production: TestProcessOne_ProducesLogs
+//   - exit code plumbing (cmd.Wait -> MarkAsFinished -> stored task):
+//     TestProcessOne_ExitCode, TestProcessOne_TimeoutHasNoExitCode
 //   - worker shutdown: TestRun_SIGTERM — SIGTERM to `Run()` (spawned as a
 //     real subprocess; see TestMain/runWorkerSubprocess) stops cleanly.
 //   - goroutine-leak check across a run: TestProcessTasks_NoGoroutineLeak.
@@ -877,4 +879,67 @@ func TestRun_SIGTERM_ServerUnreachable(t *testing.T) {
 		cmd.Process.Kill()
 		t.Fatalf("worker subprocess did not exit after SIGTERM with the server unreachable; stdout=%s stderr=%s", &stdout, &stderr)
 	}
+}
+
+// failingTaskTypeToml exits with a distinctive non-zero status, so the
+// test can tell "the task failed" from "the task failed *this* way".
+const failingTaskTypeToml = `
+tags = ["exec:bash", "os:unix"]
+timeout = 10
+command = "echo 'about to fail'; exit 3"
+executor = "bash"
+`
+
+// TestProcessOne_ExitCode covers the exit code plumbing end to end
+// (turtlemonvh/blanket#27): cmd.Wait() -> processExitCode ->
+// tasks.MarkAsFinished -> PUT /task/:id/finish?exitCode=N -> the stored
+// task record. Before this, a script exiting 3 and one exiting 1 were
+// indistinguishable to any caller.
+func TestProcessOne_ExitCode(t *testing.T) {
+	h := newWorkerHarness(t)
+	defer h.cleanup()
+
+	h.writeTaskType("failing_task", failingTaskTypeToml)
+	h.writeTaskType("echo_task", testTaskTypeToml)
+
+	// A task that fails reports its own exit status, not just ERROR.
+	h.submit("failing_task")
+	claimed := h.claim()
+	_ = h.work.ProcessOne(&claimed) // returns cmd.Wait()'s error
+
+	failed := h.fetch(claimed.Id)
+	assert.Equal(t, "ERROR", failed.State)
+	if assert.NotNil(t, failed.ExitCode, "a task that ran to completion should report an exit code") {
+		assert.Equal(t, 3, *failed.ExitCode)
+	}
+
+	// A successful task reports 0 -- distinguishable from "unknown"
+	// precisely because the field is a pointer.
+	h.submit("echo_task")
+	ok := h.claim()
+	assert.NoError(t, h.work.ProcessOne(&ok))
+
+	succeeded := h.fetch(ok.Id)
+	assert.Equal(t, "SUCCESS", succeeded.State)
+	if assert.NotNil(t, succeeded.ExitCode) {
+		assert.Equal(t, 0, *succeeded.ExitCode)
+	}
+}
+
+// TestProcessOne_TimeoutHasNoExitCode: a task the worker killed was
+// terminated by a signal, so it has no exit status of its own to report.
+// It stays null rather than being reported as -1.
+func TestProcessOne_TimeoutHasNoExitCode(t *testing.T) {
+	h := newWorkerHarness(t)
+	defer h.cleanup()
+
+	h.writeTaskType("slow_task", timeoutTaskTypeToml)
+
+	h.submit("slow_task")
+	claimed := h.claim()
+	_ = h.work.ProcessOne(&claimed)
+
+	final := h.fetch(claimed.Id)
+	assert.Equal(t, "TIMEDOUT", final.State)
+	assert.Nil(t, final.ExitCode, "a signal-killed task has no exit code of its own")
 }

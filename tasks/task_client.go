@@ -81,19 +81,28 @@ func MarkAsRunning(t *Task, runId string, extraVars map[string]string) error {
 // Should only be called by worker
 // Set task to one of the following states: ERROR/SUCCESS/TIMEDOUT/STOPPED
 //
+// runId is the fencing token for this execution attempt; see Task.RunId.
+// exitCode is the process exit status, or nil when there isn't one to
+// report (the process never started, or was killed by a signal). Both ride
+// along as query parameters the same way MarkAsRunning passes timeout /
+// pid / typeDigest.
+//
 // A 409 means another runner owns this task (mismatched RunId) and is
 // returned without retrying; so is a 400 or 404. Anything transient — a
 // refused connection, a reset, a 5xx — is retried with full-jitter backoff
 // until the deadline.
-func MarkAsFinished(t *Task, state string, runId string) error {
-	return MarkAsFinishedWithin(t, state, runId, FinishRetryDeadline)
+func MarkAsFinished(t *Task, state string, runId string, exitCode *int) error {
+	return MarkAsFinishedWithin(t, state, runId, exitCode, FinishRetryDeadline)
 }
 
 // MarkAsFinishedWithin is MarkAsFinished with an explicit retry budget.
-func MarkAsFinishedWithin(t *Task, state string, runId string, deadline time.Duration) error {
+func MarkAsFinishedWithin(t *Task, state string, runId string, exitCode *int, deadline time.Duration) error {
 	urlParams := url.Values{}
 	urlParams.Set("state", state)
 	urlParams.Set("runId", runId)
+	if exitCode != nil {
+		urlParams.Set("exitCode", fmt.Sprintf("%d", *exitCode))
+	}
 
 	reqURL := taskURL(t.Id, "/finish") + "?" + urlParams.Encode()
 	_, err := httpx.Do(context.Background(), "PUT", reqURL, nil, httpx.Policy{Deadline: deadline})

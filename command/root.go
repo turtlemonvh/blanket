@@ -63,6 +63,19 @@ func InitializeConfig() {
 	viper.SetDefault("mcp.validateStrict", false)
 	viper.SetDefault("mcp.maxLogLines", 200)
 
+	// Synchronous ("blocking") task submission -- POST /task/?wait
+	// (turtlemonvh/blanket#27). defaultWait applies to a bare ?wait;
+	// maxWait is a hard cap (a larger ?wait is a 400, not a clamp) and is
+	// the only control on how long an unauthenticated caller can hold a
+	// connection and a goroutine open, so it is deliberately conservative.
+	// maxLogLines bounds the stdout/stderr tails in the completion
+	// payload; maxResultBytes bounds the declared result_file that gets
+	// parsed into it.
+	viper.SetDefault("tasks.sync.defaultWait", "30s")
+	viper.SetDefault("tasks.sync.maxWait", "300s")
+	viper.SetDefault("tasks.sync.maxLogLines", 200)
+	viper.SetDefault("tasks.sync.maxResultBytes", 1048576)
+
 	// How often the scheduler loop checks for due SCHEDULED tasks and
 	// RECURRING task templates (turtlemonvh/blanket#61). Accepts anything
 	// time.ParseDuration understands, e.g. "2s", "500ms".

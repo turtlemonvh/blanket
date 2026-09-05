@@ -204,10 +204,11 @@ type TaskRunConfig struct {
 }
 
 // TaskFinishConfig carries everything PUT /task/:id/finish needs. It's an
-// options struct rather than a bare state string so the terminal
-// transition can grow fields without another signature change — the
-// fencing token added in turtlemonvh/blanket#23 phase 1 is the first, and
-// turtlemonvh/blanket#27 adds the child process's exit code next.
+// options struct rather than a bare state string — mirroring TaskRunConfig
+// above — so the terminal transition can grow fields without churning the
+// BlanketDB interface again. Two features added fields at once: the
+// fencing token from turtlemonvh/blanket#23 phase 1 and the child
+// process's exit code from turtlemonvh/blanket#27.
 type TaskFinishConfig struct {
 	// State is the terminal state to move the task to; one of
 	// tasks.ValidTerminalTaskStates.
@@ -215,6 +216,19 @@ type TaskFinishConfig struct {
 	// RunId is the worker's fencing token for the run being reported.
 	// Empty is legacy-permissive; see RunTask/FinishTask.
 	RunId string
+	// ExitCode is the process exit status, when it's known. nil (the
+	// zero value) leaves the task's ExitCode untouched — which is the
+	// right behavior for the paths that have no process to report on
+	// (PUT /task/:id/cancel, a task stopped before it ever ran) and for
+	// an idempotent repeat finish, which must not clobber the exit code
+	// the first report already stored.
+	ExitCode *int
+}
+
+// FinishState is the common case: a terminal state with no exit code and
+// no fencing token to record.
+func FinishState(newState string) *TaskFinishConfig {
+	return &TaskFinishConfig{State: newState}
 }
 
 // Errors that describe *why* a task transition was refused, so HTTP

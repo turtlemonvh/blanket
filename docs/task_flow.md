@@ -61,6 +61,41 @@ stateDiagram-v2
     STOPPED --> [*]
 ```
 
+### Where a synchronous caller attaches (turtlemonvh/blanket#27)
+
+`POST /task/?wait` changes nothing about the state machine above. The
+task is saved, queued, claimed, run, and finished by exactly the same
+transitions; the only difference is that the submitting request stays
+open instead of returning at `WAITING`.
+
+```
+POST /task/?wait ──> WAITING ──> CLAIMED ──> RUNNING ──> SUCCESS/ERROR/TIMEDOUT
+       │                                                        │
+       └──────────────── the request is still open ─────────────┘
+                              200 + completion payload
+```
+
+Mechanically, the handler subscribes to the server's task-event hub
+*before* enqueueing (so a task that finishes unusually fast can't slip
+through the gap), then wakes on the hub, on a ~1s fallback ticker, on the
+request context being cancelled, or on the wait deadline — re-reading the
+task record on every wake and stopping when it reads a terminal state.
+The hub carries no payload and is a global broadcast, so the record is
+always the source of truth; the notification is only a hint that
+something changed.
+
+Three consequences worth noting:
+
+- **The wait expiring changes nothing.** The task keeps running through
+  its normal transitions; the caller gets a 504 with the id and goes back
+  to polling.
+- **A disconnected client changes nothing either.** The handler returns,
+  releases its subscription, and leaves the task alone.
+- **`exitCode` is set on the `RUNNING → SUCCESS/ERROR` transition**, from
+  the process status the worker reads after `cmd.Wait()`. Transitions
+  where the process was killed (`STOPPED`, `TIMEDOUT`) leave it `null` —
+  there is no exit status of the task's own to report.
+
 ### Scheduling: `scheduledTs` / recurring tasks (turtlemonvh/blanket#61)
 
 By default a submitted task is immediately eligible to be claimed
@@ -321,6 +356,13 @@ Schema (`worker.OutcomeJournal`, `worker/journal.go`):
   pid is this process.
 - `exitCode` — `0` for success, the process's code for a non-zero exit,
   `-1` when it was killed by a signal (a timeout kill or a user cancel).
+  It is the *same* status read the worker reports on
+  `PUT /task/:id/finish?exitCode=` (turtlemonvh/blanket#27), taken once
+  after `cmd.Wait()`, so the journal and the task record can never
+  disagree. Only the encoding of "killed by a signal" differs: the
+  journal writes `-1`, the task record writes `null`, because a task's
+  `exitCode` field has to keep "unknown" distinguishable from a genuine
+  exit 0.
 
 ## Worker state machine
 

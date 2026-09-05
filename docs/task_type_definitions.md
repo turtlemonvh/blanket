@@ -81,6 +81,38 @@ The executor binary must be on the worker's `$PATH`. Run
 `blanket task-validate` to check that all configured task types have
 their executor available on the current host.
 
+### result_file
+
+The name of a file the task writes, whose contents callers get back as
+structured data. Optional; a type that declares none simply reports
+`result: null`.
+
+```toml
+name = "lookup_user"
+command = "./lookup.sh {{.USER_ID}} > result.json"
+result_file = "result.json"
+```
+
+The path is **relative to the task's result directory** — the same
+directory the task runs in, so a task that writes `result.json` in its
+working directory needs no path at all. It is read once the task reaches
+a terminal state, parsed as JSON, and returned as the `result` field of a
+[synchronous submission's](api.md#synchronous-submission-post-taskwait)
+completion payload.
+
+* A missing file yields `result: null` and is **not** an error — a task
+  that failed before writing its result is a normal outcome.
+* A file that exists but is unparseable, unreadable, or larger than
+  `tasks.sync.maxResultBytes` (default 1 MiB) yields `result: null` plus a
+  `resultError` message, so a malformed result never looks like an absent
+  one.
+* The path must stay inside the result directory. Absolute paths
+  (`/etc/passwd`, `C:\...`), UNC paths, and anything that escapes via
+  `..` are **rejected when the task type is loaded** — a type declaring
+  one doesn't load at all, and `blanket task-validate` reports it as
+  check 009. The same rule is applied again when the file is read.
+* Subdirectories are fine: `result_file = "out/result.json"`.
+
 ### environment
 
 A map of environment variables with three sections: `default`,
@@ -116,10 +148,15 @@ individual findings. Codes are stable once assigned.
 | 006 | `description` is present and non-empty | warn |
 | 007 | `documentation` is present and non-empty | warn |
 | 008 | declared input count is in the healthy range (2-5) | warn |
+| 009 | `result_file` is a relative path contained in the result dir | error |
 
 004 is deliberately a warning, not an error — a `{{.VAR}}` reference can
 legitimately resolve to a variable inherited from the worker's own
 environment rather than one declared in this type's `environment` table.
+
+009 is an error because a type that trips it is not servable at all: the
+loader rejects the file rather than serving a type whose declared result
+path points outside the task's own directory.
 
 ### Tag lint (codes 010-014)
 

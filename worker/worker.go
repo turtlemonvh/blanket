@@ -562,7 +562,9 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("Error starting task execution")
-		terr := tasks.MarkAsFinished(t, "ERROR", runId)
+		// No exit code: the process never started, so there is no exit
+		// status to report.
+		terr := tasks.MarkAsFinished(t, "ERROR", runId, nil)
 		if terr != nil {
 			log.WithFields(log.Fields{
 				"err":    terr.Error(),
@@ -691,7 +693,10 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 				// was unreachable. TimeoutFinishDeadline keeps that report
 				// short for the same reason.
 				loopTimeout.Stop()
-				if merr := tasks.MarkAsFinishedWithin(&snapshot, "TIMEDOUT", runId, tasks.TimeoutFinishDeadline); merr != nil {
+				// No exit code here: the process is about to be killed,
+				// so whatever cmd.Wait() reports is a signal death rather
+				// than the task's own status.
+				if merr := tasks.MarkAsFinishedWithin(&snapshot, "TIMEDOUT", runId, nil, tasks.TimeoutFinishDeadline); merr != nil {
 					log.WithFields(log.Fields{
 						"err":    merr.Error(),
 						"taskId": taskId,
@@ -722,13 +727,20 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	stopMonitor()
 	<-monitorDone
 
-	exitCode := -1
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
+	// One read of the child's exit status, shared by the journal and the
+	// finish report so the two can never disagree. processExitCode reports
+	// nil for a signal death (os.ProcessState.ExitCode() returns -1, which
+	// isn't a status the task chose), which is what the server records as
+	// "unknown"; the journal keeps the raw -1, which is its documented
+	// encoding for the same thing.
+	exitCode := processExitCode(cmd)
+	journalExitCode := -1
+	if exitCode != nil {
+		journalExitCode = *exitCode
 	}
 	journal.State = OutcomeStateExited
 	journal.ExitedTs = time.Now().Unix()
-	journal.ExitCode = exitCode
+	journal.ExitCode = journalExitCode
 	c.writeJournal(resultDir, journal)
 
 	finalState := "SUCCESS"
@@ -736,12 +748,12 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		finalState = "ERROR"
 		log.WithFields(log.Fields{
 			"err":      waitErr.Error(),
-			"exitCode": exitCode,
+			"exitCode": journalExitCode,
 			"taskId":   taskId,
 		}).Error("problems finishing task execution")
 	}
 
-	ferr := tasks.MarkAsFinished(t, finalState, runId)
+	ferr := tasks.MarkAsFinished(t, finalState, runId, exitCode)
 	if ferr != nil {
 		// The outcome is on disk and stays there: the server never
 		// acknowledged it, so the phase 3 reaper is the one that will
@@ -782,6 +794,27 @@ func (c *WorkerConf) writeJournal(resultDir string, j *OutcomeJournal) {
 			"resultDir": resultDir,
 		}).Warn("failed to write task outcome journal; a crash from here on will not be recoverable")
 	}
+}
+
+// processExitCode reads the exit status of a finished command, for
+// reporting back to the server on PUT /task/:id/finish?exitCode=N
+// (turtlemonvh/blanket#27).
+//
+// Returns nil rather than a number whenever there is no real exit status
+// to report: the process never started (ProcessState is nil), or it was
+// terminated by a signal, which os.ProcessState.ExitCode() reports as -1.
+// A killed task (STOPPED / TIMEDOUT) therefore reports exitCode: null
+// instead of a made-up -1, keeping "no exit code" and "exited 0"
+// distinguishable at the API.
+func processExitCode(cmd *exec.Cmd) *int {
+	if cmd == nil || cmd.ProcessState == nil {
+		return nil
+	}
+	code := cmd.ProcessState.ExitCode()
+	if code < 0 {
+		return nil
+	}
+	return &code
 }
 
 // Create the execution directory for a task

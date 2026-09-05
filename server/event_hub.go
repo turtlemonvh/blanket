@@ -25,9 +25,11 @@ func (h *EventHub) Unsubscribe(ch chan struct{}) {
 	h.mu.Unlock()
 }
 
-// SubscriberCount reports how many live subscriptions the hub holds -- i.e.
-// how many SSE streams are currently open against it. Used by tests to assert
-// that a disconnected client's stream is torn down promptly (issue #103).
+// SubscriberCount reports how many live subscriptions the hub holds, i.e.
+// how many SSE streams or synchronous waiters are currently attached. Used by
+// tests to assert that a handler released its subscription on every exit path
+// (the SSE client-disconnect path, issue #103; the synchronous-wait handler in
+// server/serve_sync.go, issue #27); cheap enough to be useful for diagnostics.
 func (h *EventHub) SubscriberCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()

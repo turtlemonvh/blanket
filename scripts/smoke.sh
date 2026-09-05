@@ -159,6 +159,115 @@ for _ in $(seq 1 40); do
 done
 [[ "$promoted" -eq 1 ]] || fail "scheduled task was not promoted to WAITING within 10s: $check"
 
+# ---------------------------------------------------------------------------
+# Synchronous ("blocking") submission -- POST /task/?wait
+# (turtlemonvh/blanket#27).
+#
+# This is the only suite that can prove it end to end, because it's the
+# only one that runs a real worker: ?wait returns whatever the worker
+# actually did, so without one every wait would simply time out. The
+# worker is started here, *after* the assertions above, on purpose -- a
+# live worker would otherwise race the scheduled-task check by claiming
+# the promoted task before the poll loop observes it in WAITING.
+# ---------------------------------------------------------------------------
+
+# Two extra task types, written into the throwaway types dir rather than
+# added to testdata/types/: the server re-reads that directory per
+# request, and testdata/types is deliberately kept to the one minimal
+# fixture (see CLAUDE.md).
+cat > "$WORKDIR/types/sync_result_task.toml" <<'EOF'
+tags = ["exec:bash", "os:unix"]
+timeout = 10
+description = "Writes a JSON result artifact, for the ?wait smoke test"
+command = "echo 'sync stdout line'; echo '{\"answer\": 42}' > result.json"
+executor = "bash"
+result_file = "result.json"
+EOF
+
+cat > "$WORKDIR/types/sync_fail_task.toml" <<'EOF'
+tags = ["exec:bash", "os:unix"]
+timeout = 10
+description = "Exits 3, for the ?wait&fail_on_error smoke test"
+command = "echo 'failing on purpose' >&2; exit 3"
+executor = "bash"
+EOF
+
+(
+    cd "$WORKDIR"
+    "$REPO_ROOT/$BINARY" --config "$WORKDIR/config.json" worker \
+        --tags "exec:bash,os:unix" \
+        --checkinterval 0.5 \
+        --logfile "$WORKDIR/worker.log" \
+        > "$WORKDIR/worker.stdout.log" 2>&1 &
+    echo $! > "$WORKDIR/worker.pid"
+) || true
+WORKER_PID="$(cat "$WORKDIR/worker.pid")"
+
+worker_ready=0
+for _ in $(seq 1 50); do
+    if [[ "$(curl -fsS "$BASE/worker/" | jq -r 'length')" != "0" ]]; then
+        worker_ready=1
+        break
+    fi
+    if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+        echo "smoke: worker exited before registering; log follows:" >&2
+        cat "$WORKDIR/worker.log" "$WORKDIR/worker.stdout.log" 2>/dev/null >&2
+        exit 1
+    fi
+    sleep 0.2
+done
+[[ "$worker_ready" -eq 1 ]] || fail "worker did not register within 10s"
+
+# A successful synchronous submit returns state, exit code, output, and
+# the parsed result_file in the one response.
+sync_resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
+    -d '{"type":"sync_result_task"}' "$BASE/task/?wait=20s")"
+jq -e '.waitOutcome == "completed"' <<<"$sync_resp" > /dev/null \
+    || fail "?wait response waitOutcome not 'completed': $sync_resp"
+jq -e '.task.state == "SUCCESS"' <<<"$sync_resp" > /dev/null \
+    || fail "?wait task did not reach SUCCESS: $sync_resp"
+jq -e '.task.exitCode == 0' <<<"$sync_resp" > /dev/null \
+    || fail "?wait task exitCode not 0: $sync_resp"
+jq -e '.stdout | contains("sync stdout line")' <<<"$sync_resp" > /dev/null \
+    || fail "?wait response missing task stdout: $sync_resp"
+jq -e '.result.answer == 42' <<<"$sync_resp" > /dev/null \
+    || fail "?wait response missing parsed result_file: $sync_resp"
+jq -e '.resultError == null' <<<"$sync_resp" > /dev/null \
+    || fail "?wait response carried a resultError: $sync_resp"
+
+# A failing task is a 200 by default -- the status describes the API call,
+# not the task -- and carries the real exit code.
+fail_body="$WORKDIR/sync-fail.json"
+fail_status="$(curl -sS -o "$fail_body" -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"type":"sync_fail_task"}' "$BASE/task/?wait=20s")"
+[[ "$fail_status" == "200" ]] \
+    || fail "?wait on a failing task should be 200 by default, got $fail_status: $(cat "$fail_body")"
+jq -e '.task.state == "ERROR" and .task.exitCode == 3' "$fail_body" > /dev/null \
+    || fail "?wait on a failing task lost its state/exitCode: $(cat "$fail_body")"
+jq -e '.stderr | contains("failing on purpose")' "$fail_body" > /dev/null \
+    || fail "?wait response missing task stderr: $(cat "$fail_body")"
+
+# ...and 502 with fail_on_error=true, so `curl --fail` can notice.
+foe_body="$WORKDIR/sync-fail-on-error.json"
+foe_status="$(curl -sS -o "$foe_body" -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"type":"sync_fail_task"}' "$BASE/task/?wait=20s&fail_on_error=true")"
+[[ "$foe_status" == "502" ]] \
+    || fail "?wait&fail_on_error=true on a failing task should be 502, got $foe_status: $(cat "$foe_body")"
+jq -e '.task.exitCode == 3' "$foe_body" > /dev/null \
+    || fail "fail_on_error response lost the exit code: $(cat "$foe_body")"
+
+# A wait over tasks.sync.maxWait is a 400, not a silent clamp.
+cap_status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"type":"echo_task"}' "$BASE/task/?wait=99h")"
+[[ "$cap_status" == "400" ]] || fail "?wait over maxWait should be 400, got $cap_status"
+
+kill "$WORKER_PID" 2>/dev/null || true
+wait "$WORKER_PID" 2>/dev/null || true
+WORKER_PID=""
+
 # task-validate --json runs against the fixture type and produces a JSON
 # array (the fixture is intentionally minimal, so warnings are expected —
 # this only checks the command runs and emits well-formed JSON, not that
