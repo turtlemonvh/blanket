@@ -7,14 +7,26 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/lib/bolt"
+	"github.com/turtlemonvh/blanket/lib/docs"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
+
+// TestMain seeds the docs package with docs/*.md read straight off disk.
+// Production wires this up via main's go:embed instead (see #66 -- go:embed
+// can't reach outside its own package directory, so a non-root package like
+// this one can't embed ../docs itself); `go test ./server/...` never runs
+// main, so tests that exercise the blanket_docs MCP tool need their own FS.
+func TestMain(m *testing.M) {
+	docs.SetFS(os.DirFS("../docs"))
+	os.Exit(m.Run())
+}
 
 const testConfig = `
 # https://npf.io/2014/08/intro-to-toml/
