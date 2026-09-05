@@ -203,6 +203,7 @@ run_installer() {
     BINARY_PATH="$REPO_ROOT/$BINARY" \
     INSTALL_DIR="$INSTALL_TEST_DIR" \
     INSTALL_SKILLS=0 \
+    INSTALL_AUTOSTART=0 \
     INSTALL_SHELL_INTEGRATION=1 \
     sh "$REPO_ROOT/scripts/install.sh" < /dev/null > "$WORKDIR/install.log" 2>&1
 }
