@@ -21,6 +21,8 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/tasks"
 )
 
 func getUI(r http.Handler, path string) *httptest.ResponseRecorder {
@@ -715,4 +717,556 @@ func TestUI_TaskTypeWarningsPartial_RendersScheduledFlash(t *testing.T) {
 	assert.Contains(t, body, `hx-swap-oob="innerHTML:#flash-area"`)
 	assert.Contains(t, body, "flash-success")
 	assert.Contains(t, body, "RECURRING - Every 5 minutes")
+}
+
+// ---------------------------------------------------------------------------
+// Scheduling UI (turtlemonvh/blanket#98): the Upcoming page, the series
+// detail view, and the series card / row backlink on tasks that belong to
+// a series.
+//
+// These drive the handlers directly; the browser-side behaviour (htmx
+// swaps, confirm dialogs, the live cron preview) is covered by
+// tests/e2e/specs/scheduling.spec.ts.
+// ---------------------------------------------------------------------------
+
+// putForm PUTs url-encoded form values, the way htmx posts the schedule
+// editor.
+func putForm(r http.Handler, path string, values url.Values) *httptest.ResponseRecorder {
+	req, _ := http.NewRequest("PUT", path, strings.NewReader(values.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// createScheduledTask submits a one-shot task with a future notBefore and
+// returns its id.
+func createScheduledTask(t *testing.T, r http.Handler) string {
+	t.Helper()
+	w := postJSON(r, "/task/", `{"type": "echo_task", "notBefore": "2h"}`)
+	assert.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	var created tasks.Task
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	assert.Equal(t, "SCHEDULED", created.State)
+	return created.Id.Hex()
+}
+
+// seedChildRun creates a task and re-parents it onto templateId, standing
+// in for what the scheduler's fireOnce would have produced. Test servers
+// don't run the background scheduler loop, so seeding is both faster and
+// deterministic.
+func seedChildRun(t *testing.T, s *ServerConfig, r http.Handler, templateId objectid.ObjectId) objectid.ObjectId {
+	t.Helper()
+	w := postTask(r, "echo_task")
+	assert.Equal(t, http.StatusCreated, w.Code)
+	var child tasks.Task
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &child))
+
+	stored, err := s.DB.GetTask(child.Id)
+	assert.NoError(t, err)
+	stored.ParentId = templateId
+	assert.NoError(t, s.DB.SaveTask(&stored))
+	return stored.Id
+}
+
+// --- /ui/upcoming ---
+
+func TestUI_UpcomingPage_SplitsOneTimeFromSeries(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	oneTimeId := createScheduledTask(t, r)
+	live := createRecurringTemplate(t, r)
+	paused := createRecurringTemplate(t, r)
+	assert.Equal(t, http.StatusOK, putNoBody(r, "/task/"+paused.Id.Hex()+"/pause").Code)
+	cancelled := createRecurringTemplate(t, r)
+	assert.Equal(t, http.StatusOK, putNoBody(r, "/task/"+cancelled.Id.Hex()+"/cancel").Code)
+
+	w := getUI(r, "/ui/upcoming")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	// Both sections render, with their own headings.
+	assert.Contains(t, body, ">One-time<")
+	assert.Contains(t, body, ">Series<")
+
+	// The one-shot task is listed under One-time with a friendly
+	// description and a Cancel action pointed at the API.
+	assert.Contains(t, body, `href="/ui/tasks/`+oneTimeId+`"`)
+	assert.Contains(t, body, "Once, at ")
+	assert.Contains(t, body, `hx-put="/task/`+oneTimeId+`/cancel"`)
+
+	// Live and paused templates are both listed; the cancelled one is not.
+	assert.Contains(t, body, `href="/ui/tasks/`+live.Id.Hex()+`"`)
+	assert.Contains(t, body, `href="/ui/tasks/`+paused.Id.Hex()+`"`)
+	assert.NotContains(t, body, cancelled.Id.Hex(),
+		"a cancelled (STOPPED) template is not upcoming")
+
+	// Status badges use the live/paused vocabulary, and a paused series
+	// says when it was paused.
+	assert.Contains(t, body, ">Live<")
+	assert.Contains(t, body, ">Paused ")
+	assert.Contains(t, body, "Every 5 minutes")
+}
+
+// TestUI_UpcomingPage_SingleSSEStream guards against regressing to the
+// original two-EventSource layout (turtlemonvh/blanket#103): Chrome keeps a
+// navigated-away page's SSE connections alive in its back/forward cache, so
+// a page opening two streams exhausts the six-connection-per-host limit
+// twice as fast as every other page in the app, which opens one. Both
+// tbodies must still refresh on the shared stream.
+func TestUI_UpcomingPage_SingleSSEStream(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/upcoming")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	assert.Equal(t, 1, strings.Count(body, "sse-connect="),
+		"Upcoming should open exactly one SSE stream shared by both tables")
+	assert.Equal(t, 2, strings.Count(body, `hx-trigger="sse:tasks-changed`),
+		"both the one-time and series tbodies should still refresh off the shared stream")
+}
+
+func TestUI_UpcomingPage_EmptyStates(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/upcoming")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, "No one-time tasks scheduled.")
+	assert.Contains(t, body, "No scheduled series.")
+}
+
+func TestUI_UpcomingNavLinkIsPresent(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	assert.Contains(t, getUI(r, "/ui/").Body.String(), `href="/ui/upcoming"`)
+}
+
+// TestUI_UpcomingCancelOneTime covers the Upcoming page's only mutating
+// control: cancelling a scheduled one-shot task and re-fetching the tbody
+// (what the row's hx-on::after-request does in the browser).
+func TestUI_UpcomingCancelOneTime(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	oneTimeId := createScheduledTask(t, r)
+	assert.Contains(t, getUI(r, "/ui/partials/upcoming-onetime-rows").Body.String(), oneTimeId)
+
+	assert.Equal(t, http.StatusOK, putNoBody(r, "/task/"+oneTimeId+"/cancel").Code)
+
+	rows := getUI(r, "/ui/partials/upcoming-onetime-rows")
+	assert.Equal(t, http.StatusOK, rows.Code)
+	assert.NotContains(t, rows.Body.String(), oneTimeId)
+	assert.Contains(t, rows.Body.String(), "No one-time tasks scheduled.")
+}
+
+// --- series detail at /ui/tasks/:id ---
+
+func TestUI_SeriesDetail_RendersScheduleStatusAndActions(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	id := tmpl.Id.Hex()
+
+	w := getUI(r, "/ui/tasks/"+id)
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	// The series template renders through series_detail.html, not the
+	// ordinary task detail page — no log sections for a record that never
+	// runs anything itself.
+	assert.Contains(t, body, "Series Detail")
+	assert.NotContains(t, body, "Live Log")
+	assert.NotContains(t, body, "blanket.stdout.log")
+
+	// Friendly schedule + raw cron + next fire.
+	assert.Contains(t, body, "Every 5 minutes")
+	assert.Contains(t, body, "*/5 * * * *")
+	assert.Contains(t, body, "Next fire")
+
+	// Status and the actions that apply to a live series.
+	assert.Contains(t, body, ">Live<")
+	assert.Contains(t, body, `hx-put="/ui/series/`+id+`/pause"`)
+	assert.Contains(t, body, `hx-put="/ui/series/`+id+`/cancel"`)
+	assert.Contains(t, body, `hx-put="/ui/series/`+id+`/schedule"`)
+	assert.Contains(t, body, `hx-confirm=`)
+
+	// The shared schedule editor (schedule_editor.html) and its live
+	// preview. It renders open — no "Schedule task?" checkbox — with the
+	// repeating radio preselected and the current expression in the cron
+	// field, and its ids are prefixed so they can't clash with the create
+	// form's.
+	assert.Contains(t, body, `id="series-schedule-editor"`)
+	assert.Contains(t, body, "schedule-open")
+	assert.NotContains(t, body, `name="scheduleEnabled"`)
+	assert.Contains(t, body, `id="series-schedule-mode-repeating" name="scheduleMode" value="repeating"`)
+	assert.Contains(t, body, `id="series-schedule-cron" name="cron"`)
+	assert.Contains(t, body, `hx-get="/ui/partials/schedule-preview"`)
+	assert.Contains(t, body, `hx-target="#series-schedule-preview"`)
+	// The preview is server-rendered, so the box isn't empty before the
+	// user has touched the field.
+	assert.Contains(t, body, "schedule-description")
+
+	// Past runs table, wired to the shared tasks-rows partial filtered by
+	// parentId.
+	assert.Contains(t, body, "Past runs")
+	assert.Contains(t, body, "/ui/partials/tasks-rows?parentId="+id)
+}
+
+func TestUI_SeriesDetail_ListsPastRuns(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	childId := seedChildRun(t, s, r, tmpl.Id)
+	// A task belonging to some *other* series must not show up here.
+	other := createRecurringTemplate(t, r)
+	strayId := seedChildRun(t, s, r, other.Id)
+
+	w := getUI(r, "/ui/tasks/"+tmpl.Id.Hex())
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, childId.Hex())
+	assert.NotContains(t, body, strayId.Hex(),
+		"another series' runs must not leak into this one's Past runs")
+
+	// The same rows come back from the partial htmx re-fetches, and there
+	// the per-row "part of series" backlink is suppressed (every row on
+	// this page belongs to the same series).
+	rows := getUI(r, "/ui/partials/tasks-rows?parentId="+tmpl.Id.Hex())
+	assert.Equal(t, http.StatusOK, rows.Code)
+	assert.Contains(t, rows.Body.String(), childId.Hex())
+	assert.NotContains(t, rows.Body.String(), "part of series")
+}
+
+func TestUI_SeriesDetail_PausedShowsPausedAtAndResume(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	assert.Equal(t, http.StatusOK, putNoBody(r, "/task/"+tmpl.Id.Hex()+"/pause").Code)
+
+	body := getUI(r, "/ui/tasks/"+tmpl.Id.Hex()).Body.String()
+	assert.Contains(t, body, ">Paused<")
+	assert.Contains(t, body, "Paused at")
+	assert.Contains(t, body, `hx-put="/ui/series/`+tmpl.Id.Hex()+`/resume"`)
+	assert.NotContains(t, body, `hx-put="/ui/series/`+tmpl.Id.Hex()+`/pause"`)
+}
+
+func TestUI_SeriesDetail_CancelledHidesActions(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	assert.Equal(t, http.StatusOK, putNoBody(r, "/task/"+tmpl.Id.Hex()+"/cancel").Code)
+
+	// The record is kept, so the page still resolves and still shows the
+	// schedule and past runs — it just loses every lifecycle control.
+	w := getUI(r, "/ui/tasks/"+tmpl.Id.Hex())
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, ">Cancelled<")
+	assert.Contains(t, body, "Every 5 minutes")
+	assert.Contains(t, body, "Past runs")
+	assert.NotContains(t, body, "/pause")
+	assert.NotContains(t, body, "/resume")
+	assert.NotContains(t, body, "Cancel series")
+	assert.NotContains(t, body, `name="cron"`, "no schedule editor on a cancelled series")
+}
+
+// --- /ui/series/:id/* lifecycle actions ---
+
+func TestUI_SeriesActions_PauseResumeCancel(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	id := tmpl.Id.Hex()
+
+	// Pause: the response is the re-rendered schedule block, already
+	// showing the new status and the paused-at time.
+	w := putNoBody(r, "/ui/series/"+id+"/pause")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `id="series-schedule"`)
+	assert.Contains(t, w.Body.String(), ">Paused<")
+	assert.Contains(t, w.Body.String(), "Paused at")
+	stored, err := s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "PAUSED", stored.State)
+	assert.Greater(t, stored.PausedTs, int64(0))
+
+	w = putNoBody(r, "/ui/series/"+id+"/resume")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), ">Live<")
+	stored, err = s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "RECURRING", stored.State)
+
+	w = putNoBody(r, "/ui/series/"+id+"/cancel")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), ">Cancelled<")
+	stored, err = s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", stored.State)
+}
+
+// TestUI_SeriesActions_RejectedShowsInlineError covers the reason these
+// endpoints exist at all rather than htmx PUTting the JSON API directly:
+// a rejected action answers with the same block, carrying the server's
+// message, so the user sees why nothing changed.
+func TestUI_SeriesActions_RejectedShowsInlineError(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	// Resume on a series that isn't paused.
+	w := putNoBody(r, "/ui/series/"+tmpl.Id.Hex()+"/resume")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "inline-error")
+	assert.Contains(t, w.Body.String(), "PAUSED")
+	assert.Contains(t, w.Body.String(), ">Live<", "state is unchanged")
+}
+
+func TestUI_SeriesActions_MissingIdIs404(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	assert.Equal(t, http.StatusNotFound,
+		putNoBody(r, "/ui/series/aaaaaaaaaaaaaaaaaaaaaaaa/pause").Code)
+	assert.Equal(t, http.StatusBadRequest,
+		putNoBody(r, "/ui/series/nonsense/pause").Code)
+}
+
+func TestUI_SeriesChangeSchedule(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	id := tmpl.Id.Hex()
+
+	form := url.Values{}
+	form.Set("cron", "0 3 * * *")
+	w := putForm(r, "/ui/series/"+id+"/schedule", form)
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, "0 3 * * *")
+	assert.NotContains(t, body, "inline-error")
+	assert.NotContains(t, body, "Every 5 minutes")
+
+	stored, err := s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "0 3 * * *", stored.CronExpr)
+
+	// An unparseable expression comes back inline, leaving the stored
+	// schedule alone.
+	bad := url.Values{}
+	bad.Set("cron", "not a cron")
+	w = putForm(r, "/ui/series/"+id+"/schedule", bad)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "inline-error")
+	assert.Contains(t, w.Body.String(), "invalid cron expression")
+
+	stored, err = s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "0 3 * * *", stored.CronExpr, "a rejected edit must not change the schedule")
+}
+
+func TestUI_SeriesSchedulePartial(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	w := getUI(r, "/ui/partials/series-schedule?id="+tmpl.Id.Hex())
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `id="series-schedule"`)
+	assert.Contains(t, w.Body.String(), "Every 5 minutes")
+
+	assert.Equal(t, http.StatusNotFound,
+		getUI(r, "/ui/partials/series-schedule?id=aaaaaaaaaaaaaaaaaaaaaaaa").Code)
+}
+
+// The shared editor also carries the create form's "One time" radio,
+// which a series has no way to honour: PUT /task/:id/schedule can't turn
+// a template back into a one-shot task, and the deselected repeating
+// panel submits no cron at all. Refuse it inline and leave the stored
+// schedule alone. (The preview partial itself is master's — see the
+// TestUI_SchedulePreviewPartial_* tests above.)
+func TestUI_SeriesChangeSchedule_RejectsOneTimeMode(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+
+	form := url.Values{}
+	form.Set("scheduleMode", "once")
+	form.Set("notBefore", "2030-01-01T00:00")
+	w := putForm(r, "/ui/series/"+tmpl.Id.Hex()+"/schedule", form)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "inline-error")
+	assert.Contains(t, w.Body.String(), "a series always repeats")
+
+	stored, err := s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "*/5 * * * *", stored.CronExpr)
+	assert.Equal(t, "RECURRING", stored.State)
+}
+
+// The editor's own "Repeating" mode posts alongside the cron field; it
+// must not get in the way of an ordinary save.
+func TestUI_SeriesChangeSchedule_AcceptsRepeatingMode(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+
+	form := url.Values{}
+	form.Set("scheduleMode", "repeating")
+	form.Set("cron", "0 3 * * *")
+	w := putForm(r, "/ui/series/"+tmpl.Id.Hex()+"/schedule", form)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.NotContains(t, w.Body.String(), "inline-error")
+
+	stored, err := s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "0 3 * * *", stored.CronExpr)
+}
+
+// --- series card + row backlink on a child task ---
+
+func TestUI_SeriesCard_OnChildTaskDetail(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	childId := seedChildRun(t, s, r, tmpl.Id)
+
+	w := getUI(r, "/ui/tasks/"+childId.Hex())
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, "Part of a scheduled series")
+	assert.Contains(t, body, `href="/ui/tasks/`+tmpl.Id.Hex()+`"`)
+	assert.Contains(t, body, "echo_task · "+tmpl.Id.Hex())
+	assert.Contains(t, body, "Every 5 minutes")
+	assert.Contains(t, body, ">Live<")
+
+	// The card tracks the series' current status.
+	assert.Equal(t, http.StatusOK, putNoBody(r, "/task/"+tmpl.Id.Hex()+"/pause").Code)
+	assert.Contains(t, getUI(r, "/ui/tasks/"+childId.Hex()).Body.String(), ">Paused<")
+
+	assert.Equal(t, http.StatusOK, putNoBody(r, "/task/"+tmpl.Id.Hex()+"/resume").Code)
+	assert.Equal(t, http.StatusOK, putNoBody(r, "/task/"+tmpl.Id.Hex()+"/cancel").Code)
+	assert.Contains(t, getUI(r, "/ui/tasks/"+childId.Hex()).Body.String(), ">Cancelled<")
+}
+
+// A task with no parent gets no card at all.
+func TestUI_SeriesCard_AbsentOnPlainTask(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := postTask(r, "echo_task")
+	assert.Equal(t, http.StatusCreated, w.Code)
+	var plain tasks.Task
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &plain))
+
+	body := getUI(r, "/ui/tasks/"+plain.Id.Hex()).Body.String()
+	assert.NotContains(t, body, "Part of a scheduled series")
+}
+
+// DELETE /task/:id removes a template's record outright (unlike cancel),
+// which leaves its children pointing at an id that no longer resolves. The
+// card should say so rather than linking into a 404.
+func TestUI_SeriesCard_DeletedTemplate(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	childId := seedChildRun(t, s, r, tmpl.Id)
+
+	req, _ := http.NewRequest("DELETE", "/task/"+tmpl.Id.Hex(), nil)
+	del := httptest.NewRecorder()
+	r.ServeHTTP(del, req)
+	assert.Equal(t, http.StatusOK, del.Code)
+
+	body := getUI(r, "/ui/tasks/"+childId.Hex()).Body.String()
+	assert.Contains(t, body, "Part of a scheduled series")
+	assert.Contains(t, body, "has since been deleted")
+	assert.NotContains(t, body, `href="/ui/tasks/`+tmpl.Id.Hex()+`"`)
+}
+
+func TestUI_TasksRows_SeriesBacklink(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	seedChildRun(t, s, r, tmpl.Id)
+
+	rows := getUI(r, "/ui/partials/tasks-rows")
+	assert.Equal(t, http.StatusOK, rows.Code)
+	body := rows.Body.String()
+	assert.Contains(t, body, "part of series "+tmpl.Id.Hex()[:8])
+	assert.Contains(t, body, `href="/ui/tasks/`+tmpl.Id.Hex()+`"`)
 }

@@ -311,7 +311,9 @@ test.describe('SSE push', () => {
     const table = page.locator('table[sse-connect="/ui/sse/tasks"]');
     await expect(table).toBeVisible();
     const tbody = page.locator('#tasks-rows');
-    await expect(tbody).toHaveAttribute('hx-trigger', 'sse:tasks-changed');
+    // hx-trigger also carries the "refresh-rows" event row actions poke
+    // (#98), so match the SSE part rather than the whole attribute.
+    await expect(tbody).toHaveAttribute('hx-trigger', /sse:tasks-changed/);
 
     const taskId = await createTask(request, 'echo_task');
     const idPrefix = taskId.slice(0, 8);

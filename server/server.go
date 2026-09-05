@@ -115,7 +115,8 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	// HTMX + Go-template UI.
 	r.StaticFS("/ui/static", uiStaticFS())
 	r.GET("/ui/", s.uiTasksPage)
-	r.GET("/ui/tasks/:id", s.uiTaskDetailPage)
+	r.GET("/ui/tasks/:id", s.uiTaskDetailPage) // also serves the series detail view for a cron template
+	r.GET("/ui/upcoming", s.uiUpcomingPage)
 	r.GET("/ui/workers", s.uiWorkersPage)
 	r.GET("/ui/workers/:id", s.uiWorkerDetailPage)
 	r.GET("/ui/task-types", s.uiTaskTypesPage)
@@ -134,6 +135,17 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/ui/partials/custom-env-row", s.uiCustomEnvRowPartial)
 	r.GET("/ui/partials/new-worker", s.uiNewWorkerPartial)
 	r.GET("/ui/partials/blank", s.uiBlankPartial)
+	r.GET("/ui/partials/upcoming-onetime-rows", s.uiUpcomingOneTimeRowsPartial)
+	r.GET("/ui/partials/upcoming-series-rows", s.uiUpcomingSeriesRowsPartial)
+	r.GET("/ui/partials/series-schedule", s.uiSeriesSchedulePartial) // ?id=<template id>
+	// Series lifecycle actions. Thin form-friendly wrappers over the same
+	// functions PUT /task/:id/{pause,resume,cancel,schedule} call, whose
+	// response is the re-rendered schedule block (inline error included)
+	// rather than a JSON status. See server/ui_schedule.go.
+	r.PUT("/ui/series/:id/pause", s.uiSeriesPause)
+	r.PUT("/ui/series/:id/resume", s.uiSeriesResume)
+	r.PUT("/ui/series/:id/cancel", s.uiSeriesCancel)
+	r.PUT("/ui/series/:id/schedule", s.uiSeriesChangeSchedule)
 	r.GET("/ui/sse/tasks", s.sseTaskEvents)
 	r.GET("/ui/sse/workers", s.sseWorkerEvents)
 

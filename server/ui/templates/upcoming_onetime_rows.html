@@ -1,0 +1,28 @@
+{{/*
+tbody rows for the Upcoming page's "One-time" section: tasks in state
+SCHEDULED, soonest first. Cancel goes straight at the JSON API
+(PUT /task/:id/cancel) — the same call the Tasks list row uses — and then
+re-fetches this tbody, so the cancelled row leaves the list.
+*/}}
+{{define "upcoming-onetime-rows"}}
+{{range $i, $t := .OneTime}}
+<tr>
+    <th scope="row">{{add $i 1}}</th>
+    <td><a href="/ui/tasks/{{hex $t.Id}}">{{shortId $t.Id}}</a></td>
+    <td>{{$t.TypeId}}</td>
+    <td>{{fmtTs $t.ScheduledTs}}</td>
+    <td class="muted">{{scheduleDesc $t}}</td>
+    <td class="row-actions">
+        <a class="danger"
+           hx-put="/task/{{hex $t.Id}}/cancel"
+           hx-confirm="Cancel this scheduled task? It will not run."
+           hx-swap="none"
+           hx-on::after-request="htmx.trigger('#upcoming-onetime-rows', 'refresh-rows')">
+            Cancel
+        </a>
+    </td>
+</tr>
+{{else}}
+<tr><td colspan="6" class="muted">No one-time tasks scheduled.</td></tr>
+{{end}}
+{{end}}

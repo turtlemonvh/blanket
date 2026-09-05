@@ -1,0 +1,100 @@
+{{/*
+The schedule + status + actions block of the series detail page.
+
+It is its own partial because every action on this page answers with it:
+pause, resume, cancel and change-schedule all PUT to /ui/series/:id/* and
+swap the whole block (hx-swap="outerHTML" onto #series-schedule), so the
+status badge, the paused-at line, the next fire time and the editor's
+current value all move together and can't drift apart. A rejected action
+comes back as the same block with the server's message in .Error rather
+than as an error page.
+*/}}
+{{define "series-schedule"}}
+<div class="card" id="series-schedule">
+    <div class="card-head">
+        <h3>Schedule</h3>
+        <span class="badge state-{{.Series.Task.State}}" aria-label="series status">{{.Series.StatusLabel}}</span>
+    </div>
+
+    {{if .Error}}
+    <p class="inline-error" role="alert">{{.Error}}</p>
+    {{end}}
+
+    <dl class="card-fields">
+        <dt>Runs</dt>
+        <dd>{{.Series.Description}} <span class="muted"><code>{{.Series.Task.CronExpr}}</code></span></dd>
+
+        <dt>Next fire</dt>
+        <dd>
+            {{if .Series.Live}}{{fmtTs .Series.Task.NextFireTs}}
+            {{else if .Series.Cancelled}}<span class="muted">Cancelled &mdash; this series will not fire again.</span>
+            {{else}}<span class="muted">Paused &mdash; resuming recomputes the next fire time.</span>
+            {{end}}
+        </dd>
+
+        {{if eq .Series.Task.State "PAUSED"}}
+        <dt>Paused at</dt>
+        <dd>{{fmtTs .Series.Task.PausedTs}}</dd>
+        {{end}}
+    </dl>
+
+    {{/*
+    Pause / Resume / Cancel. Deliberately outside the editor <form> below:
+    an hx-put button inside a form would also fire the form's own request.
+    */}}
+    {{if not .Series.Cancelled}}
+    <div class="card-actions">
+        {{if .Series.Live}}
+        <button type="button"
+                hx-put="/ui/series/{{.Series.Id}}/pause"
+                hx-target="#series-schedule"
+                hx-swap="outerHTML">
+            Pause
+        </button>
+        {{end}}
+        {{if eq .Series.Task.State "PAUSED"}}
+        <button type="button" class="primary"
+                hx-put="/ui/series/{{.Series.Id}}/resume"
+                hx-target="#series-schedule"
+                hx-swap="outerHTML">
+            Resume
+        </button>
+        {{end}}
+        <button type="button" class="danger"
+                hx-put="/ui/series/{{.Series.Id}}/cancel"
+                hx-confirm="Cancel this series? It stops firing for good; the record and its past runs are kept."
+                hx-target="#series-schedule"
+                hx-swap="outerHTML">
+            Cancel series
+        </button>
+    </div>
+    {{end}}
+
+    {{if not .Series.Cancelled}}
+    {{/*
+    The shared schedule editor (schedule_editor.html, from
+    turtlemonvh/blanket#97). Rendered with Mode "repeating" and
+    Collapsed false — a series already has a schedule, so there is
+    nothing to opt into — and with its Preview pre-filled server-side,
+    because the editor's cron input only fetches a preview once the user
+    types. Its ids are prefixed "series-schedule-", distinct from the
+    create form's "schedule-" ones.
+
+    Flipping the editor to "One time" is rejected inline by
+    uiSeriesChangeSchedule: a series is defined by its cron expression,
+    and PUT /task/:id/schedule has no way to turn one back into a
+    one-shot task.
+    */}}
+    <form class="series-schedule-form"
+          hx-put="/ui/series/{{.Series.Id}}/schedule"
+          hx-target="#series-schedule"
+          hx-swap="outerHTML">
+        <h4 class="series-schedule-heading">Change schedule</h4>
+        {{template "schedule-editor" .Editor}}
+        <div class="card-actions">
+            <button type="submit" class="primary">Save schedule</button>
+        </div>
+    </form>
+    {{end}}
+</div>
+{{end}}

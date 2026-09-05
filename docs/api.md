@@ -76,7 +76,9 @@ sibling under "Web UI" below.
 
 See [task_flow.md](task_flow.md#scheduling-scheduledts--recurring-tasks-turtlemonvhblanket61)
 for the full scheduling state machine, the pause/resume/cancel/change-schedule
-lifecycle, and the scan limit.
+lifecycle, and the scan limit, and [usage.md](usage.md#web-ui) for the
+browser surfaces built on these endpoints (the Upcoming page and the series
+detail view).
 
 Worker-facing endpoints — used by `blanket worker` to advance task
 state.
@@ -142,19 +144,22 @@ GET /ops/status/                # runtime metrics (goroutines, memory, etc.)
 `/ui/*` serves the embedded HTMX UI: pages, static assets, SSE streams,
 and the `/ui/partials/*` HTML fragments the pages swap in. These return
 HTML, not JSON, and are an implementation detail of the UI rather than a
-client-facing API — with two worth knowing about because they mirror
-JSON endpoints above:
+client-facing API — see [usage.md](usage.md#web-ui) for what the pages
+do, and `server/server.go` for the full route list. Three groups are
+worth knowing about, because they mirror JSON endpoints above:
 
 ```
 GET /ui/partials/schedule-preview?cron=<expr>
                                 # the live human-readable rendering of a
-                                # cron expression shown under the create
-                                # form's cron field: its description plus
-                                # the next three fire times, or the
-                                # parser's message as an inline error.
-                                # Always 200 — an invalid expression is
-                                # content to display, and htmx only swaps
-                                # 2xx responses. JSON equivalent:
+                                # cron expression shown under a cron
+                                # field — on the create form and on a
+                                # series' "change the schedule" editor:
+                                # its description plus the next three
+                                # fire times, or the parser's message as
+                                # an inline error. Always 200 — an
+                                # invalid expression is content to
+                                # display, and htmx only swaps 2xx
+                                # responses. JSON equivalent:
                                 # GET /schedule/describe.
 GET /ui/partials/form-error?error=<message>
                                 # renders one rejected-submit message
@@ -171,6 +176,26 @@ inputs as `POST /task/`, as form fields: `scheduleMode` (`once` /
 (an RFC3339 instant resolved in the browser's timezone) takes precedence
 over a bare `datetime-local` `notBefore` value, and an already-past start
 time is rejected rather than queued immediately.
+
+The series lifecycle actions used by the series detail page *mutate*:
+
+```
+PUT /ui/series/:id/pause        # -> PAUSED
+PUT /ui/series/:id/resume       # -> RECURRING
+PUT /ui/series/:id/cancel       # -> STOPPED (record kept)
+PUT /ui/series/:id/schedule     # form field `cron=<expr>` (the shared
+                                # schedule editor also submits
+                                # `scheduleMode`; anything but
+                                # `repeating` is rejected inline)
+```
+
+They are thin wrappers over the same functions
+`PUT /task/:id/{pause,resume,cancel,schedule}` call, and exist only so the
+browser gets an HTML response it can swap in: each returns the re-rendered
+schedule block, carrying the parser's message inline when the action is
+rejected (the JSON endpoints return `{}` or an error string, which htmx
+can't place without a second round trip). Use the `/task/` endpoints
+above from any non-browser client.
 
 ## MCP
 

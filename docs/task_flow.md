@@ -164,6 +164,10 @@ regardless of the template's own current state (`RECURRING`, `PAUSED`,
 or `STOPPED`). Combine with the usual `states`/`limit`/etc. filters on
 the same endpoint (e.g. `?parentId=<id>&states=ERROR`) to narrow further.
 
+This is what the series detail page's "Past runs" table is built on, and
+the inverse link (a run back to the series that spawned it) is the series
+card on a task's detail page — see [usage.md](usage.md#web-ui).
+
 #### Scheduler loop
 
 A single background goroutine, started from `ServerConfig.Serve()` via
