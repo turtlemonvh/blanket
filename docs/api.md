@@ -14,14 +14,24 @@ GET    /task/                   # list tasks (filterable via query string)
 GET    /task/:id                # fetch a single task
 POST   /task/                   # submit a new task (JSON or multipart form)
 DELETE /task/:id                # delete a task; kills it if running.
-                                 # For a RECURRING task template, this is
-                                 # also how you stop it from ever firing
-                                 # again — see task_flow.md.
-PUT    /task/:id/cancel         # cancel a WAITING or SCHEDULED task; transitions
-                                 # to STOPPED. For a RUNNING task, requires
-                                 # ?force=true — otherwise 400. Not valid for a
-                                 # RECURRING template; delete it instead. See
-                                 # task_flow.md.
+                                 # For a RECURRING/PAUSED task template,
+                                 # this removes the record outright — see
+                                 # PUT .../cancel below for the
+                                 # keep-the-record alternative.
+PUT    /task/:id/cancel         # cancel a WAITING, SCHEDULED, RECURRING, or
+                                 # PAUSED task; transitions to STOPPED (record
+                                 # kept). For a RUNNING task, requires
+                                 # ?force=true — otherwise 400. See task_flow.md.
+PUT    /task/:id/pause          # RECURRING -> PAUSED; sets pausedTs. 400 if
+                                 # not currently RECURRING.
+PUT    /task/:id/resume         # PAUSED -> RECURRING; clears pausedTs,
+                                 # recomputes nextFireTs from now. 400 if not
+                                 # currently PAUSED.
+PUT    /task/:id/schedule       # change a live series' schedule -- body
+                                 # {"cron": "..."} for a RECURRING/PAUSED
+                                 # template, or {"notBefore": "..."} for a
+                                 # SCHEDULED one-shot task. 400 on a state/body
+                                 # mismatch or an invalid value.
 GET    /task/:id/log            # stream stdout (SSE)
 GET    /task/:id/log/tail       # last N lines of stdout
 ```
@@ -37,8 +47,35 @@ result dir) with these fields:
 | `notBefore`   | no       | Delays a one-shot task. A Go duration relative to now (`"10m"`, `"30s"`), an RFC3339 timestamp, or a unix-seconds integer. If in the future, the task starts in state `SCHEDULED` instead of `WAITING`; the scheduler loop promotes it once due. Mutually exclusive with `cron`. |
 | `cron`        | no       | A standard 5-field cron expression (minute hour dom month dow). Makes this task a `RECURRING` template: it never runs itself — the scheduler spawns a child task (own id, log, and result dir; `parentId` set to the template) at every fire time. Mutually exclusive with `notBefore`. |
 
+A `notBefore`-in-the-future or `cron` submission returns **429** with a
+JSON error body if accepting it would bring the count of live
+`SCHEDULED`+`RECURRING`+`PAUSED` tasks to or past the `scheduler.maxScheduled`
+config limit (default `10000`) — see
+[task_flow.md](task_flow.md#scan-limit-schedulermaxscheduled) for how the
+limit is enforced and configured.
+
+Every task response (`GET`/`POST` above) includes a computed
+`scheduleDescription` string field: a friendly rendering of the task's
+schedule (e.g. `"Every 5 minutes"` for a cron template, or `"Once, at
+2026-09-05T08:00:00-04:00"` for a delayed one-shot task), or `""` for a
+task with no schedule of its own. See
+[task_flow.md](task_flow.md#friendly-schedule-text).
+
+`GET /task/?parentId=<template-id>` filters the list to a series' child
+runs — every task whose `parentId` matches the given `RECURRING`/`PAUSED`/
+cancelled `STOPPED` template's id. Combines with the endpoint's other
+filters (`states`, `types`, `limit`, etc.).
+
+`GET /schedule/describe?cron=<expr>` validates a cron expression and
+returns `{"cron": "<expr>", "description": "<friendly text>", "next":
+["<RFC3339>", "<RFC3339>", "<RFC3339>"]}` — the next three upcoming fire
+times, local time — or 400 with the parser's error message if `expr` is
+invalid or the `cron` query parameter is missing. Used by the create
+form's live preview.
+
 See [task_flow.md](task_flow.md#scheduling-scheduledts--recurring-tasks-turtlemonvhblanket61)
-for the scheduling state machine and how recurrence is stopped.
+for the full scheduling state machine, the pause/resume/cancel/change-schedule
+lifecycle, and the scan limit.
 
 Worker-facing endpoints — used by `blanket worker` to advance task
 state.

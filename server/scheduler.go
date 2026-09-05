@@ -13,8 +13,12 @@ without ever touching the claimable queue until this loop says so:
   - RECURRING: a template task carrying a CronExpr. It is never itself
     queued. fireDueRecurringTasks spawns a fresh child task (its own id,
     log, and result dir) at every cron fire and advances the template's
-    NextFireTs. The template is stopped by deleting it (DELETE
-    /task/:id), not by cancelling it -- see cancelTaskById.
+    NextFireTs. Only templates in state RECURRING are ever fired -- a
+    template that has been PAUSED (PUT /task/:id/pause) or STOPPED
+    (PUT /task/:id/cancel) or deleted (DELETE /task/:id) is excluded by
+    fireDueRecurringTasks' own AllowedTaskStates filter, so nothing extra
+    is needed here to keep them from firing. See cancelTaskById,
+    pauseTaskById, and resumeTaskById in serve_tasks.go / serve_schedule.go.
 
 startBackgroundLoops is the single place new periodic maintenance loops
 get wired up -- see the FIXME this replaces in Serve() (server/server.go).
@@ -40,13 +44,53 @@ import (
 // is unset (zero).
 const DefaultSchedulerInterval = 2 * time.Second
 
-// schedulerScanLimit bounds how many SCHEDULED/RECURRING tasks a single
-// scheduler tick will consider. There's no pagination beyond this: fine
-// for the expected scale of this feature (a handful to a few hundred
-// pending schedules/templates), but a deployment leaning on scheduling
-// much more heavily than that would need this loop to page through
-// results instead.
-const schedulerScanLimit = 10000
+// DefaultSchedulerMaxScheduled is ServerConfig.SchedulerMaxScheduled's
+// value when unset (zero) -- i.e. the default for the scheduler.maxScheduled
+// config key. It serves two purposes, both bounded by the same number:
+//
+//   - It caps how many SCHEDULED/RECURRING/PAUSED tasks a single scheduler
+//     tick will scan (promoteDueScheduledTasks / fireDueRecurringTasks).
+//     There's no pagination beyond this -- fine for the expected scale of
+//     this feature (a handful to a few hundred pending schedules/
+//     templates up to a few thousand), but a deployment leaning on
+//     scheduling much more heavily than that would need these loops to
+//     page through results instead.
+//   - It's the limit POST /task/ enforces (via scheduledLiveCount) on how
+//     many SCHEDULED+RECURRING+PAUSED tasks may be live at once, returning
+//     429 once a new notBefore-future or cron submission would reach it.
+//     Using the same number for both means the scheduler's own bounded
+//     scan is guaranteed to see every live scheduled/recurring task --
+//     there's never more of them than the scan limit allows for.
+const DefaultSchedulerMaxScheduled = 10000
+
+// maxScheduledLimit returns s.SchedulerMaxScheduled, or
+// DefaultSchedulerMaxScheduled if it's unset (zero or negative).
+func (s *ServerConfig) maxScheduledLimit() int {
+	if s.SchedulerMaxScheduled <= 0 {
+		return DefaultSchedulerMaxScheduled
+	}
+	return s.SchedulerMaxScheduled
+}
+
+// scheduledLiveCount returns the number of currently "live" scheduled
+// tasks -- SCHEDULED (delayed one-shot) plus RECURRING/PAUSED (templates)
+// -- capped at `limit`. Because database.TaskSearchConf.Limit makes
+// FindTasksInBoltDB stop scanning as soon as it has found that many
+// matches (see lib/bolt/database_util.go), this is a bounded query, not a
+// full table scan, regardless of how many rows exist beyond the cap: the
+// worst case is exactly `limit` records examined, the same bound the
+// scheduler's own tick already scans up to.
+func (s *ServerConfig) scheduledLiveCount(limit int) (int, error) {
+	smallest, largest := fullIdRange()
+	_, n, err := s.DB.GetTasks(&database.TaskSearchConf{
+		JustCounts:        true,
+		Limit:             limit,
+		AllowedTaskStates: map[string]bool{"SCHEDULED": true, "RECURRING": true, "PAUSED": true},
+		SmallestId:        smallest,
+		LargestId:         largest,
+	})
+	return n, err
+}
 
 // startBackgroundLoops launches the server's periodic maintenance
 // goroutines and returns a function that stops them all and blocks until
@@ -129,7 +173,7 @@ func fullIdRange() (objectid.ObjectId, objectid.ObjectId) {
 func (s *ServerConfig) promoteDueScheduledTasks(now time.Time) {
 	smallest, largest := fullIdRange()
 	due, _, err := s.DB.GetTasks(&database.TaskSearchConf{
-		Limit:             schedulerScanLimit,
+		Limit:             s.maxScheduledLimit(),
 		AllowedTaskStates: map[string]bool{"SCHEDULED": true},
 		SmallestId:        smallest,
 		LargestId:         largest,
@@ -166,7 +210,7 @@ func (s *ServerConfig) promoteDueScheduledTasks(now time.Time) {
 func (s *ServerConfig) fireDueRecurringTasks(now time.Time) {
 	smallest, largest := fullIdRange()
 	templates, _, err := s.DB.GetTasks(&database.TaskSearchConf{
-		Limit:             schedulerScanLimit,
+		Limit:             s.maxScheduledLimit(),
 		AllowedTaskStates: map[string]bool{"RECURRING": true},
 		SmallestId:        smallest,
 		LargestId:         largest,

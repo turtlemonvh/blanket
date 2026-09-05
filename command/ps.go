@@ -46,7 +46,7 @@ func ListTasks() {
 	tasks, err := client.GetTasks(&getConf, viper.GetInt("port"))
 
 	if psConf.Template == "" {
-		psConf.Template = "{{.id}} {{.type}} {{.state}} {{.tags}}"
+		psConf.Template = "{{.id}} {{.type}} {{.state}} {{.scheduleDescription}} {{.tags}}"
 	}
 	if psConf.Quiet {
 		psConf.Template = "{{.id}}"
@@ -65,16 +65,17 @@ func ListTasks() {
 
 	// FIXME: Clean up formatting to make fields the same size
 	headerRow := map[string]interface{}{
-		"id":            "ID",
-		"createdTs":     "CREATED_TS",
-		"startedTs":     "STARTED_TS",
-		"lastUpdatedTs": "LAST_UPDATED_TS",
-		"type":          "TYPE",
-		"resultDir":     "RESULT_DIR",
-		"state":         "STATE",
-		"progress":      "PROGRESS",
-		"defaultEnv":    "ENV",
-		"tags":          "TAGS",
+		"id":                  "ID",
+		"createdTs":           "CREATED_TS",
+		"startedTs":           "STARTED_TS",
+		"lastUpdatedTs":       "LAST_UPDATED_TS",
+		"type":                "TYPE",
+		"resultDir":           "RESULT_DIR",
+		"state":               "STATE",
+		"progress":            "PROGRESS",
+		"defaultEnv":          "ENV",
+		"tags":                "TAGS",
+		"scheduleDescription": "SCHEDULE",
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 1, '\t', 0)

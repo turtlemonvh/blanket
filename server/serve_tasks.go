@@ -59,26 +59,28 @@ var ErrTaskNotCancelable = errors.New("task is not in a cancelable state (must b
 // turtlemonvh/blanket#52.
 var ErrRunningTaskRequiresForce = errors.New("task is RUNNING; pass force=true to stop it")
 
-// cancelTaskById transitions a WAITING or SCHEDULED task, or a RUNNING task
-// when force is true, to STOPPED. For a RUNNING task this only flips the
-// database record — the worker actually running the task's subprocess
-// notices the STOPPED tombstone on its own poll loop (see
-// WorkerConf.ProcessOne's monitor goroutine in worker/worker.go) and kills
-// the process group; there's no direct RPC from server to worker.
+// cancelTaskById transitions a WAITING, SCHEDULED, RECURRING, or PAUSED
+// task, or a RUNNING task when force is true, to STOPPED. For a RUNNING
+// task this only flips the database record — the worker actually running
+// the task's subprocess notices the STOPPED tombstone on its own poll loop
+// (see WorkerConf.ProcessOne's monitor goroutine in worker/worker.go) and
+// kills the process group; there's no direct RPC from server to worker.
 //
-// A RECURRING template can't be cancelled this way — it isn't queued or
-// running, so there's nothing to stop transitioning. It's removed via
-// DELETE /task/:id instead, which also stops it from ever firing again;
-// see docs/task_flow.md.
+// Cancelling a RECURRING or PAUSED template stops it from ever firing
+// again (fireDueRecurringTasks only ever looks at templates in state
+// RECURRING) while keeping its record around — unlike DELETE /task/:id,
+// which removes it. Either way, a child the template already spawned
+// keeps running to its own completion, unaffected. See docs/task_flow.md.
 func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.ObjectId, force bool) error {
 	task, err := s.DB.GetTask(taskId)
 	if err != nil {
 		return err
 	}
 	switch task.State {
-	case "WAITING", "SCHEDULED":
-		// Not yet queued (SCHEDULED) or queued but unclaimed (WAITING); no
-		// running subprocess to worry about either way.
+	case "WAITING", "SCHEDULED", "RECURRING", "PAUSED":
+		// Not yet queued (SCHEDULED), queued but unclaimed (WAITING), or a
+		// template that never runs itself (RECURRING/PAUSED); no running
+		// subprocess to worry about in any of these cases.
 	case "RUNNING":
 		if !force {
 			return ErrRunningTaskRequiresForce
@@ -516,6 +518,41 @@ func applySchedule(t *tasks.Task, req map[string]interface{}, now time.Time) err
 	return nil
 }
 
+// ErrScheduledCapacityExceeded is returned by applyScheduleChecked when
+// accepting a SCHEDULED or RECURRING submission would push the number of
+// live SCHEDULED+RECURRING+PAUSED tasks to or past scheduler.maxScheduled
+// (ServerConfig.SchedulerMaxScheduled). Callers (the REST handler, MCP) map
+// it to HTTP 429 / a plain error, respectively. See scheduledLiveCount and
+// DefaultSchedulerMaxScheduled in server/scheduler.go.
+var ErrScheduledCapacityExceeded = errors.New("scheduled/recurring task limit reached")
+
+// applyScheduleChecked is applySchedule plus the scheduler.maxScheduled
+// capacity check: after applySchedule decides t's state, if that state is
+// SCHEDULED or RECURRING (i.e. this submission would add to the live
+// scheduled/recurring/paused count), it counts the existing live total and
+// refuses with ErrScheduledCapacityExceeded if adding t would reach the
+// configured limit. An immediately-WAITING submission (no schedule, or a
+// past notBefore) never hits this check — it was never going to occupy a
+// "live scheduled" slot.
+func (s *ServerConfig) applyScheduleChecked(t *tasks.Task, req map[string]interface{}, now time.Time) error {
+	if err := applySchedule(t, req, now); err != nil {
+		return err
+	}
+	if t.State != "SCHEDULED" && t.State != "RECURRING" {
+		return nil
+	}
+
+	limit := s.maxScheduledLimit()
+	count, err := s.scheduledLiveCount(limit)
+	if err != nil {
+		return fmt.Errorf("error checking scheduled/recurring task count: %w", err)
+	}
+	if count+1 >= limit {
+		return fmt.Errorf("%w: scheduler.maxScheduled is %d live SCHEDULED/RECURRING/PAUSED tasks; cancel, delete, or wait for some to complete before submitting another scheduled or recurring task", ErrScheduledCapacityExceeded, limit)
+	}
+	return nil
+}
+
 // createTask is newTaskForType + enqueueTask, for callers with no files to
 // write in between.
 func (s *ServerConfig) createTask(ctx context.Context, typeName string, env map[string]string) (tasks.Task, error) {
@@ -591,7 +628,11 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 		return
 	}
 
-	if err := applySchedule(&t, req, time.Now()); err != nil {
+	if err := s.applyScheduleChecked(&t, req, time.Now()); err != nil {
+		if errors.Is(err, ErrScheduledCapacityExceeded) {
+			c.String(http.StatusTooManyRequests, MakeErrorString(err.Error()))
+			return
+		}
 		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}

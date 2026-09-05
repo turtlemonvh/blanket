@@ -174,6 +174,10 @@ func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *database.TaskSearchCo
 				continue
 			}
 
+			if tc.FilterParentId && t.ParentId != tc.ParentId {
+				continue
+			}
+
 			// All tags in tc.requiredTags must be present on every task
 			if len(tc.RequiredTags) > 0 {
 				hasTags := true

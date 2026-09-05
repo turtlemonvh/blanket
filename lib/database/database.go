@@ -79,6 +79,13 @@ type TaskSearchConf struct {
 	LargestId         objectid.ObjectId
 	AllowedTaskStates map[string]bool
 	AllowedTaskTypes  map[string]bool
+	// FilterParentId, when true, restricts results to tasks whose
+	// ParentId equals ParentId -- e.g. GET /task/?parentId=<id> lists a
+	// RECURRING/PAUSED/STOPPED series' past child runs. False (the
+	// zero value) means "no parentId filter", not "filter for a zero
+	// ParentId".
+	FilterParentId bool
+	ParentId       objectid.ObjectId
 }
 
 type ItemNotFoundError string
@@ -169,6 +176,11 @@ func TaskSearchConfFromContext(c *gin.Context) *TaskSearchConf {
 	tc.AllowedTaskTypes = make(map[string]bool)
 	for _, s := range collectCSV(c, "types") {
 		tc.AllowedTaskTypes[s] = true
+	}
+
+	if pid := strings.TrimSpace(c.Query("parentId")); pid != "" && objectid.IsObjectIdHex(pid) {
+		tc.FilterParentId = true
+		tc.ParentId = objectid.ObjectIdHex(pid)
 	}
 
 	return tc

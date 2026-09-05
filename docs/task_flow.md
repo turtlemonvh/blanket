@@ -9,6 +9,7 @@ machines for tasks and workers.
 | ------ | ------- |
 | SCHEDULED | Task was submitted with a future `notBefore`; not yet in the queue. See "Scheduling" below. |
 | RECURRING | Task is a recurring template (submitted with `cron`); never runs itself, only spawns children. See "Scheduling" below. |
+| PAUSED | A RECURRING template that's been paused (`PUT /task/:id/pause`); carries a `pausedTs`. Never fires while paused; `PUT /task/:id/resume` returns it to RECURRING. See "Scheduling" below. |
 | WAITING | Task has been posted but is not being worked on. The task is in the queue. |
 | CLAIMED | A worker has requested this task. The task is now out of the queue and state is maintained only in the database. |
 | RUNNING | The worker has executed the task preconditions (such as grabbing task type state, copying files) and the main command is now running. The worker may send additional updates during this state. |
@@ -25,7 +26,10 @@ terminal states in `ValidTerminalTaskStates`.
 A task moves through one of two terminal paths: it is claimed and run
 to completion (`SUCCESS` / `ERROR` / `TIMEDOUT`), or it is cancelled
 (`STOPPED`) — either before a worker claims it, or after the worker
-sees the cancellation tombstone and aborts.
+sees the cancellation tombstone and aborts. A RECURRING template has a
+third path: it can be cancelled (`STOPPED`, record kept) or deleted
+(record removed) directly, without ever running itself, and can cycle
+through PAUSED any number of times first.
 
 ```mermaid
 stateDiagram-v2
@@ -33,9 +37,17 @@ stateDiagram-v2
     [*] --> SCHEDULED: POST /task/ (future notBefore)
     [*] --> RECURRING: POST /task/ (cron)
     SCHEDULED --> WAITING: scheduler loop, once due
+    SCHEDULED --> SCHEDULED: PUT /task/:id/schedule {notBefore}
     SCHEDULED --> STOPPED: PUT /task/:id/cancel
     RECURRING --> RECURRING: scheduler loop fires a child at each cron occurrence
+    RECURRING --> RECURRING: PUT /task/:id/schedule {cron}
+    RECURRING --> PAUSED: PUT /task/:id/pause
+    PAUSED --> RECURRING: PUT /task/:id/resume
+    PAUSED --> PAUSED: PUT /task/:id/schedule {cron}
+    RECURRING --> STOPPED: PUT /task/:id/cancel
+    PAUSED --> STOPPED: PUT /task/:id/cancel
     RECURRING --> [*]: DELETE /task/:id
+    PAUSED --> [*]: DELETE /task/:id
     WAITING --> CLAIMED: POST /task/claim/:workerId
     WAITING --> STOPPED: PUT /task/:id/cancel
     CLAIMED --> RUNNING: PUT /task/:id/run
@@ -67,15 +79,90 @@ that — see [api.md](api.md#tasks) for the exact field shapes:
   template's type/env/tags, and `parentId` set to the template's id — and
   that child goes through the ordinary `WAITING` → ... lifecycle above.
   The template then advances `nextFireTs` to the next cron occurrence and
-  waits again. A template is stopped by **deleting** it
-  (`DELETE /task/:id`) — not by cancelling it, since it's neither queued
-  nor running. Deleting the template does not affect children it already
-  spawned; they run to their own completion independently.
+  waits again.
 
 Both `SCHEDULED` tasks and `RECURRING` templates are ordinary rows in the
 task database (BoltDB), so they survive a server restart with no special
 handling: on restart the scheduler loop simply finds whatever is already
 due and acts on it.
+
+#### Series lifecycle: pause, resume, cancel, change schedule
+
+A `RECURRING` template — and, for a couple of these, a `SCHEDULED`
+one-shot task — can be managed after submission:
+
+```
+PUT /task/:id/pause              # RECURRING -> PAUSED; sets pausedTs
+PUT /task/:id/resume             # PAUSED -> RECURRING; clears pausedTs,
+                                  # recomputes nextFireTs from now
+PUT /task/:id/cancel             # WAITING/SCHEDULED/RECURRING/PAUSED -> STOPPED
+                                  # (RUNNING needs ?force=true, as always)
+DELETE /task/:id                 # removes the record outright
+PUT /task/:id/schedule           # {"cron": "..."} on a RECURRING/PAUSED
+                                  # template, or {"notBefore": "..."} on a
+                                  # SCHEDULED one-shot task
+```
+
+- **Pause** (`PUT /task/:id/pause`, valid only on `RECURRING`) moves the
+  template to `PAUSED` and records `pausedTs`. A `PAUSED` template is
+  never fired — the scheduler loop's fire step only ever looks at
+  templates in state `RECURRING` in the first place (see below), so
+  nothing extra is needed to make pausing take effect.
+- **Resume** (`PUT /task/:id/resume`, valid only on `PAUSED`) moves it
+  back to `RECURRING`, clears `pausedTs`, and recomputes `nextFireTs`
+  from the current time — so a template paused for a long stretch
+  doesn't immediately fire a backlog of "missed" occurrences on resume.
+- **Cancel** (`PUT /task/:id/cancel`, now valid on `RECURRING` and
+  `PAUSED` too, in addition to the original `WAITING`/`SCHEDULED`)
+  transitions the template to `STOPPED` — the record is kept (so it
+  still shows up in a series' history/detail view) but it will never
+  fire again, for the same reason pausing works: only `RECURRING`
+  templates are ever fired.
+- **Delete** (`DELETE /task/:id`) still works exactly as before: it
+  removes the record outright rather than leaving a `STOPPED` tombstone.
+  Either way of stopping a template — cancel or delete — leaves any
+  child it already spawned running to its own completion, unaffected;
+  see "Past runs" below for listing those children.
+- **Change schedule** (`PUT /task/:id/schedule`) edits the schedule of a
+  live series without resubmitting it: a JSON body of `{"cron": "..."}`
+  is valid on a `RECURRING` or `PAUSED` template (same cron format as
+  submit; `nextFireTs` is recomputed from now if the template isn't
+  paused — a paused template's `nextFireTs` is recomputed on resume
+  instead), or `{"notBefore": "..."}` on a `SCHEDULED` one-shot task
+  (same accepted formats as submit — duration/RFC3339/unix-seconds — and
+  the resolved time must still be in the future). Any other combination
+  of body and current state returns 400; an invalid cron/notBefore value
+  returns 400 with the parser's message. A missing task id returns 404
+  via the usual `ItemNotFoundError` convention.
+
+#### Friendly schedule text
+
+Every task response (`GET /task/:id`, `GET /task/`, and `POST /task/`'s
+response) includes a computed `scheduleDescription` field, derived from
+`state`/`cronExpr`/`scheduledTs` — nothing extra is stored for it:
+
+- `SCHEDULED`: `"Once, at <scheduledTs formatted as RFC3339, local time>"`.
+- `RECURRING` / `PAUSED` / a cancelled (`STOPPED`) template: an English
+  description of the cron expression (e.g. `"Every 5 minutes"`), via
+  [`github.com/lnquy/cron`](https://github.com/lnquy/cron) — annotated
+  `" (paused)"` / `" (stopped)"` for those two states so the text is
+  self-explanatory on its own (e.g. in `blanket ps` or an MCP tool
+  result) without the state column alongside it.
+  See `tasks.ScheduleDescriptionFor` (`tasks/schedule.go`).
+- Anything else (including a `STOPPED` task that was never
+  scheduled/recurring): `""`.
+
+`GET /schedule/describe?cron=<expr>` returns the same description plus
+the next three upcoming fire times, for a create form's live preview —
+see [api.md](api.md#tasks) for the response shape.
+
+#### Past runs
+
+`GET /task/?parentId=<template-id>` lists a series' spawned child
+runs — every ordinary task whose `parentId` matches the given template,
+regardless of the template's own current state (`RECURRING`, `PAUSED`,
+or `STOPPED`). Combine with the usual `states`/`limit`/etc. filters on
+the same endpoint (e.g. `?parentId=<id>&states=ERROR`) to narrow further.
 
 #### Scheduler loop
 
@@ -88,19 +175,44 @@ interval (`scheduler.interval` config key, default `2s`) and each tick:
    queue. Safe to run more than once for the same task — the DB write is
    a plain overwrite and the queue add upserts by task id — so an
    overlapping tick or a restart mid-promotion can't double-queue a task.
-2. **Fires due `RECURRING` templates**: finds every `RECURRING` template
-   whose `nextFireTs` has passed, spawns a child task for it, and only
-   then advances `nextFireTs`. If the server crashes between spawning the
-   child and advancing `nextFireTs`, the template is found due again on
-   restart and fires an equivalent child a second time — an
-   at-least-once guarantee, not exactly-once. Task types driven by cron
-   should be written to tolerate an occasional duplicate run, the same
-   way a `cron(8)`-driven script generally should.
+2. **Fires due `RECURRING` templates**: finds every template in state
+   `RECURRING` (not `PAUSED`, not `STOPPED`) whose `nextFireTs` has
+   passed, spawns a child task for it, and only then advances
+   `nextFireTs`. If the server crashes between spawning the child and
+   advancing `nextFireTs`, the template is found due again on restart
+   and fires an equivalent child a second time — an at-least-once
+   guarantee, not exactly-once. Task types driven by cron should be
+   written to tolerate an occasional duplicate run, the same way a
+   `cron(8)`-driven script generally should.
 
 `startBackgroundLoops` is written so a second periodic loop can be added
 alongside the scheduler with one more line — see the FIXME it replaced in
 `server/server.go`; turtlemonvh/blanket#23 phase 3 plans to add a reaper
 loop there (stalled workers/tasks, unclaimed-queue cleanup).
+
+#### Scan limit: `scheduler.maxScheduled`
+
+Both scheduler-loop queries above (and the count check below) are bounded
+by a single config key, `scheduler.maxScheduled` (default `10000`) —
+`ServerConfig.SchedulerMaxScheduled`, wired through the same
+config/viper path as `scheduler.interval`. There's no pagination beyond
+this limit: each scheduler tick scans at most that many rows per query,
+fine at the scale this feature targets (batch task scheduling, not a
+high-volume cron system), but a deployment leaning on scheduling far more
+heavily than that would need these loops to page through results
+instead.
+
+The same number doubles as a hard cap: `POST /task/` (and the MCP
+`blanket_submit_task` tool) returns **HTTP 429** with a JSON error body
+when accepting a `notBefore`-in-the-future or `cron` submission would
+bring the count of live `SCHEDULED` + `RECURRING` + `PAUSED` tasks to or
+past the limit. That count is itself a bounded query rather than an
+unbounded scan: it uses the same `scheduler.maxScheduled`-sized
+`Limit` the scheduler's own queries use, so it never examines more than
+`scheduler.maxScheduled` rows regardless of how many exist beyond that
+(`ServerConfig.scheduledLiveCount`, `server/scheduler.go`). An
+immediately-`WAITING` submission (no schedule, or a past `notBefore`)
+never counts against this limit.
 
 ### Stopping a RUNNING task
 

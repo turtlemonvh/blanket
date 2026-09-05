@@ -344,10 +344,71 @@ func TestStartBackgroundLoops_StopsCleanly(t *testing.T) {
 	}
 }
 
+// --- PAUSED / STOPPED templates are never fired ---
+
+// TestFireDueRecurringTasks_SkipsPaused confirms fireDueRecurringTasks'
+// AllowedTaskStates filter (state == RECURRING only) is enough on its own
+// to keep a PAUSED template from firing -- no separate "is it paused"
+// check is needed in the fire loop itself.
+func TestFireDueRecurringTasks_SkipsPaused(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+	r := s.GetRouter()
+
+	w := postJSON(r, "/task/", `{"type": "echo_task", "cron": "*/5 * * * *"}`)
+	assert.Equal(t, http.StatusCreated, w.Code)
+	var tmpl tasks.Task
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &tmpl))
+
+	pauseW := putNoBody(r, "/task/"+tmpl.Id.Hex()+"/pause")
+	assert.Equal(t, http.StatusOK, pauseW.Code)
+
+	// Fast-forward well past the original NextFireTs.
+	s.fireDueRecurringTasks(time.Unix(tmpl.NextFireTs, 0).Add(time.Hour))
+
+	stillPaused, err := s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "PAUSED", stillPaused.State)
+	assert.Equal(t, tmpl.NextFireTs, stillPaused.NextFireTs) // unchanged -- never fired
+
+	// No child was spawned.
+	claimW := claimAnyTask(t, s, r)
+	assert.Equal(t, http.StatusNoContent, claimW.Code)
+}
+
+// TestFireDueRecurringTasks_SkipsStopped is the same check for a
+// cancelled (STOPPED) template.
+func TestFireDueRecurringTasks_SkipsStopped(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+	r := s.GetRouter()
+
+	w := postJSON(r, "/task/", `{"type": "echo_task", "cron": "*/5 * * * *"}`)
+	assert.Equal(t, http.StatusCreated, w.Code)
+	var tmpl tasks.Task
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &tmpl))
+
+	cancelW := putNoBody(r, "/task/"+tmpl.Id.Hex()+"/cancel")
+	assert.Equal(t, http.StatusOK, cancelW.Code)
+
+	s.fireDueRecurringTasks(time.Unix(tmpl.NextFireTs, 0).Add(time.Hour))
+
+	stillStopped, err := s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", stillStopped.State)
+
+	claimW := claimAnyTask(t, s, r)
+	assert.Equal(t, http.StatusNoContent, claimW.Code)
+}
+
 func testAllStatesSearchConf() database.TaskSearchConf {
 	smallest, largest := fullIdRange()
 	return database.TaskSearchConf{
-		Limit:      schedulerScanLimit,
+		Limit:      DefaultSchedulerMaxScheduled,
 		SmallestId: smallest,
 		LargestId:  largest,
 	}

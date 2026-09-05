@@ -79,10 +79,41 @@ curl -s -X POST localhost:8773/task/ \
     -d '{"type": "echo_task", "cron": "*/5 * * * *"}'
 $ blanket submit -t echo_task --cron "*/5 * * * *"
 
-# Stop a recurring task: delete the template. Its already-spawned
-# children are unaffected and run to completion normally.
+# Stop a recurring task for good, keeping the record around (it'll show
+# STOPPED in `blanket ps` / GET /task/:id): cancel it, same as any other
+# task. Its already-spawned children are unaffected and run to completion
+# normally.
+curl -s -X PUT localhost:8773/task/<template-task-id>/cancel
+# Or remove the record outright instead:
 $ blanket rm <template-task-id>
+
+# Pause a recurring task (it stops firing but the record stays RECURRING-
+# adjacent, as PAUSED) / resume it later. There's no CLI flag for these
+# yet -- REST only:
+curl -s -X PUT localhost:8773/task/<template-task-id>/pause
+curl -s -X PUT localhost:8773/task/<template-task-id>/resume
+
+# Change a live series' schedule without resubmitting it:
+curl -s -X PUT localhost:8773/task/<template-task-id>/schedule \
+    -d '{"cron": "0 * * * *"}'
+curl -s -X PUT localhost:8773/task/<scheduled-task-id>/schedule \
+    -d '{"notBefore": "2h"}'
+
+# Preview a cron expression's friendly description and next fire times
+# before submitting (used by the create form's live preview):
+curl -s "localhost:8773/schedule/describe?cron=*/5+*+*+*+*" | jq .
+
+# List a series' past runs (its spawned children):
+curl -s "localhost:8773/task/?parentId=<template-task-id>" | jq .
 ```
+
+Every task response includes a `scheduleDescription` field — a friendly
+rendering of its schedule (e.g. `"Every 5 minutes"`, `"Once, at
+2026-09-05T08:00:00-04:00"`), shown in the `SCHEDULE` column of
+`blanket ps`'s default output. See
+[task_flow.md](task_flow.md#friendly-schedule-text) for details, and its
+["Scan limit"](task_flow.md#scan-limit-schedulermaxscheduled) section for
+the `scheduler.maxScheduled` cap (`POST /task/` returns 429 once hit).
 
 ## File uploads
 
