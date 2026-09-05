@@ -29,7 +29,8 @@ See `Dockerfile` for what the image carries.
 
 ```
 make docker-test           # Go unit tests
-make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh)
+make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh
+                           #   + scripts/restart.sh)
 make docker-test-browser   # Playwright suite
 make docker-shell          # interactive container for ad-hoc work
 make docker-build          # cross-compile linux/darwin/windows
@@ -44,6 +45,7 @@ make darwin                # build for macOS
 make windows               # build for Windows
 make test                  # run Go unit tests
 make test-smoke            # run smoke tests
+make test-restart          # run shutdown/restart tests (signals, SIGUSR2)
 make test-browser          # run Playwright tests
 make fmt                   # gofmt all Go files
 make check-fmt             # fail if any Go file isn't gofmt-clean
@@ -70,6 +72,22 @@ submits a task through each native Windows executor example
 `examples/types/windows_powershell.toml` for `powershell`), runs a real
 `blanket worker` to drain them, and asserts both reach `SUCCESS` — the
 Windows counterpart to `scripts/smoke.sh`.
+
+### The subprocess test harness
+
+Some behaviour only exists across a process boundary: signal handling and
+exit codes, SIGUSR2's re-exec-in-place, the BoltDB flock, and anything
+reading `os.Executable()` (which resolves to the test binary under
+`go test`). Tests for those spawn the built binary, and they all need the
+same scaffolding — free port, throwaway workdir, generated config,
+readiness polling, cleanup on every exit path.
+
+That scaffolding lives in **`scripts/lib/harness.sh`**. `scripts/smoke.sh`
+and `scripts/restart.sh` both source it; a new subprocess test should too,
+rather than copying the setup a third time. Everything it defines is
+prefixed `harness_`, and it exports `BINARY`, `WORKDIR`, `PORT`, `BASE`,
+`CONFIG`, `SERVER_PID` and `SERVER_LOG`. The usage sketch is in the file's
+header comment.
 
 ## CI
 
@@ -226,6 +244,14 @@ plus a navigation-cycle smoke check. Verify the end-to-end symptom by
 hand in a real Chrome: switch tabs several times with DevTools' Network
 panel open and confirm nothing stays `(pending)`, and that `ss -tn |
 grep :8773` doesn't grow.
+
+`server/ui/static/sse-restart-banner.js` is the third of ours, and it
+hangs off the same streams: it hooks `htmx:sseOpen` to get at each
+`EventSource`, shows `#server-restart-banner` on a `server-restarting`
+event, and hides it again when any stream reconnects. It can't use the
+extension's own `sse-swap` attribute because that only wires up elements
+*inside* an `sse-connect` element, and the banner lives in the layout.
+See [docs/design.md](docs/design.md#shutdown-sequence) for the server half.
 
 ## Issue Workflow
 

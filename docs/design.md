@@ -94,4 +94,47 @@ flowchart LR
     subcmd -- "writes" --> logs
 ```
 
+### Shutdown sequence
+
+The server owns its own signal handling and tears down in a fixed order
+(`server/lifecycle.go`). The order is the point — the steps are not
+independent:
+
+| # | Step | Why here |
+| - | ---- | -------- |
+| a | Signal shutdown to the streaming handlers | `net/http`'s `Shutdown` waits *indefinitely* on an active connection and never force-closes one. Each SSE handler selects on a server-wide shutdown channel, emits a `retry:` hint plus a `server-restarting` event, and returns. Miss one call site and every restart hangs forever. |
+| b | `http.Server.Shutdown(ctx)` | Stop accepting connections; drain what's in flight. 5 s deadline. |
+| c | `http.Server.Close()` | Only if (b) hit its deadline: cut whatever is still open. |
+| d | `tailed_file.StopAll()` | Only now is this safe. No handler can still be reading from a tailer. Doing it *first* was a real bug in the `graceful.v1` setup this replaces: its `BeforeShutdown` hook ran before the listener closed, leaving in-flight log-stream handlers blocked on a torn-down tailer. |
+| e | Cancel the background loops | The scheduler today (`server/scheduler.go`); the reaper joins it there in a later phase. |
+| f | Close the BoltDB handle | Last, because everything above may still touch storage — and because closing it is what releases the flock, which the next step needs. |
+
+Signals:
+
+* **SIGINT / SIGTERM** — drain and exit 0, leaving nothing that would
+  bring the server or its workers back. A plain `systemctl stop` must not
+  resurrect anything later.
+* **SIGUSR2** (unix only) — drain as above, then `syscall.Exec` the binary
+  at `os.Executable()` with the same argv and environment. The process
+  image is replaced in place: same PID, same file descriptors 0/1/2, so a
+  server started under `nohup` or in tmux keeps its terminal and its logs.
+  Because the database was closed in step (f), the new image can take the
+  flock. Windows has no equivalent and never self-restarts — a detached
+  grandchild escapes a service's job object and would hold the bolt lock
+  invisibly, which is the worst failure mode in the system.
+
+Timeouts on the `http.Server`: `ReadHeaderTimeout` 10 s and `IdleTimeout`
+120 s. `WriteTimeout` and `ReadTimeout` are deliberately left at zero —
+`WriteTimeout` is an absolute deadline on the whole response, so any
+nonzero value would kill every SSE stream in the app, and `ReadTimeout`
+would cap the whole request read including multipart uploads to
+`POST /task/`.
+
+Testing this needs a real process — signal delivery, exit codes, the
+BoltDB flock and `os.Executable()` are all cross-process properties — so
+`scripts/restart.sh` drives the built binary through the shared subprocess
+harness (`scripts/lib/harness.sh`). The in-process half, including a test
+that holds all four streaming routes open across a shutdown, is in
+`server/lifecycle_test.go`.
+
 See the [docs index](./README.md) for more detailed information, including the [task flow and state machines](./task_flow.md).

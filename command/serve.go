@@ -1,6 +1,7 @@
 package command
 
 import (
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	bolt "github.com/turtlemonvh/blanket/lib/bolt"
@@ -18,6 +19,11 @@ var RootCmd = &cobra.Command{
 
 		// Connect to database
 		db := bolt.MustOpenBoltDatabase()
+		// Belt and braces: the server closes this itself as the last step
+		// of its shutdown sequence (ServerConfig.Cleanup below), which is
+		// what releases the bolt lock before a SIGUSR2 re-exec. bbolt's
+		// Close is a no-op on an already-closed handle, so this defer only
+		// covers paths that never reach the server at all.
 		defer db.Close()
 
 		// DB and Q initializers are fatal if they don't succeed
@@ -32,8 +38,18 @@ var RootCmd = &cobra.Command{
 			Version:               Version,
 			SchedulerInterval:     viper.GetDuration("scheduler.interval"),
 			SchedulerMaxScheduled: viper.GetInt("scheduler.maxScheduled"),
+			Cleanup: func() {
+				if err := db.Close(); err != nil {
+					log.WithField("err", err).Warn("error closing database at shutdown")
+				}
+			},
 		}
-		s := c.Serve()
-		s.ListenAndServe()
+
+		// Blocks until SIGINT/SIGTERM (drain, then exit leaving no restart
+		// intent) or, on unix, SIGUSR2 (drain, then re-exec in place --
+		// never returns). See server/lifecycle.go.
+		if err := c.Serve().ListenAndServe(); err != nil {
+			log.WithField("err", err).Fatal("server exited with an error")
+		}
 	},
 }
