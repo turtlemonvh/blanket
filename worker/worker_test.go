@@ -88,6 +88,18 @@ func runWorkerSubprocess() {
 	viper.Set("tasks.resultsPath", os.Getenv("BLANKET_WORKER_RESULTS_DIR"))
 	viper.Set("timeMultiplier", 1.0)
 
+	// Lets a parent test shorten how long the SIGTERM handler will keep
+	// trying to reach a server that is never coming back; see
+	// TestRun_SIGTERM_ServerUnreachable.
+	if ms := os.Getenv("BLANKET_WORKER_SHUTDOWN_DEADLINE_MS"); ms != "" {
+		d, err := strconv.Atoi(ms)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "runWorkerSubprocess: bad BLANKET_WORKER_SHUTDOWN_DEADLINE_MS:", err)
+			os.Exit(2)
+		}
+		worker.ShutdownRetryDeadline = time.Duration(d) * time.Millisecond
+	}
+
 	wConf := worker.WorkerConf{
 		Id:            objectid.ObjectIdHex(os.Getenv("BLANKET_WORKER_ID")),
 		Tags:          strings.Split(os.Getenv("BLANKET_WORKER_TAGS"), ","),
@@ -114,9 +126,19 @@ type workerHarness struct {
 	t          *testing.T
 	srv        *httptest.Server
 	typesDir   string
+	resultsDir string
+	// work is handed to WorkerConf.ProcessTasks, which overwrites the
+	// whole struct on every Refetch. Anything the test goroutine needs
+	// while the loop is running must come from workerID instead, not from
+	// work.Id -- reading it there is a genuine data race.
 	work       worker.WorkerConf
+	workerID   objectid.ObjectId
 	claimCount *atomic.Int64
-	cleanupFn  func()
+	// requestCount counts every request that reaches the harness, broken
+	// ones included — the signal the backoff tests measure.
+	requestCount *atomic.Int64
+	outage       *outageInjector
+	cleanupFn    func()
 }
 
 func (h *workerHarness) writeTaskType(name, toml string) {
@@ -153,7 +175,7 @@ func (h *workerHarness) submit(taskType string) tasks.Task {
 func (h *workerHarness) claim() tasks.Task {
 	h.t.Helper()
 	resp, err := http.Post(
-		fmt.Sprintf("%s/task/claim/%s", h.srv.URL, h.work.Id.Hex()),
+		fmt.Sprintf("%s/task/claim/%s", h.srv.URL, h.workerID.Hex()),
 		"application/json",
 		nil,
 	)
@@ -217,10 +239,16 @@ func newWorkerHarness(t *testing.T) *workerHarness {
 	sc.TimeMultiplier = 1.0
 
 	claimCount := &atomic.Int64{}
+	requestCount := &atomic.Int64{}
+	outage := &outageInjector{}
 	router := sc.GetRouter()
 	httpSrv, srvCleanup := testutil.NewTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
 		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/task/claim/") {
 			claimCount.Add(1)
+		}
+		if outage.intercept(w, r) {
+			return
 		}
 		router.ServeHTTP(w, r)
 	}))
@@ -258,11 +286,15 @@ func newWorkerHarness(t *testing.T) *workerHarness {
 	}
 
 	h := &workerHarness{
-		t:          t,
-		srv:        httpSrv,
-		typesDir:   typesDir,
-		work:       wConf,
-		claimCount: claimCount,
+		t:            t,
+		srv:          httpSrv,
+		typesDir:     typesDir,
+		resultsDir:   resultsDir,
+		work:         wConf,
+		workerID:     workerID,
+		claimCount:   claimCount,
+		requestCount: requestCount,
+		outage:       outage,
 		cleanupFn: func() {
 			srvCleanup()
 			dbCleanup()
@@ -388,6 +420,9 @@ func TestProcessOne_StoppedMidFlight(t *testing.T) {
 
 	h.submit("long_task")
 	claimed := h.claim()
+	// ProcessOne refreshes the task it is handed, so this goroutine owns
+	// `claimed` from here on; the test reads the id it captured first.
+	taskId := claimed.Id
 
 	// Run ProcessOne in a goroutine; we'll cancel while it's running.
 	done := make(chan error, 1)
@@ -396,13 +431,13 @@ func TestProcessOne_StoppedMidFlight(t *testing.T) {
 	// Give the task a moment to transition to RUNNING, then cancel.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		cur := h.fetch(claimed.Id)
+		cur := h.fetch(taskId)
 		if cur.State == "RUNNING" {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	h.cancel(claimed.Id)
+	h.cancel(taskId)
 
 	// ProcessOne should return within a few seconds once the monitor goroutine
 	// kills the child process.
@@ -412,7 +447,7 @@ func TestProcessOne_StoppedMidFlight(t *testing.T) {
 		t.Fatal("ProcessOne did not return after cancel")
 	}
 
-	final := h.fetch(claimed.Id)
+	final := h.fetch(taskId)
 	assert.Equal(t, "STOPPED", final.State)
 }
 
@@ -420,7 +455,7 @@ func TestProcessOne_StoppedMidFlight(t *testing.T) {
 // ProcessTasks loop exits at its next Refetch.
 func (h *workerHarness) stopWorkerViaAPI() {
 	h.t.Helper()
-	req, _ := http.NewRequest("PUT", fmt.Sprintf("%s/worker/%s/stop", h.srv.URL, h.work.Id.Hex()), nil)
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("%s/worker/%s/stop", h.srv.URL, h.workerID.Hex()), nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		h.t.Fatalf("stop worker: %v", err)
@@ -740,4 +775,106 @@ func TestRun_SIGTERM(t *testing.T) {
 	task2 := submitTask()
 	time.Sleep(1500 * time.Millisecond)
 	assert.Equal(t, "WAITING", fetchTask(task2.Id).State, "no worker should be alive to claim this task")
+}
+
+// TestRun_SIGTERM_ServerUnreachable is the regression test for the
+// shutdown-path spin (turtlemonvh/blanket#23 phase 1).
+//
+// The old handler's retry loop never reassigned err and never incremented
+// its counter, so with the server gone it looped forever; and even if it
+// had given up, the claim loop's only exit condition was the Stopped flag,
+// which the worker can only learn about *from the server*. Between the two,
+// SIGTERM did nothing at all when the server was down — precisely the
+// situation an upgrade creates.
+//
+// Here the server is torn down first, then SIGTERM is delivered, and the
+// worker must still exit within a bounded time. A nonzero exit status is
+// expected and fine: the claim loop really did end on an error.
+func TestRun_SIGTERM_ServerUnreachable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGTERM subprocess harness is unix-only; see worker/daemon_windows.go for the platform split this would need")
+	}
+
+	workDir, err := os.MkdirTemp("", "blanket-sigterm-down-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(workDir)
+
+	typesDir := filepath.Join(workDir, "types")
+	resultsDir := filepath.Join(workDir, "results")
+	for _, d := range []string{typesDir, resultsDir} {
+		require.NoError(t, os.MkdirAll(d, 0755))
+	}
+
+	sc, dbCleanup := testutil.NewTestServer(t)
+	defer dbCleanup()
+	sc.ResultsPath = resultsDir
+	sc.TimeMultiplier = 1.0
+
+	httpSrv, srvCleanup := testutil.NewTestHTTPServer(t, sc.GetRouter())
+	srvClosed := false
+	defer func() {
+		if !srvClosed {
+			srvCleanup()
+		}
+	}()
+
+	u, err := url.Parse(httpSrv.URL)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(typesDir, "sigterm_task.toml"),
+		[]byte(sigtermTaskTypeToml),
+		0644,
+	))
+	viper.Set("tasks.typesPaths", []string{typesDir})
+	viper.Set("tasks.resultsPath", resultsDir)
+	defer func() {
+		viper.Set("tasks.typesPaths", nil)
+		viper.Set("tasks.resultsPath", "")
+	}()
+
+	workerID := objectid.NewObjectId()
+
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(),
+		subprocessEnvVar+"=1",
+		"BLANKET_WORKER_PORT="+u.Port(),
+		"BLANKET_WORKER_TYPES_DIR="+typesDir,
+		"BLANKET_WORKER_RESULTS_DIR="+resultsDir,
+		"BLANKET_WORKER_ID="+workerID.Hex(),
+		"BLANKET_WORKER_TAGS=exec:bash,os:unix",
+		"BLANKET_WORKER_CHECK_INTERVAL=0.5",
+		"BLANKET_WORKER_SHUTDOWN_DEADLINE_MS=1000",
+		"BLANKET_WORKER_LOGFILE="+filepath.Join(workDir, "worker.log"),
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	require.NoError(t, cmd.Start())
+
+	// Wait until the worker has registered itself, so we know its claim
+	// loop is actually running before we pull the server out from under it.
+	require.Eventually(t, func() bool {
+		w, err := sc.DB.GetWorker(workerID)
+		return err == nil && w.Pid != 0
+	}, 10*time.Second, 100*time.Millisecond,
+		"worker subprocess never registered; stdout=%s stderr=%s", &stdout, &stderr)
+
+	// Server goes away and never comes back.
+	srvCleanup()
+	srvClosed = true
+
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+
+	// 1s shutdown budget + one 0.5s check interval + generous slack.
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- cmd.Wait() }()
+	select {
+	case <-waitErr:
+		// Exit status is not asserted: with the server gone the claim loop
+		// ends on an error and Run exits nonzero, which is correct.
+	case <-time.After(20 * time.Second):
+		cmd.Process.Kill()
+		t.Fatalf("worker subprocess did not exit after SIGTERM with the server unreachable; stdout=%s stderr=%s", &stdout, &stderr)
+	}
 }

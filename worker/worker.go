@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/kardianos/osext"
@@ -9,14 +10,17 @@ import (
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib"
+	"github.com/turtlemonvh/blanket/lib/httpx"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/lib/timing"
 	"github.com/turtlemonvh/blanket/tasks"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"text/template"
 	"time"
@@ -28,6 +32,28 @@ const (
 	// be configured with. Below this, the claim/refresh loop hammers the
 	// server with no useful work — see ProcessTasks.
 	MIN_CHECK_INTERVAL_SECONDS = 0.5
+
+	// MAX_POLL_BACKOFF_SECONDS caps the full-jitter backoff the claim loop
+	// applies while the server is unreachable. Unscaled; timeMultiplier is
+	// applied at use.
+	MAX_POLL_BACKOFF_SECONDS = 30
+)
+
+// Retry budgets for a worker's own registration/lifecycle calls
+// (turtlemonvh/blanket#23 phase 1). Unscaled constants — timeMultiplier is
+// applied inside lib/httpx. Vars so tests can shorten them.
+var (
+	// RegisterRetryDeadline bounds the worker's initial registration. A
+	// worker started while the server is briefly down (a supervisor
+	// restarting both at once, say) should wait rather than exit.
+	RegisterRetryDeadline = 30 * time.Second
+
+	// ShutdownRetryDeadline bounds how long the SIGTERM handler keeps
+	// trying to register the worker as stopped before giving up. It must
+	// stay finite: the shutdown path has to terminate the process even
+	// when the server is never coming back, which is exactly the case the
+	// pre-fix handler spun on forever.
+	ShutdownRetryDeadline = 10 * time.Second
 )
 
 // ErrCheckIntervalTooLow is returned by Run when CheckInterval is set to
@@ -53,6 +79,25 @@ type WorkerConf struct {
 	// worker is stopped. Intended to grow into a general heartbeat field;
 	// see the "not heartbeated in a while" FIXME on CleanupStalledWorkers.
 	LastHeardTs int64 `json:"lastHeardTs"`
+
+	// stopping is a purely local shutdown flag, set by the SIGTERM/SIGINT
+	// handler (turtlemonvh/blanket#23 phase 1). The claim loop's exit
+	// condition used to be Stopped alone, which the worker only learns
+	// about by asking the server — so a SIGTERM delivered while the server
+	// was unreachable did nothing at all and the worker ran forever.
+	//
+	// A pointer rather than a value so WorkerConf stays copyable: the
+	// struct is passed and returned by value all over the server, and an
+	// inlined atomic.Bool would trip `go vet`'s copylocks check. Nil means
+	// "nothing has requested a stop" (the zero value for every WorkerConf
+	// that isn't running its own Run loop).
+	stopping *atomic.Bool `json:"-"`
+}
+
+// stopRequested reports whether this process has been asked to shut down by
+// a signal. Safe on a zero-valued WorkerConf.
+func (c *WorkerConf) stopRequested() bool {
+	return c.stopping != nil && c.stopping.Load()
 }
 
 // buildDaemonCmd constructs the exec.Cmd used to relaunch this process as
@@ -140,33 +185,45 @@ func (c *WorkerConf) Run() error {
 		}).Info("Starting daemonized executable")
 
 	} else {
-		// Handle clean shutdown
+		// Handle clean shutdown.
+		//
+		// Two bugs used to live here (turtlemonvh/blanket#23 phase 1). The
+		// retry loop never reassigned err and never incremented its
+		// counter, so a server that was down turned this into an infinite
+		// spin — the exact situation an upgrade creates. And it wrote to
+		// Run's `err` from a second goroutine while the main one was using
+		// it, which is a data race.
+		//
+		// Retrying now happens inside StopWorkerById (full-jitter backoff
+		// against a finite deadline), and the handler owns nothing the main
+		// goroutine touches: it reads a copy of the worker id taken before
+		// the goroutine starts, because ProcessTasks overwrites *c on every
+		// Refetch.
+		c.stopping = &atomic.Bool{}
+		workerId := c.Id
 		shutdownChan := make(chan os.Signal, 1)
 		signal.Notify(shutdownChan, os.Interrupt)
 		signal.Notify(shutdownChan, syscall.SIGTERM)
 		go func() {
 			<-shutdownChan
-			// Register the worker as stopped
-			maxShutdownRetries := 10
-			nShutdownRetries := 0
 			log.Warn("Received shutdown signal; attempting to set worker to 'stopped'")
-			err = c.Stop()
-			for err != nil && nShutdownRetries < maxShutdownRetries {
+
+			if serr := StopWorkerById(workerId); serr != nil {
+				// Worker exits anyway, via the local flag below. Leaving a
+				// record that says "running" is a problem for the server's
+				// reaper to notice, not a reason to stay alive.
 				log.WithFields(log.Fields{
-					"err":        err.Error(),
-					"nattempts":  nShutdownRetries,
-					"retryDelay": c.CheckIntervalMs(),
-				}).Error("Problem updating worker to the 'stopped' state")
-				time.Sleep(c.CheckIntervalMs())
-			}
-			if nShutdownRetries < maxShutdownRetries {
-				log.Info("Successfully registered worker as 'stopped'.")
+					"err":      serr.Error(),
+					"deadline": ShutdownRetryDeadline,
+				}).Error("Failed to register worker as 'stopped'. Will exit anyway.")
 			} else {
-				// Worker will exit when it checks its 'stopped' setting
-				log.WithFields(log.Fields{
-					"nattempts": nShutdownRetries,
-				}).Info("Failed to register worker as 'stopped'. Will exit anyway.")
+				log.Info("Successfully registered worker as 'stopped'.")
 			}
+
+			// Local stop flag: the claim loop exits on this even if the
+			// server is never reachable again, so SIGTERM always
+			// terminates the worker.
+			c.stopping.Store(true)
 		}()
 
 		c.Pid = os.Getpid()
@@ -254,61 +311,101 @@ func (c *WorkerConf) MustRegister() {
 	}
 }
 
-func (c *WorkerConf) Stop() error {
-	var err error
+func workerURL(workerId objectid.ObjectId, suffix string) string {
+	return fmt.Sprintf("http://localhost:%d/worker/%s%s", viper.GetInt("port"), workerId.Hex(), suffix)
+}
 
-	reqURL := fmt.Sprintf("http://localhost:%d/worker/%s/stop", viper.GetInt("port"), c.Id.Hex())
-	req, err := http.NewRequest("PUT", reqURL, nil)
-	if err != nil {
-		return err
-	}
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-
+// StopWorkerById asks the server to mark a worker stopped, retrying
+// transient failures with full-jitter backoff until ShutdownRetryDeadline.
+//
+// Takes an id rather than a *WorkerConf because its caller is the signal
+// handler, which must not read a struct the claim loop is concurrently
+// overwriting.
+func StopWorkerById(workerId objectid.ObjectId) error {
+	_, err := httpx.Do(context.Background(), "PUT", workerURL(workerId, "/stop"), nil,
+		httpx.Policy{Deadline: ShutdownRetryDeadline})
 	return err
+}
+
+func (c *WorkerConf) Stop() error {
+	return StopWorkerById(c.Id)
 }
 
 func (c *WorkerConf) UpdateInDatabase() error {
-	var err error
-	var bts []byte
-
-	bts, err = json.Marshal(c)
+	bts, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
-
-	reqURL := fmt.Sprintf("http://localhost:%d/worker/%s", viper.GetInt("port"), c.Id.Hex())
-	req, err := http.NewRequest("PUT", reqURL, bytes.NewReader(bts))
-	if err != nil {
-		return err
-	}
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-
+	_, err = httpx.Do(context.Background(), "PUT", workerURL(c.Id, ""), bts,
+		httpx.Policy{Deadline: RegisterRetryDeadline})
 	return err
 }
 
+// Refetch pulls this worker's record from the server, overwriting the local
+// copy — this is how the worker learns it has been stopped.
+//
+// Deliberately does not retry: the claim loop that calls it is itself the
+// retry, with its own jittered backoff.
 func (c *WorkerConf) Refetch() error {
-	reqURL := fmt.Sprintf("http://localhost:%d/worker/%s", viper.GetInt("port"), c.Id.Hex())
-	res, err := http.Get(reqURL)
+	res, err := httpx.DoOnce(context.Background(), "GET", workerURL(c.Id, ""), nil, httpx.DefaultRequestTimeout)
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
-	dec := json.NewDecoder(res.Body)
-	return dec.Decode(c)
+	return json.Unmarshal(res.Body, c)
 }
 
 func (c *WorkerConf) CheckIntervalMs() time.Duration {
-	return time.Duration(c.CheckInterval*1000*viper.GetFloat64("timeMultiplier")) * time.Millisecond
+	return timing.ScaleSeconds(c.CheckInterval)
+}
+
+// pollSleep waits out one claim-loop interval, plus a little jitter.
+//
+// The jitter (up to a quarter of an interval on top, never less than a full
+// interval) exists so that a machine's workers don't stay phase-locked with
+// each other after they all start or all reconnect at the same instant. The
+// floor matters too: sleeping less than a full interval is what the
+// empty-queue hot-spin regression was.
+func (c *WorkerConf) pollSleep() {
+	interval := c.CheckIntervalMs()
+	c.sleepUnlessStopping(interval + httpx.FullJitter(interval/4, interval/4, 0))
+}
+
+// backoffSleep waits out a full-jitter backoff — rand(0, min(interval<<n,
+// max)) — after a failed iteration. Full jitter rather than a fixed
+// interval because the failure this is built for is a server restart, which
+// every worker on the box sees at the same moment; retrying in lockstep
+// afterwards just moves the thundering herd. This doubles as the "jitter
+// the first poll after a reconnect" rule, since the sleep before the
+// successful poll is the last of these.
+func (c *WorkerConf) backoffSleep(attempt int) time.Duration {
+	d := httpx.FullJitter(c.CheckIntervalMs(), timing.ScaleSeconds(MAX_POLL_BACKOFF_SECONDS), attempt)
+	c.sleepUnlessStopping(d)
+	return d
+}
+
+// sleepUnlessStopping sleeps for d, but wakes within one check interval if
+// a shutdown signal arrives. Without this, a worker backing off against a
+// dead server could sit unresponsive to SIGTERM for the length of the
+// backoff.
+func (c *WorkerConf) sleepUnlessStopping(d time.Duration) {
+	chunk := c.CheckIntervalMs()
+	if chunk <= 0 {
+		chunk = 100 * time.Millisecond
+	}
+	deadline := time.Now().Add(d)
+	for {
+		if c.stopRequested() {
+			return
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return
+		}
+		if remaining > chunk {
+			remaining = chunk
+		}
+		time.Sleep(remaining)
+	}
 }
 
 // ProcessTasks is the worker's main loop: refresh state, claim a task, run
@@ -322,30 +419,40 @@ func (c *WorkerConf) ProcessTasks() error {
 	var lastErr error
 	var t tasks.Task
 
-	for !c.Stopped {
+	// outageAttempts counts consecutive failed iterations, and drives the
+	// full-jitter backoff. Reset on any successful iteration.
+	outageAttempts := 0
+
+	for !c.Stopped && !c.stopRequested() {
 		// Update the worker config
 		err := c.Refetch()
 		if err != nil {
+			delay := c.backoffSleep(outageAttempts)
+			outageAttempts++
 			log.WithFields(log.Fields{
-				"id":    c.Id,
-				"error": err.Error(),
+				"id":         c.Id,
+				"error":      err.Error(),
+				"nattempts":  outageAttempts,
+				"retryDelay": delay,
 			}).Error("error refreshing worker state")
 			lastErr = err
-			time.Sleep(c.CheckIntervalMs())
 			continue
 		}
+		outageAttempts = 0
 		log.WithFields(log.Fields{
 			"id": c.Id,
 		}).Info("successfully refreshed worker state")
 
 		t, err = tasks.MarkAsClaimed(c.Id)
 		if err != nil {
+			delay := c.backoffSleep(outageAttempts)
+			outageAttempts++
 			log.WithFields(log.Fields{
 				"err":        err.Error(),
-				"retryDelay": c.CheckIntervalMs(),
+				"nattempts":  outageAttempts,
+				"retryDelay": delay,
 			}).Errorf("error finding task for this worker")
 			lastErr = err
-			time.Sleep(c.CheckIntervalMs())
 			continue
 		}
 		if t.Id.IsZero() {
@@ -354,7 +461,7 @@ func (c *WorkerConf) ProcessTasks() error {
 			log.WithFields(log.Fields{
 				"retryDelay": c.CheckIntervalMs(),
 			}).Debug("found no matching tasks")
-			time.Sleep(c.CheckIntervalMs())
+			c.pollSleep()
 			continue
 		}
 
@@ -380,14 +487,25 @@ func (c *WorkerConf) ProcessTasks() error {
 	}
 
 	log.WithFields(log.Fields{
-		"stopped": c.Stopped,
-		"pid":     c.Pid,
-		"id":      c.Id.Hex(),
+		"stopped":       c.Stopped,
+		"stopRequested": c.stopRequested(),
+		"pid":           c.Pid,
+		"id":            c.Id.Hex(),
 	}).Info("Finished final task, shutting down")
 
 	return lastErr
 }
 
+// ProcessOne runs a single claimed task to completion: start the child
+// process, tell the server it's RUNNING, watch it, report the terminal
+// state, and journal the outcome to disk along the way.
+//
+// Concurrency note (turtlemonvh/blanket#23 phase 1): the monitoring
+// goroutine started below shares nothing mutable with this function. It
+// used to refresh *t in place and assign to this function's `err` while
+// cmd.Wait() was writing it, which was two data races and made the
+// task's observed state depend on which goroutine polled last. It now
+// works from its own copies.
 func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	// FIXME: Copy template into result directory
 	// Do this BEFORE reading to make sure we're reading the version we save
@@ -402,6 +520,13 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 
 	var cmd *exec.Cmd
 	cmd, err = t.GetCmd(tt)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"err":    err.Error(),
+			"taskId": t.Id,
+		}).Error("failed to build the command for this task")
+		return err
+	}
 
 	// Add extra environment variables common for all tasks
 	extraEnv := map[string]string{
@@ -414,6 +539,15 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	for k, v := range extraEnv {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
+
+	// The fencing token for this run, generated immediately before the
+	// child starts and sent on every transition that follows. See
+	// tasks.Task.RunId. It's exported to the child too, so a task script
+	// reporting its own progress can identify the run it belongs to.
+	runId := objectid.NewObjectId().Hex()
+	taskId := t.Id
+	resultDir := t.ResultDir
+	cmd.Env = append(cmd.Env, fmt.Sprintf("BLANKET_APP_TASK_RUN_ID=%s", runId))
 
 	var fileCloser func()
 	err, fileCloser = c.SetupExecutionDirectory(t, tt, cmd)
@@ -428,7 +562,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("Error starting task execution")
-		terr := tasks.MarkAsFinished(t, "ERROR")
+		terr := tasks.MarkAsFinished(t, "ERROR", runId)
 		if terr != nil {
 			log.WithFields(log.Fields{
 				"err":    terr.Error(),
@@ -439,8 +573,22 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		return err
 	}
 
+	// The child exists now, so from here on there is something worth
+	// recovering if this worker dies. Write the journal before telling the
+	// server anything: a crash between Start and the RUNNING transition is
+	// otherwise completely invisible.
+	journal := &OutcomeJournal{
+		State:     OutcomeStateRunning,
+		RunId:     runId,
+		TaskId:    taskId.Hex(),
+		WorkerId:  c.Id.Hex(),
+		Pid:       cmd.Process.Pid,
+		StartedTs: time.Now().Unix(),
+	}
+	c.writeJournal(resultDir, journal)
+
 	// FIXME: Move more fields here
-	err = tasks.MarkAsRunning(t, map[string]string{
+	err = tasks.MarkAsRunning(t, runId, map[string]string{
 		"timeout":    tt.Config.GetString("timeout"),
 		"pid":        cast.ToString(cmd.Process.Pid),
 		"typeDigest": tt.ConfigVersionHash,
@@ -452,89 +600,110 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		}).Error("failed to transition task to state RUNNING")
 		return err
 	}
-	t.Refresh()
 
-	taskDone := make(chan struct{}, 1)
-	maxTime := t.StartedTs + t.Timeout
-	taskTimeout := time.NewTimer(time.Duration(float64(maxTime-time.Now().Unix())*1000*viper.GetFloat64("timeMultiplier")) * time.Millisecond)
+	// Pull the server-assigned StartedTs/Timeout back so the deadline below
+	// matches the one the server recorded. Fail open if the server can't be
+	// reached: fall back to the task type's own timeout measured from now,
+	// rather than treating an unreachable server as a reason to compute a
+	// deadline of zero and kill the task instantly.
+	maxTime := time.Now().Unix() + cast.ToInt64(tt.Config.GetString("timeout"))
+	if rerr := t.Refresh(); rerr != nil {
+		log.WithFields(log.Fields{
+			"err":     rerr.Error(),
+			"taskId":  taskId,
+			"maxTime": maxTime,
+		}).Warn("could not refresh task after marking it RUNNING; using locally computed timeout")
+	} else if t.Timeout > 0 {
+		maxTime = t.StartedTs + t.Timeout
+	}
+
+	// taskDone tells the monitoring goroutine to exit; monitorDone reports
+	// that it has. ProcessOne does not return until the goroutine is gone:
+	// it is the only other user of this task's state, and letting it
+	// outlive the call means "the task is finished" isn't actually true
+	// yet. (It also leaves a goroutine reading process-global config while
+	// the next caller writes it, which the race detector correctly
+	// objects to.) The wait is bounded by the goroutine's own HTTP
+	// timeouts.
+	taskDone := make(chan struct{})
+	monitorDone := make(chan struct{})
+	stopMonitor := sync.OnceFunc(func() { close(taskDone) })
+	defer func() {
+		stopMonitor()
+		<-monitorDone
+	}()
+
+	taskTimeout := time.NewTimer(timing.ScaleSeconds(float64(maxTime - time.Now().Unix())))
 	go func() {
-		for true {
+		defer close(monitorDone)
+		// Everything below is either a local or a value captured before
+		// this goroutine started. In particular it refreshes its own copy
+		// of the task rather than the caller's.
+		snapshot := tasks.Task{Id: taskId}
+		stdout, _ := cmd.Stdout.(*os.File)
+		stderr, _ := cmd.Stderr.(*os.File)
+
+		for {
 			log.WithFields(log.Fields{
-				"taskId":       t.Id,
-				"maxTime":      maxTime,
-				"processState": cmd.ProcessState,
+				"taskId":  taskId,
+				"maxTime": maxTime,
 			}).Debug("looping in task process monitoring thread")
 
-			// Wait for process to start to guard against race conditions
-			nchecks := 0
-			for cmd.Process == nil {
-				// Log out every 10 checks
-				if nchecks%10 == 0 {
-					log.WithFields(log.Fields{
-						"process": cmd.Process,
-						"nchecks": nchecks,
-					}).Info("waiting for process to start")
-				}
-				select {
-				case <-time.After(time.Duration(100*viper.GetFloat64("timeMultiplier")) * time.Millisecond):
-					continue
-				case <-taskDone:
-					return
-				}
-			}
-
-			// Check if still running
-			if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+			// Check that we haven't stopped this task from another process.
+			//
+			// Fail open on an error (turtlemonvh/blanket#23 phase 1): an
+			// unreachable server must never cause running work to be
+			// killed. Before, the error was dropped on the floor and
+			// snapshot.State kept whatever it had, which happened to be
+			// safe but only by accident — and said nothing in the logs.
+			if rerr := snapshot.Refresh(); rerr != nil {
 				log.WithFields(log.Fields{
-					"taskId": t.Id,
-				}).Info("returning from task process monitoring thread because task has exited")
+					"err":    rerr.Error(),
+					"taskId": taskId,
+				}).Warn("could not refresh task state; leaving the task running and retrying")
+			} else if snapshot.State == "STOPPED" {
+				log.WithFields(log.Fields{
+					"taskId": taskId,
+					"pid":    cmd.Process.Pid,
+				}).Warn("killing task because state is STOPPED")
+				cmd.Process.Kill()
 				return
 			}
 
-			// Check that we haven't stopped this task from another process
-			t.Refresh()
-			if t.State == "STOPPED" {
-				if cmd.Process != nil {
-					log.WithFields(log.Fields{
-						"taskId": t.Id,
-						"pid":    cmd.Process.Pid,
-					}).Warn("killing task because state is STOPPED")
-					cmd.Process.Kill()
-					return
-				}
-			}
-
 			// Flush log files
-			cmd.Stdout.(*os.File).Sync()
-			cmd.Stderr.(*os.File).Sync()
+			if stdout != nil {
+				stdout.Sync()
+			}
+			if stderr != nil {
+				stderr.Sync()
+			}
 			log.WithFields(log.Fields{
-				"taskId": t.Id,
+				"taskId": taskId,
 			}).Debug("Flushing logfiles for task")
 
 			// Either wait for next loop or exit
-			loopTimeout := time.NewTimer(time.Duration(c.CheckInterval*1000*viper.GetFloat64("timeMultiplier")) * time.Millisecond)
+			loopTimeout := time.NewTimer(c.CheckIntervalMs())
 			select {
 			case killTime := <-taskTimeout.C:
-				// Ran out of time
-				// Kill process and return with error
+				// Ran out of time. Report first, then kill regardless of
+				// whether the report landed — a task that has blown its
+				// deadline must not keep running just because the server
+				// was unreachable. TimeoutFinishDeadline keeps that report
+				// short for the same reason.
 				loopTimeout.Stop()
-				err = tasks.MarkAsFinished(t, "TIMEDOUT")
-				if err != nil {
+				if merr := tasks.MarkAsFinishedWithin(&snapshot, "TIMEDOUT", runId, tasks.TimeoutFinishDeadline); merr != nil {
 					log.WithFields(log.Fields{
-						"err":    err.Error(),
-						"taskId": t.Id,
+						"err":    merr.Error(),
+						"taskId": taskId,
 					}).Error("failed to transition task to state TIMEDOUT")
-				} else {
-					log.WithFields(log.Fields{
-						"taskId":   t.Id,
-						"maxTime":  maxTime,
-						"killTime": killTime,
-					}).Error("killing task because over max time allowed for execution")
-					if cmd.Process != nil {
-						cmd.Process.Kill()
-						return
-					}
 				}
+				log.WithFields(log.Fields{
+					"taskId":   taskId,
+					"maxTime":  maxTime,
+					"killTime": killTime,
+				}).Error("killing task because over max time allowed for execution")
+				cmd.Process.Kill()
+				return
 			case <-loopTimeout.C:
 				// Loop again
 				continue
@@ -545,37 +714,74 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			}
 		}
 	}()
-	defer func() {
-		// Ensure monitoring goroutine exits when the parent exits
-		taskDone <- struct{}{}
-	}()
 
-	err = cmd.Wait()
-	if err != nil {
+	waitErr := cmd.Wait()
+
+	// The child is gone; stop the monitor and wait for it to finish before
+	// reporting, so it can't race a TIMEDOUT in on top of the real outcome.
+	stopMonitor()
+	<-monitorDone
+
+	exitCode := -1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+	journal.State = OutcomeStateExited
+	journal.ExitedTs = time.Now().Unix()
+	journal.ExitCode = exitCode
+	c.writeJournal(resultDir, journal)
+
+	finalState := "SUCCESS"
+	if waitErr != nil {
+		finalState = "ERROR"
 		log.WithFields(log.Fields{
-			"err":    err.Error(),
-			"taskId": t.Id,
+			"err":      waitErr.Error(),
+			"exitCode": exitCode,
+			"taskId":   taskId,
 		}).Error("problems finishing task execution")
-		terr := tasks.MarkAsFinished(t, "ERROR")
-		if terr != nil {
-			log.WithFields(log.Fields{
-				"err":    terr.Error(),
-				"taskId": t.Id,
-			}).Error("after failing to finish task execution, failed to transition task to state ERROR")
-			return terr
-		}
-		return err
 	}
 
-	err = tasks.MarkAsFinished(t, "SUCCESS")
-	if err != nil {
+	ferr := tasks.MarkAsFinished(t, finalState, runId)
+	if ferr != nil {
+		// The outcome is on disk and stays there: the server never
+		// acknowledged it, so the phase 3 reaper is the one that will
+		// recover this task.
 		log.WithFields(log.Fields{
-			"err":    err.Error(),
-			"taskId": t.Id,
-		}).Error("failed to transition task to state SUCCESS")
+			"err":    ferr.Error(),
+			"state":  finalState,
+			"taskId": taskId,
+		}).Error("failed to transition task to its terminal state; leaving the outcome journal in place for recovery")
+		return ferr
 	}
 
-	return err
+	// Acknowledged. Mark the journal reported before unlinking it, so a
+	// crash in this window leaves a file that explains itself rather than
+	// one that looks like unreported work.
+	journal.State = OutcomeStateReported
+	c.writeJournal(resultDir, journal)
+	if rerr := RemoveOutcomeJournal(resultDir); rerr != nil {
+		log.WithFields(log.Fields{
+			"err":    rerr.Error(),
+			"taskId": taskId,
+		}).Warn("failed to remove outcome journal after a successful finish")
+	}
+
+	return waitErr
+}
+
+// writeJournal writes the outcome journal, failing open. Nothing in the
+// running path depends on the journal: it exists for a reaper that may
+// never need to read it, so a full disk or a read-only result directory
+// must degrade recovery, not break the task.
+func (c *WorkerConf) writeJournal(resultDir string, j *OutcomeJournal) {
+	if err := WriteOutcomeJournal(resultDir, j); err != nil {
+		log.WithFields(log.Fields{
+			"err":       err.Error(),
+			"taskId":    j.TaskId,
+			"state":     j.State,
+			"resultDir": resultDir,
+		}).Warn("failed to write task outcome journal; a crash from here on will not be recoverable")
+	}
 }
 
 // Create the execution directory for a task
