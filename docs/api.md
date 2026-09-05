@@ -139,6 +139,42 @@ GET /config/                    # processed server config
 GET /ops/status/                # runtime metrics (goroutines, memory, etc.)
 ```
 
+## Streaming endpoints (SSE)
+
+Four routes hold a `text/event-stream` connection open:
+
+```
+GET /task/:id/log               # stdout of a running task, line by line
+                                 # (`message` events)
+GET /worker/:id/log             # a worker's logfile, same shape
+GET /ui/sse/tasks               # `tasks-changed` — a nudge to re-fetch;
+                                 # carries no payload
+GET /ui/sse/workers             # `workers-changed`, likewise
+```
+
+All four also emit a **`server-restarting`** event, and only that event,
+as their final frame when the server is shutting down or restarting
+itself. It is preceded by a bare `retry:` field telling the browser how
+soon to reconnect (1000 ms), and the stream then closes:
+
+```
+retry: 1000
+
+event:server-restarting
+data:the server is shutting down; reconnecting
+```
+
+A client should treat it as "reconnect shortly", not as an error — the
+stream ended on purpose, not because anything went wrong. The embedded UI
+raises a banner on it and takes the banner down when a stream reconnects
+(`server/ui/static/sse-restart-banner.js`); an `EventSource` reconnects on
+its own, so a non-UI client that ignores the event still recovers, just
+without the explanation. See
+[design.md](design.md#shutdown-sequence) for why the event exists at all:
+`net/http`'s `Shutdown` waits indefinitely on an active connection, so a
+streaming handler that doesn't return of its own accord would hang every
+restart forever.
+
 ## Web UI
 
 `/ui/*` serves the embedded HTMX UI: pages, static assets, SSE streams,
