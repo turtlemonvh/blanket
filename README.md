@@ -29,6 +29,12 @@ to pin a release. If Claude Code is on your `$PATH`, they'll also
 offer to install the `blanket-task-type` authoring skill — set
 `INSTALL_SKILLS=1` (or `0`) to decide without being prompted.
 
+They'll also offer to register blanket as a background service that
+starts on login/boot (off by default) — set `INSTALL_AUTOSTART=1` (or
+`0`) to decide without being prompted, or run `blanket service install`
+any time afterward. See [autostart](docs/autostart.md) for details and
+`blanket uninstall`.
+
 No internet access, or only local-user permissions? See
 [**offline install**](docs/offline_install.md) for downloading
 assets manually and pointing the installers at local files.
@@ -64,6 +70,8 @@ types, and the full REST API, see the [docs](docs/README.md):
 - [**Task type definitions**](docs/task_type_definitions.md) — TOML
   schema for authoring your own task types
 - [**API reference**](docs/api.md) — full list of REST endpoints
+- [**Autostart**](docs/autostart.md) — running blanket as a background
+  service that starts on login/boot, and `blanket uninstall`
 - [**Task flow**](docs/task_flow.md) — task and worker state machines
 - [**MCP interface**](docs/mcp.md) — expose blanket to MCP clients (agents),
   security considerations, and setup

@@ -20,6 +20,14 @@
 #   SKILLS_SRC     — local directory containing a blanket-task-type\
 #                    subdirectory with SKILL.md, copied instead of
 #                    downloading it from GitHub (offline installs)
+#   INSTALL_AUTOSTART — 1 to register blanket as a Scheduled Task that
+#                    starts it at logon, without asking; 0 to skip without
+#                    asking. Unset means "ask, but only in an interactive
+#                    console" — same rule as INSTALL_SKILLS. Off by
+#                    default. See docs/autostart.md; the registration
+#                    itself is `blanket.exe service install`
+#                    (`blanket.exe service uninstall` / `blanket.exe
+#                    uninstall` removes it).
 
 $ErrorActionPreference = "Stop"
 $Repo = "turtlemonvh/blanket"
@@ -199,6 +207,34 @@ if ($SkillDestRoot) {
             }
         }
     }
+}
+
+# ---------------------------------------------------------------------------
+# Autostart on login/boot (issue #59) — optional Scheduled Task
+# registration so blanket starts automatically instead of needing to be
+# run by hand each time. Off by default. The registration logic itself
+# lives in Go ("blanket.exe service install" — a Task Scheduler entry via
+# schtasks; see command/service_windows.go and docs/autostart.md) so it's
+# testable independent of this script; this block only decides whether to
+# invoke it, following the same 1/0/unset convention as INSTALL_SKILLS
+# above. Kept as one contiguous section near the end of the script to
+# minimize merge conflicts with other in-flight edits to this file.
+Write-Host ""
+$doInstallAutostart = $false
+if ($env:INSTALL_AUTOSTART -eq "1") {
+    $doInstallAutostart = $true
+} elseif ($env:INSTALL_AUTOSTART -eq "0") {
+    $doInstallAutostart = $false
+} elseif (-not [Console]::IsInputRedirected) {
+    $reply = Read-Host "Start blanket automatically at logon (Task Scheduler)? [y/N]"
+    $doInstallAutostart = ($reply -match '^(y|yes)$')
+}
+
+if ($doInstallAutostart) {
+    & $OutFile --config $ConfigFile service install
+} else {
+    Write-Host "Skipping autostart registration. Enable it later with:"
+    Write-Host "  $OutFile --config $ConfigFile service install"
 }
 
 # PATH hint
