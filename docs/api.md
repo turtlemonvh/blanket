@@ -13,13 +13,32 @@ User-facing endpoints — submit, list, inspect, cancel.
 GET    /task/                   # list tasks (filterable via query string)
 GET    /task/:id                # fetch a single task
 POST   /task/                   # submit a new task (JSON or multipart form)
-DELETE /task/:id                # delete a task; kills it if running
-PUT    /task/:id/cancel         # cancel a WAITING task; transitions to STOPPED.
-                                 # For a RUNNING task, requires ?force=true —
-                                 # otherwise 400. See task_flow.md.
+DELETE /task/:id                # delete a task; kills it if running.
+                                 # For a RECURRING task template, this is
+                                 # also how you stop it from ever firing
+                                 # again — see task_flow.md.
+PUT    /task/:id/cancel         # cancel a WAITING or SCHEDULED task; transitions
+                                 # to STOPPED. For a RUNNING task, requires
+                                 # ?force=true — otherwise 400. Not valid for a
+                                 # RECURRING template; delete it instead. See
+                                 # task_flow.md.
 GET    /task/:id/log            # stream stdout (SSE)
 GET    /task/:id/log/tail       # last N lines of stdout
 ```
+
+`POST /task/` accepts a JSON body (or a multipart form with a `data`
+field holding the same JSON, plus any files to place in the task's
+result dir) with these fields:
+
+| Field         | Required | Description |
+| ------------- | -------- | ----------- |
+| `type`        | yes      | Name of a loaded task type. |
+| `environment` | if the type has required vars | Map of string → string, merged over the type's default env. |
+| `notBefore`   | no       | Delays a one-shot task. A Go duration relative to now (`"10m"`, `"30s"`), an RFC3339 timestamp, or a unix-seconds integer. If in the future, the task starts in state `SCHEDULED` instead of `WAITING`; the scheduler loop promotes it once due. Mutually exclusive with `cron`. |
+| `cron`        | no       | A standard 5-field cron expression (minute hour dom month dow). Makes this task a `RECURRING` template: it never runs itself — the scheduler spawns a child task (own id, log, and result dir; `parentId` set to the template) at every fire time. Mutually exclusive with `notBefore`. |
+
+See [task_flow.md](task_flow.md#scheduling-scheduledts--recurring-tasks-turtlemonvhblanket61)
+for the scheduling state machine and how recurrence is stopped.
 
 Worker-facing endpoints — used by `blanket worker` to advance task
 state.

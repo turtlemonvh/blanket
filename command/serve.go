@@ -24,12 +24,13 @@ var RootCmd = &cobra.Command{
 		// Serve gracefully
 
 		c := server.ServerConfig{
-			DB:             bolt.NewBlanketBoltDB(db),
-			Q:              bolt.NewBlanketBoltQueue(db),
-			Port:           viper.GetInt("port"),
-			ResultsPath:    viper.GetString("tasks.resultsPath"),
-			TimeMultiplier: viper.GetFloat64("timeMultiplier"),
-			Version:        Version,
+			DB:                bolt.NewBlanketBoltDB(db),
+			Q:                 bolt.NewBlanketBoltQueue(db),
+			Port:              viper.GetInt("port"),
+			ResultsPath:       viper.GetString("tasks.resultsPath"),
+			TimeMultiplier:    viper.GetFloat64("timeMultiplier"),
+			Version:           Version,
+			SchedulerInterval: viper.GetDuration("scheduler.interval"),
 		}
 		s := c.Serve()
 		s.ListenAndServe()

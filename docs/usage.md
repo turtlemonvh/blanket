@@ -56,6 +56,34 @@ $ blanket submit -t echo_task -e '{"GREETING": "hi"}' -q
 69ded2adce42aa8a11ac9de0
 ```
 
+## Scheduling tasks
+
+Delay a one-shot task, or make it recurring, with `notBefore` / `cron`
+(REST) or `--not-before` / `--cron` (CLI) — mutually exclusive. See
+[task_flow.md](task_flow.md#scheduling-scheduledts--recurring-tasks-turtlemonvhblanket61)
+for the full state machine.
+
+```bash
+# Run in 10 minutes
+curl -s -X POST localhost:8773/task/ \
+    -d '{"type": "echo_task", "notBefore": "10m"}'
+$ blanket submit -t echo_task --not-before 10m
+
+# Run at a specific time (RFC3339)
+$ blanket submit -t echo_task --not-before 2026-09-05T08:00:00Z
+
+# Recurring: fire every 5 minutes. Each fire spawns its own child task
+# with its own log/result dir; the submitted task itself is a template
+# and never runs.
+curl -s -X POST localhost:8773/task/ \
+    -d '{"type": "echo_task", "cron": "*/5 * * * *"}'
+$ blanket submit -t echo_task --cron "*/5 * * * *"
+
+# Stop a recurring task: delete the template. Its already-spawned
+# children are unaffected and run to completion normally.
+$ blanket rm <template-task-id>
+```
+
 ## File uploads
 
 Attach files to a task — they're placed in the task's working

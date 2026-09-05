@@ -7,6 +7,8 @@ machines for tasks and workers.
 
 | State | Description |
 | ------ | ------- |
+| SCHEDULED | Task was submitted with a future `notBefore`; not yet in the queue. See "Scheduling" below. |
+| RECURRING | Task is a recurring template (submitted with `cron`); never runs itself, only spawns children. See "Scheduling" below. |
 | WAITING | Task has been posted but is not being worked on. The task is in the queue. |
 | CLAIMED | A worker has requested this task. The task is now out of the queue and state is maintained only in the database. |
 | RUNNING | The worker has executed the task preconditions (such as grabbing task type state, copying files) and the main command is now running. The worker may send additional updates during this state. |
@@ -28,6 +30,12 @@ sees the cancellation tombstone and aborts.
 ```mermaid
 stateDiagram-v2
     [*] --> WAITING: POST /task/
+    [*] --> SCHEDULED: POST /task/ (future notBefore)
+    [*] --> RECURRING: POST /task/ (cron)
+    SCHEDULED --> WAITING: scheduler loop, once due
+    SCHEDULED --> STOPPED: PUT /task/:id/cancel
+    RECURRING --> RECURRING: scheduler loop fires a child at each cron occurrence
+    RECURRING --> [*]: DELETE /task/:id
     WAITING --> CLAIMED: POST /task/claim/:workerId
     WAITING --> STOPPED: PUT /task/:id/cancel
     CLAIMED --> RUNNING: PUT /task/:id/run
@@ -40,6 +48,59 @@ stateDiagram-v2
     TIMEDOUT --> [*]
     STOPPED --> [*]
 ```
+
+### Scheduling: `scheduledTs` / recurring tasks (turtlemonvh/blanket#61)
+
+By default a submitted task is immediately eligible to be claimed
+(`WAITING`, in the queue). Two request fields on `POST /task/` change
+that — see [api.md](api.md#tasks) for the exact field shapes:
+
+- **`notBefore`** delays a one-shot task. If the resolved time is in the
+  future, the task is saved to the database in state `SCHEDULED` with
+  `scheduledTs` set, but is **not** added to the queue. It's otherwise a
+  normal task record — visible via `GET /task/:id`, cancelable via `PUT
+  /task/:id/cancel` (no `force` needed, same as `WAITING`).
+- **`cron`** turns the submitted task into a `RECURRING` **template**. A
+  template is never itself queued or run. Instead it carries `cronExpr`
+  and `nextFireTs`; when `nextFireTs` is reached the scheduler spawns a
+  **child task** — a fresh id, its own log/result directory, the
+  template's type/env/tags, and `parentId` set to the template's id — and
+  that child goes through the ordinary `WAITING` → ... lifecycle above.
+  The template then advances `nextFireTs` to the next cron occurrence and
+  waits again. A template is stopped by **deleting** it
+  (`DELETE /task/:id`) — not by cancelling it, since it's neither queued
+  nor running. Deleting the template does not affect children it already
+  spawned; they run to their own completion independently.
+
+Both `SCHEDULED` tasks and `RECURRING` templates are ordinary rows in the
+task database (BoltDB), so they survive a server restart with no special
+handling: on restart the scheduler loop simply finds whatever is already
+due and acts on it.
+
+#### Scheduler loop
+
+A single background goroutine, started from `ServerConfig.Serve()` via
+`startBackgroundLoops` (`server/scheduler.go`), ticks on a configurable
+interval (`scheduler.interval` config key, default `2s`) and each tick:
+
+1. **Promotes due `SCHEDULED` tasks**: finds every `SCHEDULED` task whose
+   `scheduledTs` has passed, flips it to `WAITING`, and adds it to the
+   queue. Safe to run more than once for the same task — the DB write is
+   a plain overwrite and the queue add upserts by task id — so an
+   overlapping tick or a restart mid-promotion can't double-queue a task.
+2. **Fires due `RECURRING` templates**: finds every `RECURRING` template
+   whose `nextFireTs` has passed, spawns a child task for it, and only
+   then advances `nextFireTs`. If the server crashes between spawning the
+   child and advancing `nextFireTs`, the template is found due again on
+   restart and fires an equivalent child a second time — an
+   at-least-once guarantee, not exactly-once. Task types driven by cron
+   should be written to tolerate an occasional duplicate run, the same
+   way a `cron(8)`-driven script generally should.
+
+`startBackgroundLoops` is written so a second periodic loop can be added
+alongside the scheduler with one more line — see the FIXME it replaced in
+`server/server.go`; turtlemonvh/blanket#23 phase 3 plans to add a reaper
+loop there (stalled workers/tasks, unclaimed-queue cleanup).
 
 ### Stopping a RUNNING task
 

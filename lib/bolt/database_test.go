@@ -1,9 +1,13 @@
 package bolt
 
 import (
+	"fmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/worker"
+	bolt "go.etcd.io/bbolt"
+	"io/ioutil"
+	"os"
 	"testing"
 	"time"
 )
@@ -125,6 +129,60 @@ func TestStopWorker_UnknownId(t *testing.T) {
 
 	_, err := DB.StopWorker(objectid.NewObjectId())
 	assert.Error(t, err)
+}
+
+// TestGetTask_OldFormatRecordStillLoads writes a task record shaped like
+// one saved before turtlemonvh/blanket#61 added ScheduledTs/CronExpr/
+// NextFireTs/ParentId (i.e. those keys are simply absent from the JSON,
+// as a pre-existing BoltDB record on disk would be) and confirms it still
+// unmarshals cleanly, with the new fields defaulting to their zero values.
+// This is the additive-schema-change guarantee: an old blanket.db must
+// keep working after upgrading past this feature.
+func TestGetTask_OldFormatRecordStillLoads(t *testing.T) {
+	f, err := ioutil.TempFile("", "")
+	assert.NoError(t, err)
+	path := f.Name()
+	f.Close()
+	os.Remove(path)
+
+	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	assert.NoError(t, err)
+	defer db.Close()
+
+	DB := NewBlanketBoltDB(db)
+
+	taskId := objectid.NewObjectId()
+	oldFormatJSON := fmt.Sprintf(`{
+		"id": %q,
+		"pid": 0,
+		"createdTs": 1000,
+		"startedTs": 0,
+		"lastUpdatedTs": 1000,
+		"type": "echo_task",
+		"resultDir": "/tmp/x",
+		"typeDigest": "",
+		"timeout": 10,
+		"state": "WAITING",
+		"workerId": "000000000000000000000000",
+		"progress": 0,
+		"defaultEnv": {},
+		"tags": ["bash"]
+	}`, taskId.Hex())
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(BOLTDB_TASK_BUCKET))
+		return b.Put(IdBytes(taskId), []byte(oldFormatJSON))
+	})
+	assert.NoError(t, err)
+
+	task, err := DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "echo_task", task.TypeId)
+	assert.Equal(t, "WAITING", task.State)
+	assert.Equal(t, int64(0), task.ScheduledTs)
+	assert.Equal(t, "", task.CronExpr)
+	assert.Equal(t, int64(0), task.NextFireTs)
+	assert.True(t, task.ParentId.IsZero())
 }
 
 /*

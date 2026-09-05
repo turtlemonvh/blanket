@@ -63,6 +63,11 @@ func InitializeConfig() {
 	viper.SetDefault("mcp.validateStrict", false)
 	viper.SetDefault("mcp.maxLogLines", 200)
 
+	// How often the scheduler loop checks for due SCHEDULED tasks and
+	// RECURRING task templates (turtlemonvh/blanket#61). Accepts anything
+	// time.ParseDuration understands, e.g. "2s", "500ms".
+	viper.SetDefault("scheduler.interval", "2s")
+
 	// Time multiplier can be used in tests to speed up tests
 	viper.SetDefault("timeMultiplier", "1.0")
 

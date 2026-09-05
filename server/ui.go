@@ -57,7 +57,7 @@ var uiFuncs = template.FuncMap{
 		return time.Unix(ts, 0).UTC().Format("2006/01/02 15:04:05")
 	},
 	"isCancelable": func(state string) bool {
-		return state == "WAITING" || state == "CLAIMED" || state == "RUNNING"
+		return state == "WAITING" || state == "SCHEDULED" || state == "CLAIMED" || state == "RUNNING"
 	},
 	"isTerminal": func(state string) bool {
 		for _, s := range tasks.ValidTerminalTaskStates {

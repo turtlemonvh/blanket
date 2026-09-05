@@ -11,7 +11,17 @@ import (
 )
 
 var (
-	ValidTaskStates         = []string{"WAITING", "CLAIMED", "RUNNING", "ERROR", "SUCCESS", "STOPPED", "TIMEDOUT"}
+	// SCHEDULED and RECURRING are additive states layered onto the
+	// original WAITING-first state machine (see docs/task_flow.md):
+	//   - SCHEDULED: submitted with a future scheduledTs; not yet in the
+	//     claimable queue. The scheduler loop (server/scheduler.go)
+	//     promotes it to WAITING once due.
+	//   - RECURRING: a template task carrying a cronExpr. It never runs
+	//     itself; the scheduler loop spawns a child task (a normal
+	//     WAITING-onward task, linked via parentId) at each cron fire and
+	//     advances the template's nextFireTs. Stopped by deleting the
+	//     template (DELETE /task/:id), not by cancelling it.
+	ValidTaskStates         = []string{"WAITING", "SCHEDULED", "RECURRING", "CLAIMED", "RUNNING", "ERROR", "SUCCESS", "STOPPED", "TIMEDOUT"}
 	ValidTerminalTaskStates = []string{"ERROR", "SUCCESS", "STOPPED", "TIMEDOUT"}
 )
 
@@ -31,6 +41,15 @@ type Task struct {
 	Progress      int               `json:"progress"`      // 0-100
 	ExecEnv       map[string]string `json:"defaultEnv"`    // Combined with default env
 	Tags          []string          `json:"tags"`          // tags for capabilities of workers
+
+	// Scheduling (turtlemonvh/blanket#61). All additive: zero values
+	// (0, "", zero ObjectId) mean "no scheduling", so records written
+	// before this feature existed still load and behave exactly as
+	// before.
+	ScheduledTs int64             `json:"scheduledTs"` // unix ts before which this task must not be queued; 0 = no delay. Set from a one-shot "notBefore" submission.
+	CronExpr    string            `json:"cronExpr"`    // standard 5-field cron expression; non-empty makes this a RECURRING template that spawns children instead of running itself
+	NextFireTs  int64             `json:"nextFireTs"`  // next time a RECURRING template should fire; meaningful only when CronExpr != ""
+	ParentId    objectid.ObjectId `json:"parentId"`    // id of the RECURRING template that spawned this task, if any; zero ObjectId for a task submitted directly or a template itself
 }
 
 func (t *Task) String() string {

@@ -12,6 +12,7 @@ Launch blanket server
 package server
 
 import (
+	"context"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
@@ -60,6 +61,10 @@ type ServerConfig struct {
 	Version        string
 	TaskEvents     *EventHub
 	WorkerEvents   *EventHub
+	// SchedulerInterval controls how often the background scheduler loop
+	// (server/scheduler.go) checks for due SCHEDULED tasks and RECURRING
+	// templates. Zero means DefaultSchedulerInterval.
+	SchedulerInterval time.Duration
 }
 
 func (s *ServerConfig) GetRouter() *gin.Engine {
@@ -180,10 +185,12 @@ func (s *ServerConfig) Serve() *graceful.Server {
 		"port": s.Port,
 	}).Info("Starting main server")
 
-	// FIXME: Launch background process for automatically
-	// - cleaning queue
-	// - cleaning db
-	// - cleaning workers
+	// Background loops: currently just the task scheduler (SCHEDULED /
+	// RECURRING tasks; see server/scheduler.go). Also the place a future
+	// reaper loop for cleaning the queue/db/workers (turtlemonvh/blanket#23
+	// phase 3) should be added -- startBackgroundLoops is structured so
+	// that's one more `go s.xLoop(ctx)` call, not new start/stop plumbing.
+	stopBackgroundLoops := s.startBackgroundLoops(context.Background())
 
 	// Graceful shutdown, leaving up to 2 seconds for requests to complete
 	return &graceful.Server{
@@ -195,6 +202,7 @@ func (s *ServerConfig) Serve() *graceful.Server {
 		BeforeShutdown: func() bool {
 			// Called first
 			log.Warn("Called BeforeShutdown")
+			stopBackgroundLoops()
 			tailed_file.StopAll()
 			return true
 		},

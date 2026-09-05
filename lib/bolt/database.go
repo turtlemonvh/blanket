@@ -229,8 +229,8 @@ func (DB *BlanketBoltDB) RunTask(taskId objectid.ObjectId, fields *database.Task
 func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, newState string) error {
 	// Set lots of fields
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
-		if t.State != "RUNNING" && t.State != "WAITING" {
-			return fmt.Errorf("Task found in unexpected state; found '%s', expected 'RUNNING'", t.State)
+		if t.State != "RUNNING" && t.State != "WAITING" && t.State != "SCHEDULED" {
+			return fmt.Errorf("Task found in unexpected state; found '%s', expected 'RUNNING', 'WAITING' or 'SCHEDULED'", t.State)
 		}
 		t.State = newState
 		if t.State == "SUCCESS" {
