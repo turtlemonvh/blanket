@@ -188,3 +188,30 @@ mcp_call_resp="$(curl -fsS -X POST "$BASE/mcp" \
     -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"blanket_tasks","arguments":{}}}')"
 echo "$mcp_call_resp" | grep -q '"content"' \
     || fail "MCP tools/call blanket_tasks did not return content: $mcp_call_resp"
+
+# install.sh shell integration (issue #22): PATH + completion block.
+# Exercises the installer's rc-file editing directly against a scratch
+# HOME using the binary already built above, checking that two runs
+# leave exactly one marked block (idempotent, not duplicated).
+INSTALL_HOME="$WORKDIR/install-home"
+mkdir -p "$INSTALL_HOME"
+INSTALL_TEST_DIR="$INSTALL_HOME/.local/bin"
+
+run_installer() {
+    HOME="$INSTALL_HOME" \
+    SHELL="/bin/bash" \
+    BINARY_PATH="$REPO_ROOT/$BINARY" \
+    INSTALL_DIR="$INSTALL_TEST_DIR" \
+    INSTALL_SKILLS=0 \
+    INSTALL_SHELL_INTEGRATION=1 \
+    sh "$REPO_ROOT/scripts/install.sh" < /dev/null > "$WORKDIR/install.log" 2>&1
+}
+
+run_installer || { cat "$WORKDIR/install.log" >&2; fail "install.sh (1st run) exited non-zero"; }
+run_installer || { cat "$WORKDIR/install.log" >&2; fail "install.sh (2nd run) exited non-zero"; }
+
+marker_count="$(grep -c '^# >>> blanket >>>$' "$INSTALL_HOME/.bashrc" || true)"
+[[ "$marker_count" -eq 1 ]] \
+    || fail "expected exactly one blanket marked block in .bashrc after two installs, got $marker_count"
+grep -q 'blanket completion bash' "$INSTALL_HOME/.bashrc" \
+    || fail ".bashrc missing bash completion sourcing line"

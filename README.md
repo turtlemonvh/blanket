@@ -29,6 +29,15 @@ to pin a release. If Claude Code is on your `$PATH`, they'll also
 offer to install the `blanket-task-type` authoring skill — set
 `INSTALL_SKILLS=1` (or `0`) to decide without being prompted.
 
+They'll also offer to add the binary to `PATH` and enable tab
+completion — bash, zsh, and fish on Linux/macOS, PowerShell on
+Windows — by appending a clearly marked block to your shell's rc file
+(`~/.bashrc`, `~/.zshrc`, `~/.config/fish/config.fish`, or
+`$PROFILE`), the same pattern nvm and conda use. Re-running the
+installer updates that block in place instead of duplicating it. Set
+`INSTALL_SHELL_INTEGRATION=1` (or `0`) to decide without being
+prompted; `0` also removes a block a previous run added.
+
 No internet access, or only local-user permissions? See
 [**offline install**](docs/offline_install.md) for downloading
 assets manually and pointing the installers at local files.
