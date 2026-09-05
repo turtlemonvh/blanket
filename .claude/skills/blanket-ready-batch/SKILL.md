@@ -19,8 +19,10 @@ first if this is the first batch run this session.
    ```
 2. **Present the batch to the user for approval** before dispatching
    anything — up to 3 at a time, most-actionable-first if there are more
-   than 3. Don't dispatch on your own judgment alone; this is real work
-   that opens PRs.
+   than 3 — **unless** this run was started by `/night-crew` (the `core`
+   plugin's unattended loop), in which case the `autonomy:` labels are the
+   approval and you dispatch without asking, honoring `concurrency` from
+   `.claude/night-crew.json`.
 3. **Claim each issue** via `blanket-issue-triage`: label ->
    `status: in-progress`, still no assignee (Claude owns it, but Claude
    has no GitHub account — see CONTRIBUTORS.md), justification comment
@@ -43,8 +45,10 @@ first if this is the first batch run this session.
    "status: in-review" --add-assignee turtlemonvh`). GitHub does not
    copy an issue's labels/assignee onto its linked PR; skipping this
    leaves Timothy looking at an unlabeled, unassigned PR.
-6. **Stop there — wait for a review signal, then merge yourself.** No
-   auto-merge on green CI alone. Claude authenticates as `turtlemonvh`,
+6. **Merge policy depends on the issue's labels.** `autonomy:
+   ship-to-merge` + `risk: low`: once CI is green, merge yourself
+   (regular merge commit), delete the branch, close the issue — no review
+   signal needed. Anything else: stop and wait for a review signal. Claude authenticates as `turtlemonvh`,
    so PRs are self-authored and GitHub won't offer a native Approve
    button; the signal is a plain PR comment ("approved"/"LGTM"), not a
    GitHub review. Once Timothy signals approval, merge the PR (matching

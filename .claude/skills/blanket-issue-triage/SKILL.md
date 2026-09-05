@@ -27,6 +27,11 @@ there and can change independently of this skill.
      `status: needs-triage`.
    - A design or PR is done and needs a decision → `status: in-review`.
    - A branch/worktree exists and work is underway → `status: in-progress`.
+2b. **When the new status is `ready`, also set exactly one `autonomy:`
+   and one `risk:` label** (and `model: opus` if taste or design judgment
+   matters) per CONTRIBUTORS.md "Autonomy, risk, and model labels".
+   `ship-to-merge` is only valid with `risk: low`. Say which you chose,
+   and why, in the justification comment.
 3. **Decide the assignee** per the ownership convention (assignee = whose
    turn). Most of the states above are unassigned (Claude's or nobody's
    turn); `needs-info` and `in-review` are usually assigned to

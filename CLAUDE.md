@@ -132,6 +132,16 @@ the merge workflow live in [CONTRIBUTORS.md](CONTRIBUTORS.md#issue-workflow).
 Use the `blanket-issue-triage`, `blanket-issue-audit`, and
 `blanket-ready-batch` skills rather than applying labels ad hoc.
 
+## Working unattended
+
+Every `status: ready` issue carries `autonomy:` and `risk:` labels; read
+them before starting (see CONTRIBUTORS.md "Autonomy, risk, and model
+labels"). Rules for running with nobody watching — never stop while
+ready issues remain, batch questions once with proposed answers, treat
+pre-approval as approval, leave a morning summary, clean up worktrees and
+monitors before idling — are injected at session start by the `core`
+plugin from `.claude/night-crew.json`. Do not duplicate them here.
+
 ## Working with the user
 
 - Keep responses tight. State results and next steps; don't narrate.
