@@ -165,8 +165,9 @@ Flags:
 
 See [`examples/types/`](../examples/types/) for the full set of
 copy-paste-ready starters: `echo_task` (minimal), `bash_task`
-(arbitrary command via env var), `python_hello`, and `windows_echo`
-(uses `cmd`, no bash needed).
+(arbitrary command via env var), `python_hello`, `windows_echo` (uses
+`cmd`, no bash needed), and `windows_powershell` (same, via
+`powershell`).
 
 ### A simple bash task that runs a user-supplied command
 

@@ -1,0 +1,10 @@
+# Windows-native task type — runs via powershell.exe, no bash/WSL needed.
+# Companion to windows_echo.toml (cmd.exe) so both native Windows
+# executors have a working example out of the box.
+
+description = "Write a fixed string to stdout via powershell.exe."
+
+tags = ["os:windows"]
+executor = "powershell"
+command = "Write-Output 'hello from blanket'"
+timeout = 10

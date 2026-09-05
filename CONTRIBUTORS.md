@@ -53,6 +53,24 @@ After bumping `go.sum` or `tests/e2e/package-lock.json`, run
 `make docker-clean` so the next `make docker-*` rebuilds the named
 volumes from the freshly built image layer.
 
+### Windows
+
+There's no Docker path on Windows (see the `windows` CI job below), so
+verify Windows-specific changes natively:
+
+```powershell
+go build -o blanket-windows-amd64.exe .
+go test ./worker/... ./command/... ./lib/service/...
+pwsh scripts/smoke.ps1 -Binary .\blanket-windows-amd64.exe
+```
+
+`scripts/smoke.ps1` starts the built binary against a scratch config,
+submits a task through each native Windows executor example
+(`examples/types/windows_echo.toml` for `cmd`,
+`examples/types/windows_powershell.toml` for `powershell`), runs a real
+`blanket worker` to drain them, and asserts both reach `SUCCESS` — the
+Windows counterpart to `scripts/smoke.sh`.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on PRs and master pushes.
@@ -61,12 +79,27 @@ volumes from the freshly built image layer.
   `docker-check-fmt`, `docker-test`, `docker-test-smoke`,
   `docker-test-browser` in sequence. Uploads Playwright HTML report
   as an artifact on failure.
+- **`windows`**: runs natively on `windows-latest` — no Docker (Docker
+  and Playwright are out of scope on Windows; see the issue #79
+  discussion). Builds the binary with `go build` (Go version pinned via
+  `actions/setup-go`'s `go-version-file: go.mod`, so it tracks the same
+  toolchain pin everything else uses — see CLAUDE.md's "three Go version
+  pins" gotcha), runs `go test` for the packages with Windows-specific
+  code (`./worker/...`, `./command/...`, `./lib/service/...`), then a
+  PowerShell smoke pass (`scripts/smoke.ps1` — see below) and two runs of
+  `scripts/install.ps1` against the just-built binary, asserting its
+  `$PROFILE` shell-integration block is written idempotently. It does
+  **not** run the Docker-based Go test suite, `docker-test-smoke`, or the
+  Playwright browser suite — those stay Linux-only. Follow-up: once the
+  task-scheduling work (#94) lands, its unit tests should run here too
+  (currently everything scheduling-related is Linux-only).
 - **`cross-compile`** (master pushes only): `make docker-build` —
   catches platform-only breakage without spending minutes on every PR.
 
 Branch protection on master requires `test` green and up-to-date with
-master (`strict: true`). Admins can bypass; the normal workflow is
-PR → merge, not direct push.
+master (`strict: true`); `windows` is not (yet) a required check — a red
+`windows` job is informational, not blocking. Admins can bypass branch
+protection; the normal workflow is PR → merge, not direct push.
 
 Test adds must keep all three surfaces green. The suites overlap
 intentionally: unit tests hit handlers directly, smoke exercises the

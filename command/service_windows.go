@@ -48,6 +48,11 @@ func serviceStatus() error {
 	return err
 }
 
-func taskExists() bool {
+// taskExists is a package-level var (rather than a plain func) so tests
+// can stub it out and exercise serviceInstall/serviceUninstall/
+// serviceStatus deterministically without ever shelling out to a real
+// schtasks — mirrors command/service_linux.go's systemctlUserUsable
+// pattern.
+var taskExists = func() bool {
 	return exec.Command("schtasks", service.WindowsQueryArgs()...).Run() == nil
 }

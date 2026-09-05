@@ -41,4 +41,5 @@ Planned work is tracked as [GitHub issues](https://github.com/turtlemonvh/blanke
 - [`../CONTRIBUTORS.md`](../CONTRIBUTORS.md) — development setup,
   build, CI, release process
 - [`../examples/types/`](../examples/types/) — copy-paste task type
-  TOMLs (`echo_task`, `bash_task`, `python_hello`, `windows_echo`)
+  TOMLs (`echo_task`, `bash_task`, `python_hello`, `windows_echo`,
+  `windows_powershell`)
