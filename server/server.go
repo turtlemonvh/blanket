@@ -12,16 +12,13 @@ Launch blanket server
 package server
 
 import (
-	"context"
-	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
 	log "github.com/sirupsen/logrus"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/queue"
-	"github.com/turtlemonvh/blanket/lib/tailed_file"
-	"gopkg.in/tylerb/graceful.v1"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -72,6 +69,50 @@ type ServerConfig struct {
 	// reach this many. Zero means DefaultSchedulerMaxScheduled. Backed by
 	// the scheduler.maxScheduled config key.
 	SchedulerMaxScheduled int
+	// ShutdownTimeout bounds the drain step of the shutdown sequence (see
+	// server/lifecycle.go). Zero means DefaultShutdownTimeout.
+	ShutdownTimeout time.Duration
+	// Cleanup, if set, is the last thing the shutdown sequence runs, after
+	// the listener is closed, the tailers are stopped, and the background
+	// loops have been cancelled. command/serve.go passes the BoltDB handle's
+	// Close here: nothing above it in the teardown may still touch storage.
+	Cleanup func()
+
+	// shutdownCh is closed once the server starts shutting down. Every
+	// streaming (SSE) handler selects on it and returns promptly -- without
+	// that, net/http's Shutdown waits forever on an open stream, since it
+	// never force-closes an active connection. Lazily created so a
+	// ServerConfig built by hand (tests, GetRouter-only use) needs no extra
+	// setup. Guarded by shutdownMu.
+	shutdownMu sync.Mutex
+	shutdownCh chan struct{}
+}
+
+// shutdownChan returns the channel that is closed when the server begins
+// shutting down. Streaming handlers select on it; see sseStream (ui.go) and
+// streamLog (serve_logs.go).
+func (s *ServerConfig) shutdownChan() <-chan struct{} {
+	s.shutdownMu.Lock()
+	defer s.shutdownMu.Unlock()
+	if s.shutdownCh == nil {
+		s.shutdownCh = make(chan struct{})
+	}
+	return s.shutdownCh
+}
+
+// signalShutdown closes the shutdown channel, releasing every open
+// streaming handler. Idempotent.
+func (s *ServerConfig) signalShutdown() {
+	s.shutdownMu.Lock()
+	defer s.shutdownMu.Unlock()
+	if s.shutdownCh == nil {
+		s.shutdownCh = make(chan struct{})
+	}
+	select {
+	case <-s.shutdownCh:
+	default:
+		close(s.shutdownCh)
+	}
 }
 
 func (s *ServerConfig) GetRouter() *gin.Engine {
@@ -202,38 +243,4 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	}
 
 	return r
-}
-
-func (s *ServerConfig) Serve() *graceful.Server {
-	// Start server
-	log.WithFields(log.Fields{
-		"port": s.Port,
-	}).Info("Starting main server")
-
-	// Background loops: currently just the task scheduler (SCHEDULED /
-	// RECURRING tasks; see server/scheduler.go). Also the place a future
-	// reaper loop for cleaning the queue/db/workers (turtlemonvh/blanket#23
-	// phase 3) should be added -- startBackgroundLoops is structured so
-	// that's one more `go s.xLoop(ctx)` call, not new start/stop plumbing.
-	stopBackgroundLoops := s.startBackgroundLoops(context.Background())
-
-	// Graceful shutdown, leaving up to 2 seconds for requests to complete
-	return &graceful.Server{
-		Timeout: 2 * time.Second,
-		Server: &http.Server{
-			Addr:    fmt.Sprintf(":%d", s.Port),
-			Handler: s.GetRouter(),
-		},
-		BeforeShutdown: func() bool {
-			// Called first
-			log.Warn("Called BeforeShutdown")
-			stopBackgroundLoops()
-			tailed_file.StopAll()
-			return true
-		},
-		ShutdownInitiated: func() {
-			// Called second
-			log.Warn("Called ShutdownInitiated")
-		},
-	}
 }
