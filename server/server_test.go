@@ -62,9 +62,17 @@ executor="bash"
 
 `
 
-// FIXME: Make this a re-usable test utility for use in worker tests
-// Returns a server that can be run and killed, and a config for working with the system
-// Uses boltdb for backend
+// NewTestServer returns a server config backed by in-memory BoltDB
+// database and queue instances, and a cleanup func to release them.
+//
+// worker's integration tests need the same thing (see
+// worker/worker_test.go), and now get it from lib/testutil.NewTestServer
+// instead of hand-rolling it -- see #78. This in-package copy stays: it
+// can't be replaced by lib/testutil's version here, since that package
+// imports server to build a *ServerConfig, and server's own internal test
+// files importing something that imports server back is a compile-time
+// import cycle ("import cycle not allowed in test"). Keep the two in sync
+// if their shape ever needs to change.
 func NewTestServer() (*ServerConfig, func()) {
 	DB, DBCloser := bolt.NewTestDB()
 	Q, QCloser := bolt.NewTestQueue()
