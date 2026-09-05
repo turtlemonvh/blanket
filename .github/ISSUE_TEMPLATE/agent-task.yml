@@ -1,0 +1,63 @@
+# Agent task form. The Autonomy/Risk/Model choices below are applied as
+# labels by `blanket-issue-triage` when the issue moves to `status: ready`;
+# GitHub forms cannot set labels per dropdown value.
+name: Agent task
+description: Work an agent can pick up. Fill the acceptance criteria or it stays needs-triage.
+labels: ["status: needs-triage"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One or two sentences. What can the user do afterwards?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checkable statements. An agent marks the issue done when all are true.
+      placeholder: |
+        - [ ] `blanket upgrade --check` prints the latest release version and exits 0
+        - [ ] Running tasks are not killed during upgrade (test: scripts/smoke.sh restart scenario)
+    validations:
+      required: true
+  - type: textarea
+    id: decided
+    attributes:
+      label: Decisions already made
+      description: Constraints the agent must not reopen. Link the design doc if one exists.
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+  - type: dropdown
+    id: autonomy
+    attributes:
+      label: Autonomy
+      description: How far may the agent go without checking in?
+      options:
+        - ship-to-merge (merge on green CI, no review signal needed)
+        - PR-only (open PR, wait for LGTM comment)
+        - design-first (write a one-page brief before any code)
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk
+      description: Low = reversible, no data or wire-format change. High = migrations, deletes, external accounts.
+      options: [low, medium, high]
+    validations:
+      required: true
+  - type: dropdown
+    id: model
+    attributes:
+      label: Model
+      description: Sonnet is the default for ready issues. Pick Opus/Fable when taste or design judgment matters.
+      options: [default, opus]
+  - type: textarea
+    id: verify
+    attributes:
+      label: How to verify
+      description: The command or manual check that proves it. If you cannot write this, the issue is not ready.

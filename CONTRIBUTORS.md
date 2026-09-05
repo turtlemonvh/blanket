@@ -163,6 +163,32 @@ keep whatever label they had for history.
 | `status: ready` | Clear criteria, no input needed. | Claude executes. |
 | `status: in-progress` | Actively being worked; a branch/worktree exists. | Finish and open a PR. |
 
+### Autonomy, risk, and model labels
+
+Alongside the single `status:` label, an issue that is `status: ready`
+carries exactly one `autonomy:` label and one `risk:` label, and
+optionally `model: opus`. These turn Timothy's pre-approval into
+something an agent can act on unattended:
+
+| Label | Meaning for the agent |
+|---|---|
+| `autonomy: ship-to-merge` | Open the PR, and once CI is green **merge it yourself**, delete the branch, close the issue. No LGTM needed. Only valid together with `risk: low`. |
+| `autonomy: pr-only` | Open the PR, label it `status: in-review`, assign `turtlemonvh`, stop. Merge after an LGTM comment. |
+| `autonomy: design-first` | Write a one-page decisions brief (defaults + alternatives) and publish it for review before any code. If no row is `risk: high`, proceed at `pr-only` without waiting. |
+| `risk: low` | Reversible; no data, wire-format, or external-account change. |
+| `risk: medium` | Additive schema or protocol change, or touches CI/install. |
+| `risk: high` | Migrations, deletes, external accounts, or security surface. Never ship-to-merge. |
+| `model: opus` | Run on Opus or Fable rather than Sonnet: taste or design judgment matters. |
+
+Silence is approval: a decisions brief row nobody commented on is
+approved. Batched questions get a proposed answer each, and the agent
+proceeds on the proposed answer unless told otherwise.
+
+Unattended operation (the nightly `/night-crew` loop from the `core`
+plugin) reads `.claude/night-crew.json` in this repo for the queue label,
+concurrency, and merge policy, and injects the "Working unattended" rules
+at session start. See that plugin's `night-crew` skill.
+
 ### Ownership: assignee = whose turn
 
 Labels say what kind of work is needed; the assignee says who owns the
@@ -254,8 +280,9 @@ A design review can loop back to `needs-design`, or fan out into new
 
 ### PR / merge workflow
 
-`blanket-ready-batch` opens a PR and stops — it never auto-merges, even
-on green CI. Flow: agent claims a `status: ready` issue (label ->
+`blanket-ready-batch` opens a PR and, for `autonomy: ship-to-merge` +
+`risk: low` issues, merges it itself once CI is green. For everything
+else it stops at the PR. Flow: agent claims a `status: ready` issue (label ->
 `in-progress`), opens a PR (label -> `in-review`, assignee: `turtlemonvh`).
 **GitHub does not copy an issue's labels/assignee onto its linked PR** —
 apply `status: in-review` + assignee to *both* the issue and the PR, or
