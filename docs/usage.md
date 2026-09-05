@@ -172,8 +172,10 @@ it you can:
   the next fire time;
 - **pause** it (the page then shows when it was paused) and **resume** it,
   which recomputes the next fire from now;
-- **change the schedule** — type a new cron expression and a live preview
-  shows what it means and its next three fire times before you save;
+- **change the schedule** — the same cron editor the create form uses,
+  pre-filled with the current expression: a live preview shows what a new
+  one means and its next three fire times before you save (a series
+  always repeats, so switching it to "One time" is refused);
 - **cancel** it for good, which stops it firing but keeps the record and
   its history (`DELETE`, via the Tasks page, removes the record instead);
 - browse **past runs** — every task the series has spawned, in the same

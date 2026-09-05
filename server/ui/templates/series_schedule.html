@@ -72,40 +72,28 @@ than as an error page.
 
     {{if not .Series.Cancelled}}
     {{/*
-    TEMPORARY schedule editor (turtlemonvh/blanket#98 / #97).
+    The shared schedule editor (schedule_editor.html, from
+    turtlemonvh/blanket#97). Rendered with Mode "repeating" and
+    Collapsed false — a series already has a schedule, so there is
+    nothing to opt into — and with its Preview pre-filled server-side,
+    because the editor's cron input only fetches a preview once the user
+    types. Its ids are prefixed "series-schedule-", distinct from the
+    create form's "schedule-" ones.
 
-    turtlemonvh/blanket#97 is adding a shared cron input + live preview as
-    ui/templates/schedule_editor.html for the new-task form. That branch
-    isn't on master yet, so this is a deliberately minimal stand-in with
-    the same shape (input + debounced hx-get preview). When #97 lands,
-    replace this whole block with `{{"{{"}}template "schedule-editor" .{{"}}"}}`
-    and delete uiSchedulePreviewPartial + schedule_preview.html.
+    Flipping the editor to "One time" is rejected inline by
+    uiSeriesChangeSchedule: a series is defined by its cron expression,
+    and PUT /task/:id/schedule has no way to turn one back into a
+    one-shot task.
     */}}
-    <form class="schedule-editor"
+    <form class="series-schedule-form"
           hx-put="/ui/series/{{.Series.Id}}/schedule"
           hx-target="#series-schedule"
           hx-swap="outerHTML">
-        <label for="series-cron">Change schedule</label>
-        {{/*
-        The preview's trigger is `input`, not `keyup`: it also covers paste,
-        autofill, and programmatic value changes.
-        */}}
-        <input id="series-cron"
-               type="text"
-               name="cron"
-               value="{{.Series.Task.CronExpr}}"
-               placeholder="*/5 * * * *"
-               aria-label="cron expression"
-               autocomplete="off"
-               hx-get="/ui/partials/schedule-preview"
-               hx-trigger="load, input changed delay:300ms"
-               hx-target="#series-cron-preview"
-               hx-swap="innerHTML">
-        <button type="submit" class="primary">Save schedule</button>
-        <div id="series-cron-preview" class="schedule-preview" aria-live="polite"></div>
-        <p class="muted" style="margin:0.35rem 0 0;">
-            Standard 5-field cron: minute hour day-of-month month day-of-week.
-        </p>
+        <h4 class="series-schedule-heading">Change schedule</h4>
+        {{template "schedule-editor" .Editor}}
+        <div class="card-actions">
+            <button type="submit" class="primary">Save schedule</button>
+        </div>
     </form>
     {{end}}
 </div>

@@ -216,18 +216,33 @@ test.describe('Series detail', () => {
     await page.goto(`/ui/tasks/${seriesId}`);
 
     const block = page.locator('#series-schedule');
-    const cronInput = page.getByLabel('cron expression');
-    const preview = page.locator('#series-cron-preview');
+    // The shared schedule editor (schedule_editor.html), rendered with the
+    // "series-schedule" id prefix.
+    const cronInput = page.locator('#series-schedule-cron');
+    const preview = page.locator('#series-schedule-preview');
 
-    // The preview loads for the current expression, then follows typing.
+    // A series has no schedule to opt into, so the editor is open with the
+    // repeating mode already picked.
+    await expect(block.locator('#series-schedule-editor')).toHaveClass(
+      /schedule-open/,
+    );
+    await expect(page.locator('#series-schedule-mode-repeating')).toBeChecked();
+    await expect(cronInput).toHaveValue('*/5 * * * *');
+
+    // The preview is server-rendered for the current expression, then
+    // follows typing.
     await expect(preview).toContainText('Every 5 minutes');
 
-    await cronInput.fill('0 3 * * *');
+    // Type it the way a user would — the shared editor debounces its
+    // preview off keyup, which fill() doesn't produce.
+    await cronInput.fill('');
+    await cronInput.pressSequentially('0 3 * * *');
     await expect(preview).toContainText('At 03:00 AM');
-    await expect(preview).toContainText('next:');
+    await expect(preview).toContainText('Next:');
 
     // An invalid expression is reported inline and doesn't save anything.
-    await cronInput.fill('nope');
+    await cronInput.fill('');
+    await cronInput.pressSequentially('nope');
     await expect(preview).toContainText('invalid cron expression');
     await page.getByRole('button', { name: /save schedule/i }).click();
     await expect(page.locator('#series-schedule > p.inline-error')).toContainText(
@@ -238,7 +253,8 @@ test.describe('Series detail', () => {
     );
 
     // A valid one re-renders the block with the new friendly description.
-    await page.getByLabel('cron expression').fill('0 3 * * *');
+    await cronInput.fill('');
+    await cronInput.pressSequentially('0 3 * * *');
     await page.getByRole('button', { name: /save schedule/i }).click();
     await expect(page.locator('#series-schedule')).toContainText('At 03:00 AM');
     await expect(page.locator('#series-schedule')).not.toContainText(
@@ -263,7 +279,7 @@ test.describe('Series detail', () => {
     await expect(block.getByLabel('series status')).toHaveText('Cancelled');
     await expect(block).toContainText('will not fire again');
     await expect(page.getByRole('button', { name: 'Pause', exact: true })).toHaveCount(0);
-    await expect(page.getByLabel('cron expression')).toHaveCount(0);
+    await expect(page.locator('#series-schedule-cron')).toHaveCount(0);
     // The record survives — the schedule and Past runs are still shown.
     await expect(page.getByRole('heading', { name: 'Past runs' })).toBeVisible();
 

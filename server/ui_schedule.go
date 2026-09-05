@@ -28,8 +28,11 @@ useful without a second round trip.
 */
 
 import (
+	"errors"
 	"net/http"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
@@ -280,10 +283,12 @@ func (s *ServerConfig) renderSeriesDetail(c *gin.Context, task tasks.Task) {
 	t := mustParseUIPage("series-detail",
 		"ui/templates/series_detail.html",
 		"ui/templates/series_schedule.html",
+		"ui/templates/schedule_editor.html",
 		"ui/templates/tasks_rows.html")
 	s.renderUI(c, t, gin.H{
 		"Title":  "Series " + task.Id.Hex()[:8],
 		"Series": buildSeriesView(task),
+		"Editor": seriesScheduleEditor(task),
 		"Tasks":  runs,
 		// Every row below belongs to this series; repeating "part of
 		// series …" on each one would be noise.
@@ -297,14 +302,39 @@ func (s *ServerConfig) renderSeriesDetail(c *gin.Context, task tasks.Task) {
 // /ui/series/:id/* action, and fetched on its own by
 // /ui/partials/series-schedule.
 func (s *ServerConfig) renderSeriesSchedule(c *gin.Context, task tasks.Task, status int, errMsg string) {
-	t := mustParsePartial("series-schedule", "series_schedule.html")
+	t := mustParsePartial("series-schedule", "series_schedule.html", "schedule_editor.html")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.Status(status)
 	if err := t.ExecuteTemplate(c.Writer, "series-schedule", gin.H{
 		"Series": buildSeriesView(task),
+		"Editor": seriesScheduleEditor(task),
 		"Error":  errMsg,
 	}); err != nil {
 		log.WithField("err", err).Warn("ui: render series-schedule")
+	}
+}
+
+// seriesScheduleEditor builds the ScheduleEditorView for the shared
+// schedule editor (ui/templates/schedule_editor.html) as a series needs
+// it: always visible rather than hidden behind the create form's
+// "Schedule task?" checkbox, preselected on the repeating mode, and
+// seeded with the template's current expression.
+//
+// Preview is filled in server-side because the editor's cron input only
+// fetches /ui/partials/schedule-preview once the user types — without it
+// the block would render an empty preview area under an expression that
+// already has a perfectly good reading.
+//
+// The "series-schedule" id prefix keeps every element id distinct from
+// the create form's "schedule-" ones, so the two editors could coexist
+// on one page.
+func seriesScheduleEditor(task tasks.Task) ScheduleEditorView {
+	return ScheduleEditorView{
+		IDPrefix:  "series-schedule",
+		Mode:      "repeating",
+		Collapsed: false,
+		Cron:      task.CronExpr,
+		Preview:   buildSchedulePreview(task.CronExpr, time.Now()),
 	}
 }
 
@@ -388,7 +418,18 @@ func (s *ServerConfig) uiSeriesCancel(c *gin.Context) {
 // parser's own message rendered inline in the block.
 func (s *ServerConfig) uiSeriesChangeSchedule(c *gin.Context) {
 	cronExpr := c.PostForm("cron")
+	mode := strings.TrimSpace(c.PostForm("scheduleMode"))
 	s.uiSeriesAction(c, func(task tasks.Task) error {
+		// The shared editor also offers the create form's "One time"
+		// mode, which has no meaning here: a series *is* its cron
+		// expression, and PUT /task/:id/schedule cannot turn a template
+		// back into a one-shot task. Say so, rather than silently
+		// applying the empty cron that the deselected panel submits. A
+		// post with no scheduleMode at all (a bare `cron=`, e.g. curl)
+		// is still accepted.
+		if mode != "" && mode != "repeating" {
+			return errors.New(`a series always repeats: choose "Repeating", or cancel the series to stop it firing`)
+		}
 		return s.changeTaskScheduleById(c.Request.Context(), task.Id, map[string]interface{}{
 			"cron": cronExpr,
 		})

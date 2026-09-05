@@ -892,9 +892,21 @@ func TestUI_SeriesDetail_RendersScheduleStatusAndActions(t *testing.T) {
 	assert.Contains(t, body, `hx-put="/ui/series/`+id+`/schedule"`)
 	assert.Contains(t, body, `hx-confirm=`)
 
-	// The schedule editor and its live preview.
-	assert.Contains(t, body, `name="cron"`)
+	// The shared schedule editor (schedule_editor.html) and its live
+	// preview. It renders open — no "Schedule task?" checkbox — with the
+	// repeating radio preselected and the current expression in the cron
+	// field, and its ids are prefixed so they can't clash with the create
+	// form's.
+	assert.Contains(t, body, `id="series-schedule-editor"`)
+	assert.Contains(t, body, "schedule-open")
+	assert.NotContains(t, body, `name="scheduleEnabled"`)
+	assert.Contains(t, body, `id="series-schedule-mode-repeating" name="scheduleMode" value="repeating"`)
+	assert.Contains(t, body, `id="series-schedule-cron" name="cron"`)
 	assert.Contains(t, body, `hx-get="/ui/partials/schedule-preview"`)
+	assert.Contains(t, body, `hx-target="#series-schedule-preview"`)
+	// The preview is server-rendered, so the box isn't empty before the
+	// user has touched the field.
+	assert.Contains(t, body, "schedule-description")
 
 	// Past runs table, wired to the shared tasks-rows partial filtered by
 	// parentId.
@@ -1096,25 +1108,56 @@ func TestUI_SeriesSchedulePartial(t *testing.T) {
 		getUI(r, "/ui/partials/series-schedule?id=aaaaaaaaaaaaaaaaaaaaaaaa").Code)
 }
 
-// --- schedule preview (temporary; see #97) ---
-
-func TestUI_SchedulePreviewPartial(t *testing.T) {
-	s, cleanup := NewTestServer()
+// The shared editor also carries the create form's "One time" radio,
+// which a series has no way to honour: PUT /task/:id/schedule can't turn
+// a template back into a one-shot task, and the deselected repeating
+// panel submits no cron at all. Refuse it inline and leave the stored
+// schedule alone. (The preview partial itself is master's — see the
+// TestUI_SchedulePreviewPartial_* tests above.)
+func TestUI_SeriesChangeSchedule_RejectsOneTimeMode(t *testing.T) {
+	cleanup := setupTestTaskType(t)
 	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
 	r := s.GetRouter()
 
-	ok := getUI(r, "/ui/partials/schedule-preview?cron=%2A%2F10+%2A+%2A+%2A+%2A")
-	assert.Equal(t, http.StatusOK, ok.Code)
-	assert.Contains(t, ok.Body.String(), "Every 10 minutes")
-	assert.Contains(t, ok.Body.String(), "next:")
+	tmpl := createRecurringTemplate(t, r)
 
-	bad := getUI(r, "/ui/partials/schedule-preview?cron=nope")
-	assert.Equal(t, http.StatusOK, bad.Code)
-	assert.Contains(t, bad.Body.String(), "inline-error")
+	form := url.Values{}
+	form.Set("scheduleMode", "once")
+	form.Set("notBefore", "2030-01-01T00:00")
+	w := putForm(r, "/ui/series/"+tmpl.Id.Hex()+"/schedule", form)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "inline-error")
+	assert.Contains(t, w.Body.String(), "a series always repeats")
 
-	empty := getUI(r, "/ui/partials/schedule-preview?cron=")
-	assert.Equal(t, http.StatusOK, empty.Code)
-	assert.Contains(t, empty.Body.String(), "Enter a cron expression")
+	stored, err := s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "*/5 * * * *", stored.CronExpr)
+	assert.Equal(t, "RECURRING", stored.State)
+}
+
+// The editor's own "Repeating" mode posts alongside the cron field; it
+// must not get in the way of an ordinary save.
+func TestUI_SeriesChangeSchedule_AcceptsRepeatingMode(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+
+	form := url.Values{}
+	form.Set("scheduleMode", "repeating")
+	form.Set("cron", "0 3 * * *")
+	w := putForm(r, "/ui/series/"+tmpl.Id.Hex()+"/schedule", form)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.NotContains(t, w.Body.String(), "inline-error")
+
+	stored, err := s.DB.GetTask(tmpl.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "0 3 * * *", stored.CronExpr)
 }
 
 // --- series card + row backlink on a child task ---

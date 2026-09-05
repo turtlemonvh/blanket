@@ -183,7 +183,10 @@ The series lifecycle actions used by the series detail page *mutate*:
 PUT /ui/series/:id/pause        # -> PAUSED
 PUT /ui/series/:id/resume       # -> RECURRING
 PUT /ui/series/:id/cancel       # -> STOPPED (record kept)
-PUT /ui/series/:id/schedule     # form field `cron=<expr>`
+PUT /ui/series/:id/schedule     # form field `cron=<expr>` (the shared
+                                # schedule editor also submits
+                                # `scheduleMode`; anything but
+                                # `repeating` is rejected inline)
 ```
 
 They are thin wrappers over the same functions

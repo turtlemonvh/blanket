@@ -175,23 +175,18 @@ tr:hover td { background: #fafbfc; }
   margin-top: 0.75rem;
 }
 
-.schedule-editor {
+/* The series' "change the schedule" form. Its contents are the shared
+ * schedule-editor partial (schedule_editor.html), which brings its own
+ * rules below; this only rules the form off from the actions above it.
+ */
+.series-schedule-form {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
   border-top: 1px solid var(--border);
   font-size: 0.9rem;
 }
-.schedule-editor label { display: block; margin-bottom: 0.25rem; font-weight: 600; }
-.schedule-editor input[type="text"] {
-  font: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  padding: 0.35rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  min-width: 14rem;
-}
-.schedule-preview { margin-top: 0.4rem; min-height: 1.2em; font-size: 0.85rem; }
-.schedule-preview .preview-desc { font-weight: 600; }
+.series-schedule-form .card-actions { margin-top: 0.5rem; }
+.series-schedule-heading { margin: 0 0 0.5rem; font-size: 0.95rem; }
 
 .inline-error {
   margin: 0 0 0.5rem;
