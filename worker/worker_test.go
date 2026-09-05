@@ -1,6 +1,7 @@
 // External test package to avoid the import cycle:
 //
-//	worker → lib/bolt → worker
+//	worker → lib/testutil → lib/bolt → worker
+//	worker → lib/testutil → server → worker
 //
 // Integration tests for the worker package.
 //
@@ -39,9 +40,8 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/turtlemonvh/blanket/lib/bolt"
 	"github.com/turtlemonvh/blanket/lib/objectid"
-	"github.com/turtlemonvh/blanket/server"
+	"github.com/turtlemonvh/blanket/lib/testutil"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 )
@@ -212,18 +212,13 @@ func newWorkerHarness(t *testing.T) *workerHarness {
 		}
 	}
 
-	db, dbCleanup := bolt.NewTestDB()
-	q, qCleanup := bolt.NewTestQueue()
+	sc, dbCleanup := testutil.NewTestServer(t)
+	sc.ResultsPath = resultsDir
+	sc.TimeMultiplier = 1.0
 
-	sc := &server.ServerConfig{
-		DB:             db,
-		Q:              q,
-		ResultsPath:    resultsDir,
-		TimeMultiplier: 1.0,
-	}
 	claimCount := &atomic.Int64{}
 	router := sc.GetRouter()
-	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	httpSrv, srvCleanup := testutil.NewTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/task/claim/") {
 			claimCount.Add(1)
 		}
@@ -269,9 +264,8 @@ func newWorkerHarness(t *testing.T) *workerHarness {
 		work:       wConf,
 		claimCount: claimCount,
 		cleanupFn: func() {
-			httpSrv.Close()
+			srvCleanup()
 			dbCleanup()
-			qCleanup()
 			os.RemoveAll(workDir)
 			viper.Set("port", 0)
 			viper.Set("tasks.typesPaths", nil)
@@ -635,19 +629,13 @@ func TestRun_SIGTERM(t *testing.T) {
 		require.NoError(t, os.MkdirAll(d, 0755))
 	}
 
-	db, dbCleanup := bolt.NewTestDB()
+	sc, dbCleanup := testutil.NewTestServer(t)
 	defer dbCleanup()
-	q, qCleanup := bolt.NewTestQueue()
-	defer qCleanup()
+	sc.ResultsPath = resultsDir
+	sc.TimeMultiplier = 1.0
 
-	sc := &server.ServerConfig{
-		DB:             db,
-		Q:              q,
-		ResultsPath:    resultsDir,
-		TimeMultiplier: 1.0,
-	}
-	httpSrv := httptest.NewServer(sc.GetRouter())
-	defer httpSrv.Close()
+	httpSrv, srvCleanup := testutil.NewTestHTTPServer(t, sc.GetRouter())
+	defer srvCleanup()
 
 	u, err := url.Parse(httpSrv.URL)
 	require.NoError(t, err)
