@@ -1,0 +1,157 @@
+{{/*
+schedule-editor — the shared "when should this run?" editor.
+
+Rendered *inside a <form>*. Self-contained: it needs no CSS, JS, or markup
+from its host page beyond app.css's .schedule-* rules, so the create form
+(new_task_form.html) and a series' "change the schedule" editor
+(turtlemonvh/blanket#98) can both drop it in.
+
+Form fields it emits (all optional; the server ignores the ones belonging
+to the mode that isn't selected — see uiSubmitTask in server/ui.go):
+
+    scheduleEnabled  "1" when the "Schedule task?" checkbox is checked
+                     (only rendered when .Collapsed)
+    scheduleMode     "once" | "repeating" — which radio is selected
+    notBefore        datetime-local value, "2006-01-02T15:04" (once mode)
+    notBeforeISO     the same instant as an RFC3339/UTC string, filled in
+                     by the script below from the *browser's* timezone.
+                     Servers prefer it and fall back to parsing notBefore
+                     as server-local time when JS is off.
+    cron             a standard 5-field cron expression (repeating mode)
+
+Template data — server.ScheduleEditorView (see server/ui.go):
+
+    .IDPrefix   string   prefix for every element id, so more than one
+                         editor can live on a page. Required, e.g. "schedule".
+    .Mode       string   "once" (default) or "repeating" — preselected radio.
+    .NotBefore  string   initial datetime-local value ("" for empty).
+    .Cron       string   initial cron expression ("" for empty).
+    .Collapsed  bool     true  → hidden behind a "Schedule task?" checkbox
+                                 (the create form: scheduling is opt-in);
+                         false → always visible, no checkbox (editing the
+                                 schedule of a task that already has one).
+    .Preview    *SchedulePreviewView (may be nil) — server-rendered initial
+                         contents of the live cron preview.
+
+Showing/hiding is CSS-only (`:checked ~` sibling rules in app.css), so it
+works before htmx or JS has done anything. The one small script keeps the
+*submitted* data honest — it disables the inputs of the mode that isn't
+selected so the server never sees both notBefore and cron — and computes
+notBeforeISO. Everything degrades to "no schedule requested" if it
+doesn't run.
+*/}}
+{{define "schedule-editor"}}
+<div class="schedule-editor{{if not .Collapsed}} schedule-open{{end}}" id="{{.IDPrefix}}-editor">
+    {{if .Collapsed}}
+    <input type="checkbox" class="schedule-toggle" id="{{.IDPrefix}}-enabled" name="scheduleEnabled" value="1">
+    <label for="{{.IDPrefix}}-enabled">Schedule task?</label>
+    <p class="muted field-help">Leave unchecked to run the task as soon as a worker picks it up.</p>
+    {{end}}
+
+    <div class="schedule-fields">
+        <fieldset class="schedule-modes">
+            <legend>When should it run?</legend>
+
+            <input type="radio" class="schedule-mode schedule-mode-once"
+                   id="{{.IDPrefix}}-mode-once" name="scheduleMode" value="once"
+                   {{if ne .Mode "repeating"}}checked{{end}}>
+            <label for="{{.IDPrefix}}-mode-once">One time</label>
+
+            <input type="radio" class="schedule-mode schedule-mode-repeating"
+                   id="{{.IDPrefix}}-mode-repeating" name="scheduleMode" value="repeating"
+                   {{if eq .Mode "repeating"}}checked{{end}}>
+            <label for="{{.IDPrefix}}-mode-repeating">Repeating</label>
+
+            <div class="schedule-panel schedule-panel-once">
+                <label for="{{.IDPrefix}}-not-before">Start no earlier than</label>
+                <input type="datetime-local" class="schedule-not-before"
+                       id="{{.IDPrefix}}-not-before" name="notBefore" value="{{.NotBefore}}"
+                       aria-describedby="{{.IDPrefix}}-not-before-help">
+                <input type="hidden" class="schedule-not-before-iso" name="notBeforeISO" value="">
+                <p class="muted field-help" id="{{.IDPrefix}}-not-before-help">
+                    The earliest time the task may start. It waits in state
+                    <code>SCHEDULED</code> until then, and only joins the queue once
+                    that time passes — a worker may pick it up any time after.
+                    Times are read in your browser's timezone. The REST API also
+                    accepts a relative duration (<code>10m</code>), an RFC3339
+                    timestamp, or unix seconds for this field.
+                </p>
+            </div>
+
+            <div class="schedule-panel schedule-panel-repeating">
+                <label for="{{.IDPrefix}}-cron">Repeat on this cron schedule</label>
+                <input type="text" class="schedule-cron" id="{{.IDPrefix}}-cron" name="cron"
+                       value="{{.Cron}}" placeholder="*/5 * * * *" autocomplete="off"
+                       aria-describedby="{{.IDPrefix}}-cron-help"
+                       hx-get="/ui/partials/schedule-preview"
+                       hx-trigger="keyup changed delay:300ms, change"
+                       hx-target="#{{.IDPrefix}}-preview"
+                       hx-swap="innerHTML">
+                <p class="muted field-help" id="{{.IDPrefix}}-cron-help">
+                    Five space-separated fields — minute, hour, day-of-month, month,
+                    day-of-week. Example: <code>0 14 * * 2</code> runs at 2:00 PM every
+                    Tuesday. The submitted task becomes a <code>RECURRING</code> template
+                    that never runs itself; it spawns a fresh child run at every fire time.
+                </p>
+                <div class="schedule-preview" id="{{.IDPrefix}}-preview" aria-live="polite">
+                    {{template "schedule-preview" .Preview}}
+                </div>
+            </div>
+        </fieldset>
+    </div>
+</div>
+<script>
+(function () {
+    var root = document.getElementById('{{.IDPrefix}}-editor');
+    if (!root) return;
+    function sync() {
+        var toggle = root.querySelector('.schedule-toggle');
+        var enabled = !toggle || toggle.checked;
+        var checkedMode = root.querySelector('.schedule-mode:checked');
+        var mode = checkedMode ? checkedMode.value : 'once';
+        var panels = root.querySelectorAll('.schedule-panel');
+        for (var i = 0; i < panels.length; i++) {
+            var active = enabled && panels[i].classList.contains('schedule-panel-' + mode);
+            var fields = panels[i].querySelectorAll('input, select, textarea');
+            for (var j = 0; j < fields.length; j++) {
+                fields[j].disabled = !active;
+            }
+        }
+        // Send the picked wall-clock time as an absolute instant, resolved in
+        // the browser's timezone — otherwise "14:30" is ambiguous the moment
+        // the browser and the server disagree about the zone.
+        var notBefore = root.querySelector('.schedule-not-before');
+        var iso = root.querySelector('.schedule-not-before-iso');
+        if (notBefore && iso) {
+            var parsed = notBefore.value ? new Date(notBefore.value) : null;
+            iso.value = (parsed && !isNaN(parsed.getTime())) ? parsed.toISOString() : '';
+        }
+    }
+    root.addEventListener('change', sync);
+    root.addEventListener('input', sync);
+    sync();
+})();
+</script>
+{{end}}
+
+{{/*
+schedule-preview — the live, human-readable rendering of a cron expression,
+swapped in by GET /ui/partials/schedule-preview as the user types. Data is
+a *server.SchedulePreviewView, or nil for "nothing entered yet".
+*/}}
+{{define "schedule-preview"}}
+{{if .}}
+{{if .Error}}
+<span class="schedule-error" role="alert">{{.Error}}</span>
+{{else if .Description}}
+<span class="schedule-description">{{.Description}}</span>
+{{if .Next}}
+<span class="muted schedule-next">Next: {{join .Next "; "}} (server local time)</span>
+{{end}}
+{{else}}
+<span class="muted">Type a cron expression to see what it means.</span>
+{{end}}
+{{else}}
+<span class="muted">Type a cron expression to see what it means.</span>
+{{end}}
+{{end}}

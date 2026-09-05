@@ -3,6 +3,7 @@ package server
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -453,11 +455,98 @@ func (s *ServerConfig) uiAboutPage(c *gin.Context) {
 	})
 }
 
+// ScheduleEditorView is the data contract for the "schedule-editor"
+// template partial (ui/templates/schedule_editor.html) — the shared
+// notBefore/cron editor used by the create form and, once
+// turtlemonvh/blanket#98 lands, a live series' "change the schedule"
+// form. The template's own header comment documents the form fields it
+// emits and how the server reads them back.
+type ScheduleEditorView struct {
+	// IDPrefix prefixes every element id the editor renders, so more than
+	// one editor can coexist on a page. Required, e.g. "schedule".
+	IDPrefix string
+	// Mode is the preselected radio: "once" (default) or "repeating".
+	Mode string
+	// NotBefore is the initial datetime-local value ("2006-01-02T15:04").
+	NotBefore string
+	// Cron is the initial cron expression.
+	Cron string
+	// Collapsed hides the editor behind a "Schedule task?" checkbox —
+	// scheduling is opt-in on the create form. False renders the fields
+	// unconditionally, for a task whose schedule already exists.
+	Collapsed bool
+	// Preview is the server-rendered initial contents of the live cron
+	// preview; nil renders the "type a cron expression" hint.
+	Preview *SchedulePreviewView
+}
+
+// SchedulePreviewView is the data contract for the "schedule-preview"
+// template — the live human-readable rendering of a cron expression.
+// Exactly one of Description / Error is set for a non-empty expression.
+type SchedulePreviewView struct {
+	Cron        string
+	Description string
+	Next        []string
+	Error       string
+}
+
+// nextFirePreviewCount is how many upcoming fire times the cron preview
+// lists. Matches the "next" array of GET /schedule/describe.
+const nextFirePreviewCount = 3
+
+// buildSchedulePreview renders expr for the live preview. An empty
+// expression yields an empty view (the "type a cron expression" hint); an
+// unparseable one carries the parser's message in Error rather than
+// failing the request, because htmx only swaps 2xx responses — a 4xx here
+// would leave the user with no feedback at all.
+func buildSchedulePreview(expr string, now time.Time) *SchedulePreviewView {
+	expr = strings.TrimSpace(expr)
+	view := &SchedulePreviewView{Cron: expr}
+	if expr == "" {
+		return view
+	}
+	desc, err := tasks.DescribeCron(expr)
+	if err != nil {
+		view.Error = err.Error()
+		return view
+	}
+	view.Description = desc
+	fires, err := tasks.NextCronFires(expr, now, nextFirePreviewCount)
+	if err != nil {
+		view.Error = err.Error()
+		return view
+	}
+	for _, f := range fires {
+		view.Next = append(view.Next, f.Local().Format("2006/01/02 15:04:05"))
+	}
+	return view
+}
+
+// uiSchedulePreviewPartial backs GET /ui/partials/schedule-preview?cron=,
+// the HTML sibling of the JSON GET /schedule/describe: the cron input
+// fetches it as the user types (debounced) and swaps the rendering in
+// under the field. See buildSchedulePreview for why it's always a 200.
+func (s *ServerConfig) uiSchedulePreviewPartial(c *gin.Context) {
+	t := mustParsePartial("schedule-preview", "schedule_editor.html")
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	view := buildSchedulePreview(c.Query("cron"), time.Now())
+	if err := t.ExecuteTemplate(c.Writer, "schedule-preview", view); err != nil {
+		log.WithField("err", err).Warn("ui: render schedule-preview")
+	}
+}
+
 // uiNewTaskPartial returns the "new task" form pre-populated with types.
 func (s *ServerConfig) uiNewTaskPartial(c *gin.Context) {
-	t := mustParsePartial("new-task-form", "new_task_form.html")
+	t := mustParsePartial("new-task-form", "new_task_form.html", "schedule_editor.html")
 	c.Header("Content-Type", "text/html; charset=utf-8")
-	if err := t.ExecuteTemplate(c.Writer, "new-task-form", gin.H{"TaskTypes": readTaskTypeViews()}); err != nil {
+	if err := t.ExecuteTemplate(c.Writer, "new-task-form", gin.H{
+		"TaskTypes": readTaskTypeViews(),
+		"Schedule": ScheduleEditorView{
+			IDPrefix:  "schedule",
+			Mode:      "once",
+			Collapsed: true,
+		},
+	}); err != nil {
 		log.WithField("err", err).Warn("ui: render new-task-form")
 	}
 }
@@ -543,6 +632,76 @@ func (s *ServerConfig) uiCustomEnvRowPartial(c *gin.Context) {
 	}
 }
 
+// datetimeLocalLayouts are the shapes an <input type="datetime-local">
+// submits: browsers omit the seconds component unless the value has one,
+// and neither shape carries a timezone. They're parsed in the *server's*
+// local zone, which is only a fallback — see scheduleRequestFromForm.
+var datetimeLocalLayouts = []string{"2006-01-02T15:04", "2006-01-02T15:04:05"}
+
+// normalizeFormNotBefore turns the schedule editor's two start-time fields
+// into a single value tasks.ParseNotBefore understands.
+//
+// The editor's small script fills the hidden notBeforeISO field with the
+// picked instant resolved in the *browser's* timezone (an RFC3339 UTC
+// string), which is what a user means when they pick "2:30 PM" — so that
+// field wins whenever it's present. With scripting off only the bare
+// datetime-local value arrives; a wall-clock time with no zone has to be
+// resolved against something, and the server's own zone is the closest
+// available guess (it's also the zone the flash and `blanket ps` render
+// schedules in). Anything else — a duration like "10m", an RFC3339
+// timestamp, unix seconds — is passed through untouched, so a hand-rolled
+// POST to /ui/tasks keeps the REST API's full vocabulary.
+func normalizeFormNotBefore(raw, isoRaw string) string {
+	if iso := strings.TrimSpace(isoRaw); iso != "" {
+		return iso
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	for _, layout := range datetimeLocalLayouts {
+		if ts, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+			return strconv.FormatInt(ts.Unix(), 10)
+		}
+	}
+	return raw
+}
+
+// scheduleRequestFromForm builds the {"notBefore": …} / {"cron": …} map
+// applySchedule consumes from the schedule editor's fields.
+//
+// The scheduleMode radio decides which field counts, so a stale value left
+// in the hidden half of the editor can never reach the server as a second,
+// conflicting schedule (the editor's script also disables those inputs;
+// this is the half that doesn't depend on scripting). With no scheduleMode
+// at all — a hand-rolled POST — both fields are passed through and
+// applySchedule enforces the API's own mutual-exclusion rule.
+func scheduleRequestFromForm(c *gin.Context) (map[string]interface{}, error) {
+	mode := strings.TrimSpace(c.PostForm("scheduleMode"))
+	notBefore := normalizeFormNotBefore(c.PostForm("notBefore"), c.PostForm("notBeforeISO"))
+	cronExpr := strings.TrimSpace(c.PostForm("cron"))
+
+	switch mode {
+	case "once":
+		cronExpr = ""
+	case "repeating":
+		notBefore = ""
+	case "":
+		// No mode selected; keep whatever was sent.
+	default:
+		return nil, fmt.Errorf("unknown schedule mode %q; expected 'once' or 'repeating'", mode)
+	}
+
+	req := map[string]interface{}{}
+	if notBefore != "" {
+		req["notBefore"] = notBefore
+	}
+	if cronExpr != "" {
+		req["cron"] = cronExpr
+	}
+	return req, nil
+}
+
 // uiSubmitTask handles the New Task form submit and returns fresh rows.
 // Form fields named `env.<NAME>` are collected into the task's ExecEnv.
 func (s *ServerConfig) uiSubmitTask(c *gin.Context) {
@@ -619,7 +778,9 @@ func (s *ServerConfig) uiSubmitTask(c *gin.Context) {
 
 	for name := range tt.RequiredEnv() {
 		if childEnv[name] == "" {
-			c.String(http.StatusBadRequest, fmt.Sprintf("missing required env var: %s", name))
+			// uiFormError rather than a bare 400: this one is reachable by
+			// filling the form in wrong, so the user has to be able to see it.
+			s.uiFormError(c, http.StatusBadRequest, fmt.Sprintf("missing required env var: %s", name))
 			return
 		}
 	}
@@ -629,15 +790,43 @@ func (s *ServerConfig) uiSubmitTask(c *gin.Context) {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.DB.SaveTask(&t); err != nil {
+
+	// Scheduling: the form's notBefore/cron fields feed the exact same
+	// applySchedule path POST /task/ uses, so the two surfaces can't drift
+	// on what a schedule means. scheduleRequestFromForm has already picked
+	// the field belonging to the selected radio.
+	scheduleReq, err := scheduleRequestFromForm(c)
+	if err != nil {
+		s.uiFormError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	now := time.Now()
+	if err := s.applyScheduleChecked(&t, scheduleReq, now); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrScheduledCapacityExceeded) {
+			status = http.StatusTooManyRequests
+		}
+		s.uiFormError(c, status, err.Error())
+		return
+	}
+	// applySchedule deliberately treats an already-past notBefore as "run
+	// now" for the REST API (see its doc comment). Through a date picker
+	// that's almost always a mistake — a user who filled in a start time
+	// and got an immediately-queued task has no way to tell it went wrong
+	// — so the form rejects it instead.
+	if _, asked := scheduleReq["notBefore"]; asked && t.State != "SCHEDULED" {
+		s.uiFormError(c, http.StatusBadRequest,
+			"the requested start time is in the past; pick a time in the future, or leave 'Schedule task?' unchecked to run the task now")
+		return
+	}
+
+	// enqueueTask saves and (only for an immediately-runnable task) queues;
+	// a SCHEDULED task or a RECURRING template is deliberately left off the
+	// queue for the scheduler loop to handle.
+	if err := s.enqueueTask(c.Request.Context(), &t); err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.Q.AddTask(&t); err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.TaskEvents.Notify()
 
 	// The response body below is (and must stay) raw <tr> rows: htmx infers
 	// the parsing context for an ajax response from the first tag it sees,
@@ -649,8 +838,57 @@ func (s *ServerConfig) uiSubmitTask(c *gin.Context) {
 	// this response; instead fire a client-side event and let a tiny
 	// follow-up request (a plain, table-free response) render them. See
 	// triggerTaskTypeWarnings and turtlemonvh/blanket#64.
-	s.triggerTaskTypeWarnings(c, taskType)
+	s.triggerTaskTypeWarnings(c, taskType, scheduleFlashFor(t))
 	s.uiTasksRowsPartial(c)
+}
+
+// scheduleFlashFor is the "your task isn't running yet, here's when it
+// will" line the create form flashes after a scheduled submission: the
+// task's state plus its friendly schedule description (the same text
+// `blanket ps` and the task JSON carry). Empty for a plain task that went
+// straight onto the queue — nothing to explain there.
+//
+// ASCII only, deliberately: it travels back to the browser inside an
+// HX-Trigger response *header*.
+func scheduleFlashFor(t tasks.Task) string {
+	if t.State != "SCHEDULED" && t.State != "RECURRING" {
+		return ""
+	}
+	desc := tasks.ScheduleDescriptionFor(t)
+	if desc == "" {
+		return t.State
+	}
+	return fmt.Sprintf("%s - %s", t.State, desc)
+}
+
+// uiFormError answers a rejected new-task submit. htmx never swaps a 4xx
+// response body, so the message also rides back on an HX-Trigger event
+// that #task-form-error (inside the form, see new_task_form.html) turns
+// into a visible inline error — otherwise a rejected submit looks like
+// nothing happened at all. The plain-text body is kept for non-htmx
+// callers (curl, the Go tests).
+func (s *ServerConfig) uiFormError(c *gin.Context, status int, msg string) {
+	payload, err := json.Marshal(gin.H{
+		"task-form-error": gin.H{"error": msg},
+	})
+	if err != nil {
+		log.WithField("err", err).Warn("ui: marshal HX-Trigger payload")
+	} else {
+		c.Header("HX-Trigger", string(payload))
+	}
+	c.String(status, msg)
+}
+
+// uiFormErrorPartial renders the message uiFormError signaled. It's the
+// follow-up GET #task-form-error issues on the "task-form-error" event;
+// rendering server-side (rather than writing the text in with JS) keeps
+// escaping in one place.
+func (s *ServerConfig) uiFormErrorPartial(c *gin.Context) {
+	t := mustParsePartial("task-form-error", "flash.html")
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	if err := t.ExecuteTemplate(c.Writer, "task-form-error", gin.H{"Error": c.Query("error")}); err != nil {
+		log.WithField("err", err).Warn("ui: render task-form-error")
+	}
 }
 
 // triggerTaskTypeWarnings sets an HX-Trigger response header that fires a
@@ -660,9 +898,13 @@ func (s *ServerConfig) uiSubmitTask(c *gin.Context) {
 // the type and renders any warning-level findings. Always fires (even when
 // there are no warnings) so a later warning-free submission clears a stale
 // message left by an earlier one.
-func (s *ServerConfig) triggerTaskTypeWarnings(c *gin.Context, taskType string) {
+// scheduled, when non-empty, rides along on the same event and is shown as
+// a success flash ("Task scheduled. SCHEDULED - Once, at …") — the created
+// task is waiting on a schedule rather than queued right now, which the
+// refreshed rows alone don't make obvious.
+func (s *ServerConfig) triggerTaskTypeWarnings(c *gin.Context, taskType, scheduled string) {
 	payload, err := json.Marshal(gin.H{
-		"task-type-warnings": gin.H{"type": taskType},
+		"task-type-warnings": gin.H{"type": taskType, "scheduled": scheduled},
 	})
 	if err != nil {
 		log.WithField("err", err).Warn("ui: marshal HX-Trigger payload")
@@ -691,8 +933,9 @@ func (s *ServerConfig) uiTaskTypeWarningsPartial(c *gin.Context) {
 	t := mustParsePartial("flash-oob", "flash.html")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(c.Writer, "flash-oob", gin.H{
-		"TaskType": typeName,
-		"Findings": findings,
+		"TaskType":  typeName,
+		"Findings":  findings,
+		"Scheduled": c.Query("scheduled"),
 	}); err != nil {
 		log.WithField("err", err).Warn("ui: render flash-oob")
 	}

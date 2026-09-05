@@ -107,6 +107,26 @@ curl -s "localhost:8773/schedule/describe?cron=*/5+*+*+*+*" | jq .
 curl -s "localhost:8773/task/?parentId=<template-task-id>" | jq .
 ```
 
+### Via the web UI
+
+The **New** button on the tasks page opens the create form. Tick
+**Schedule task?** to reveal the scheduling section; it's collapsed by
+default, so an unscheduled submit is unchanged.
+
+- **One time** takes a start time in a date/time picker. The task waits
+  in state `SCHEDULED` until then. The time is read in your browser's
+  timezone, and a time already in the past is rejected — unlike the REST
+  field, where a past `notBefore` just means "run now".
+- **Repeating** takes a 5-field cron expression and shows a live
+  human-readable reading of it as you type ("At 02:00 PM, only on
+  Tuesday") plus the next three fire times, or the parser's complaint if
+  the expression doesn't parse. The submitted task becomes a `RECURRING`
+  template.
+
+On submit the flash message names the state and the friendly schedule
+(e.g. `RECURRING - Every 5 minutes`), since a scheduled task doesn't
+start running the way an ordinary submission does.
+
 Every task response includes a `scheduleDescription` field — a friendly
 rendering of its schedule (e.g. `"Every 5 minutes"`, `"Once, at
 2026-09-05T08:00:00-04:00"`), shown in the `SCHEDULE` column of

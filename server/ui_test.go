@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -372,6 +373,350 @@ func TestUI_TaskTypeDetailPage_UnknownTypeReturns404(t *testing.T) {
 
 	w := getUI(r, "/ui/task-types/does_not_exist")
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// --- Scheduling on the new-task form (turtlemonvh/blanket#97) ---
+//
+// The browser-facing half of these (the checkbox actually revealing the
+// section, the radios swapping fields, the live preview updating as you
+// type) is covered by tests/e2e/specs/journeys.spec.ts; what's below is
+// the handler surface underneath it.
+
+// scheduleRow is the slice of a task's JSON these tests assert on, so they
+// check what was persisted rather than what was rendered.
+type scheduleRow struct {
+	State       string `json:"state"`
+	ScheduledTs int64  `json:"scheduledTs"`
+	CronExpr    string `json:"cronExpr"`
+	Description string `json:"scheduleDescription"`
+}
+
+func taskScheduleRows(t *testing.T, r http.Handler) []scheduleRow {
+	t.Helper()
+	rec := getUI(r, "/task/")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var list []scheduleRow
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode /task/: %v; body=%s", err, rec.Body.String())
+	}
+	return list
+}
+
+func TestUI_NewTaskForm_RendersScheduleSection(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/partials/new-task")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	// The opt-in checkbox and the one-time/repeating radio group.
+	assert.Contains(t, body, `name="scheduleEnabled"`)
+	assert.Contains(t, body, ">Schedule task?</label>")
+	assert.Contains(t, body, `name="scheduleMode" value="once"`)
+	assert.Contains(t, body, `name="scheduleMode" value="repeating"`)
+	assert.Contains(t, body, ">One time</label>")
+	assert.Contains(t, body, ">Repeating</label>")
+
+	// Both fields, each with help text tied to it for screen readers.
+	assert.Contains(t, body, `type="datetime-local"`)
+	assert.Contains(t, body, `name="notBefore"`)
+	assert.Contains(t, body, `name="cron"`)
+	assert.Contains(t, body, `aria-describedby="schedule-not-before-help"`)
+	assert.Contains(t, body, `aria-describedby="schedule-cron-help"`)
+
+	// The cron field drives the live preview.
+	assert.Contains(t, body, `hx-get="/ui/partials/schedule-preview"`)
+	assert.Contains(t, body, `hx-trigger="keyup changed delay:300ms, change"`)
+	assert.Contains(t, body, `id="schedule-preview"`)
+
+	// And a place for a rejected submit to land (htmx won't swap a 4xx).
+	assert.Contains(t, body, `id="task-form-error"`)
+}
+
+func TestUI_SchedulePreviewPartial_ValidCron(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/partials/schedule-preview?cron=%2A%2F5+%2A+%2A+%2A+%2A")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, "Every 5 minutes")
+	assert.Contains(t, body, "schedule-next", "preview should list upcoming fire times")
+	assert.NotContains(t, body, "schedule-error")
+}
+
+// An unparseable expression is *content*, not a failed request: htmx only
+// swaps 2xx responses, so a 400 here would leave the user typing into a
+// field that never says anything is wrong.
+func TestUI_SchedulePreviewPartial_InvalidCronRendersInlineError(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/partials/schedule-preview?cron=not-a-cron")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, "schedule-error")
+	assert.Contains(t, body, "invalid cron expression")
+	assert.Contains(t, body, `role="alert"`)
+}
+
+func TestUI_SchedulePreviewPartial_EmptyCronShowsHint(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/partials/schedule-preview?cron=")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "Type a cron expression")
+}
+
+func TestUI_SubmitTask_OneTimeCreatesScheduledTask(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	future := time.Now().Add(2 * time.Hour)
+	form := url.Values{}
+	form.Set("type", "echo_task")
+	form.Set("scheduleEnabled", "1")
+	form.Set("scheduleMode", "once")
+	form.Set("notBefore", future.Format("2006-01-02T15:04"))
+
+	w := postForm(r, "/ui/tasks", form)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	list := taskScheduleRows(t, r)
+	if assert.Len(t, list, 1) {
+		assert.Equal(t, "SCHEDULED", list[0].State)
+		assert.InDelta(t, future.Unix(), list[0].ScheduledTs, 60,
+			"a bare datetime-local value should be read as server-local time")
+		assert.Contains(t, list[0].Description, "Once, at")
+	}
+
+	// The flash tells the user the task is waiting on a schedule rather
+	// than queued — the refreshed rows alone don't make that obvious.
+	assert.Contains(t, w.Header().Get("HX-Trigger"), "SCHEDULED - Once, at")
+}
+
+// The hidden notBeforeISO field carries the instant resolved in the
+// *browser's* timezone, and wins over the bare datetime-local value —
+// otherwise a browser and server in different zones disagree about what
+// "2:30 PM" meant.
+func TestUI_SubmitTask_NotBeforeISOWinsOverLocalValue(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	future := time.Now().Add(3 * time.Hour).UTC().Truncate(time.Minute)
+	form := url.Values{}
+	form.Set("type", "echo_task")
+	form.Set("scheduleEnabled", "1")
+	form.Set("scheduleMode", "once")
+	// Deliberately disagreeing values; the ISO one should win.
+	form.Set("notBefore", "2035-01-01T00:00")
+	form.Set("notBeforeISO", future.Format(time.RFC3339))
+
+	w := postForm(r, "/ui/tasks", form)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	list := taskScheduleRows(t, r)
+	if assert.Len(t, list, 1) {
+		assert.Equal(t, "SCHEDULED", list[0].State)
+		assert.Equal(t, future.Unix(), list[0].ScheduledTs)
+	}
+}
+
+func TestUI_SubmitTask_RepeatingCreatesRecurringTemplate(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	form := url.Values{}
+	form.Set("type", "echo_task")
+	form.Set("scheduleEnabled", "1")
+	form.Set("scheduleMode", "repeating")
+	form.Set("cron", "*/5 * * * *")
+	// A stale value left behind in the hidden "one time" panel must not
+	// reach applySchedule as a second, conflicting schedule.
+	form.Set("notBefore", "2035-01-01T00:00")
+
+	w := postForm(r, "/ui/tasks", form)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	list := taskScheduleRows(t, r)
+	if assert.Len(t, list, 1) {
+		assert.Equal(t, "RECURRING", list[0].State)
+		assert.Equal(t, "*/5 * * * *", list[0].CronExpr)
+		assert.Equal(t, "Every 5 minutes", list[0].Description)
+		assert.Zero(t, list[0].ScheduledTs, "the ignored notBefore must not be applied")
+	}
+	assert.Contains(t, w.Header().Get("HX-Trigger"), "RECURRING - Every 5 minutes")
+}
+
+// Unchecked "Schedule task?" (or scripting off, which submits the fields
+// empty rather than not at all) still means "run it now".
+func TestUI_SubmitTask_NoScheduleStaysWaiting(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	form := url.Values{}
+	form.Set("type", "echo_task")
+	form.Set("scheduleMode", "once")
+	form.Set("notBefore", "")
+	form.Set("cron", "")
+
+	w := postForm(r, "/ui/tasks", form)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	list := taskScheduleRows(t, r)
+	if assert.Len(t, list, 1) {
+		assert.Equal(t, "WAITING", list[0].State)
+	}
+	assert.Contains(t, w.Header().Get("HX-Trigger"), `"scheduled":""`,
+		"an unscheduled task should not flash a schedule message")
+}
+
+// POST /task/ treats an already-past notBefore as "run now"; through a
+// date picker that's almost always a mistake, so the form rejects it —
+// with a message the user can actually see (HX-Trigger, since htmx won't
+// swap a 4xx response body).
+func TestUI_SubmitTask_PastNotBeforeIsRejected(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	form := url.Values{}
+	form.Set("type", "echo_task")
+	form.Set("scheduleEnabled", "1")
+	form.Set("scheduleMode", "once")
+	form.Set("notBefore", time.Now().Add(-2*time.Hour).Format("2006-01-02T15:04"))
+
+	w := postForm(r, "/ui/tasks", form)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "in the past")
+	assert.Contains(t, w.Header().Get("HX-Trigger"), "task-form-error")
+
+	assert.Len(t, taskScheduleRows(t, r), 0, "a rejected submit must not create a task")
+}
+
+func TestUI_SubmitTask_InvalidCronIsRejected(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	form := url.Values{}
+	form.Set("type", "echo_task")
+	form.Set("scheduleEnabled", "1")
+	form.Set("scheduleMode", "repeating")
+	form.Set("cron", "not-a-cron")
+
+	w := postForm(r, "/ui/tasks", form)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid cron expression")
+	assert.Contains(t, w.Header().Get("HX-Trigger"), "task-form-error")
+	assert.Len(t, taskScheduleRows(t, r), 0)
+}
+
+// With no scheduleMode to disambiguate (a hand-rolled POST rather than the
+// form), both fields are passed through and the API's own mutual-exclusion
+// rule applies.
+func TestUI_SubmitTask_BothFieldsWithoutModeIsRejected(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	form := url.Values{}
+	form.Set("type", "echo_task")
+	form.Set("notBefore", "2035-01-01T00:00")
+	form.Set("cron", "*/5 * * * *")
+
+	w := postForm(r, "/ui/tasks", form)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "mutually exclusive")
+	assert.Len(t, taskScheduleRows(t, r), 0)
+}
+
+func TestUI_SubmitTask_UnknownScheduleModeIsRejected(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	form := url.Values{}
+	form.Set("type", "echo_task")
+	form.Set("scheduleMode", "sometimes")
+
+	w := postForm(r, "/ui/tasks", form)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "unknown schedule mode")
+}
+
+func TestUI_FormErrorPartial_RendersMessage(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/partials/form-error?error=start+time+is+in+the+past")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, "flash-error")
+	assert.Contains(t, body, `role="alert"`)
+	assert.Contains(t, body, "start time is in the past")
+
+	// No message → nothing rendered, so a later successful submit clears
+	// a stale error.
+	empty := getUI(r, "/ui/partials/form-error?error=")
+	assert.Equal(t, http.StatusOK, empty.Code)
+	assert.NotContains(t, empty.Body.String(), "flash-error")
+}
+
+// The scheduled flash rides the same follow-up request as the task-type
+// warnings; both can render at once.
+func TestUI_TaskTypeWarningsPartial_RendersScheduledFlash(t *testing.T) {
+	cleanup := setupDocsTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/partials/task-type-warnings?type=greet_task&scheduled=RECURRING+-+Every+5+minutes")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, `hx-swap-oob="innerHTML:#flash-area"`)
+	assert.Contains(t, body, "flash-success")
+	assert.Contains(t, body, "RECURRING - Every 5 minutes")
 }
 
 // ---------------------------------------------------------------------------

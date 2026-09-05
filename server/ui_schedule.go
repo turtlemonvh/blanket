@@ -30,7 +30,6 @@ useful without a second round trip.
 import (
 	"net/http"
 	"sort"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
@@ -394,38 +393,4 @@ func (s *ServerConfig) uiSeriesChangeSchedule(c *gin.Context) {
 			"cron": cronExpr,
 		})
 	})
-}
-
-// uiSchedulePreviewPartial renders the live "what does this cron mean"
-// preview under the schedule editor's input.
-//
-// TEMPORARY (turtlemonvh/blanket#97): the new-task form is growing a
-// shared schedule editor partial (ui/templates/schedule_editor.html) with
-// its own preview endpoint. Once that lands, delete this handler, its
-// route, and the editor block in series_schedule.html, and include the
-// shared partial instead — the two exist in parallel only because #97 and
-// #98 were built on separate branches.
-func (s *ServerConfig) uiSchedulePreviewPartial(c *gin.Context) {
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	expr := c.Query("cron")
-	data := gin.H{"Cron": expr}
-	if expr != "" {
-		desc, err := tasks.DescribeCron(expr)
-		if err != nil {
-			data["Error"] = err.Error()
-		} else {
-			data["Description"] = desc
-			if fires, err := tasks.NextCronFires(expr, time.Now(), 3); err == nil {
-				next := make([]string, 0, len(fires))
-				for _, f := range fires {
-					next = append(next, f.UTC().Format("2006/01/02 15:04:05"))
-				}
-				data["Next"] = next
-			}
-		}
-	}
-	t := mustParsePartial("schedule-preview", "schedule_preview.html")
-	if err := t.ExecuteTemplate(c.Writer, "schedule-preview", data); err != nil {
-		log.WithField("err", err).Warn("ui: render schedule-preview")
-	}
 }

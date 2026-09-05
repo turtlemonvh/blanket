@@ -413,3 +413,225 @@ test.describe('Worker detail page', () => {
     await expect(logPre).toBeVisible();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Scheduling section on the new-task form (turtlemonvh/blanket#97)
+// ---------------------------------------------------------------------------
+
+/** A local "YYYY-MM-DDTHH:mm" value, offsetMs from now — what an
+ *  <input type="datetime-local"> expects. */
+function datetimeLocalValue(offsetMs: number): string {
+  const d = new Date(Date.now() + offsetMs);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
+
+test.describe('Schedule a task from the new-task form', () => {
+  test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
+
+  test.beforeEach(async ({ request }) => {
+    await purgeTasks(request);
+  });
+
+  test.afterEach(async ({ request }) => {
+    await purgeTasks(request);
+  });
+
+  /** Open the tasks page with the New Task form expanded. */
+  async function openNewTaskForm(page: import('@playwright/test').Page) {
+    await page.goto('/ui/');
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await expect(page.getByLabel(/new task type/i)).toBeVisible();
+  }
+
+  test('the schedule section is hidden until "Schedule task?" is checked', async ({
+    page,
+  }) => {
+    await openNewTaskForm(page);
+
+    const scheduleToggle = page.getByLabel('Schedule task?');
+    await expect(scheduleToggle).toBeVisible();
+    await expect(scheduleToggle).not.toBeChecked();
+
+    // Nothing schedule-related is on screen yet.
+    await expect(page.getByRole('group', { name: /when should it run/i })).toBeHidden();
+    await expect(page.getByLabel('Start no earlier than')).toBeHidden();
+
+    await scheduleToggle.check();
+
+    await expect(page.getByRole('group', { name: /when should it run/i })).toBeVisible();
+    // "One time" is the default, so its field is the one showing.
+    await expect(page.getByLabel('One time', { exact: true })).toBeChecked();
+    await expect(page.getByLabel('Start no earlier than')).toBeVisible();
+    await expect(page.getByLabel('Repeat on this cron schedule')).toBeHidden();
+  });
+
+  test('the One time / Repeating radios swap which field is shown', async ({
+    page,
+  }) => {
+    await openNewTaskForm(page);
+    await page.getByLabel('Schedule task?').check();
+
+    await page.getByLabel('Repeating', { exact: true }).check();
+    await expect(page.getByLabel('Repeat on this cron schedule')).toBeVisible();
+    await expect(page.getByLabel('Start no earlier than')).toBeHidden();
+
+    await page.getByLabel('One time', { exact: true }).check();
+    await expect(page.getByLabel('Start no earlier than')).toBeVisible();
+    await expect(page.getByLabel('Repeat on this cron schedule')).toBeHidden();
+  });
+
+  test('typing a cron expression shows a live human-readable preview', async ({
+    page,
+  }) => {
+    await openNewTaskForm(page);
+    await page.getByLabel('Schedule task?').check();
+    await page.getByLabel('Repeating', { exact: true }).check();
+
+    const cron = page.getByLabel('Repeat on this cron schedule');
+    const preview = page.locator('#schedule-preview');
+    await expect(preview).toContainText(/type a cron expression/i);
+
+    // Type it like a user would: the preview is debounced off keyup.
+    await cron.pressSequentially('0 14 * * 2');
+    await expect(preview).toContainText(/Tuesday/i);
+    await expect(preview).toContainText(/02:00 PM/i);
+    // ... and lists the next fire times.
+    await expect(preview).toContainText(/Next:/);
+
+    // A bad expression reports the parser's complaint inline instead.
+    await cron.fill('');
+    await cron.pressSequentially('nope');
+    await expect(preview).toContainText(/invalid cron expression/i);
+  });
+
+  test('a one-time schedule creates a SCHEDULED task', async ({
+    page,
+    request,
+  }) => {
+    await openNewTaskForm(page);
+    await page.getByLabel(/new task type/i).selectOption({ label: 'echo_task' });
+
+    await page.getByLabel('Schedule task?').check();
+    await page
+      .getByLabel('Start no earlier than')
+      .fill(datetimeLocalValue(2 * 60 * 60 * 1000));
+    await page.getByRole('button', { name: /launch task/i }).click();
+
+    // The flash says the task is scheduled, with its friendly description.
+    const flash = page.getByRole('status');
+    await expect(flash).toContainText(/task scheduled/i);
+    await expect(flash).toContainText('SCHEDULED - Once, at');
+
+    // The row lands in state SCHEDULED, and its detail page agrees.
+    const res = await request.get('/task/');
+    const tasks = (await res.json()) as Array<{ id: string; state: string }>;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].state).toBe('SCHEDULED');
+
+    const row = page.getByRole('row').filter({ hasText: tasks[0].id.slice(0, 8) });
+    await expect(row.getByText('SCHEDULED')).toBeVisible();
+
+    await row.getByRole('link').first().click();
+    await expect(
+      page.getByRole('heading', { name: 'Task Detail', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'SCHEDULED', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'Scheduled For' })).toBeVisible();
+  });
+
+  test('a repeating schedule creates a RECURRING template', async ({
+    page,
+    request,
+  }) => {
+    await openNewTaskForm(page);
+    await page.getByLabel(/new task type/i).selectOption({ label: 'echo_task' });
+
+    await page.getByLabel('Schedule task?').check();
+    await page.getByLabel('Repeating', { exact: true }).check();
+    const cron = page.getByLabel('Repeat on this cron schedule');
+    await cron.pressSequentially('*/5 * * * *');
+    await expect(page.locator('#schedule-preview')).toContainText(
+      'Every 5 minutes',
+    );
+
+    await page.getByRole('button', { name: /launch task/i }).click();
+
+    const flash = page.getByRole('status');
+    await expect(flash).toContainText(/task scheduled/i);
+    await expect(flash).toContainText('RECURRING - Every 5 minutes');
+
+    const res = await request.get('/task/');
+    const tasks = (await res.json()) as Array<{
+      id: string;
+      state: string;
+      cronExpr: string;
+      scheduleDescription: string;
+    }>;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].state).toBe('RECURRING');
+    expect(tasks[0].cronExpr).toBe('*/5 * * * *');
+    expect(tasks[0].scheduleDescription).toBe('Every 5 minutes');
+
+    const row = page.getByRole('row').filter({ hasText: tasks[0].id.slice(0, 8) });
+    await expect(row.getByText('RECURRING')).toBeVisible();
+
+    await row.getByRole('link').first().click();
+    await expect(page.getByRole('cell', { name: 'RECURRING', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '*/5 * * * *' })).toBeVisible();
+  });
+
+  test('a start time in the past is rejected with a visible error', async ({
+    page,
+    request,
+  }) => {
+    await openNewTaskForm(page);
+    await page.getByLabel(/new task type/i).selectOption({ label: 'echo_task' });
+
+    await page.getByLabel('Schedule task?').check();
+    await page
+      .getByLabel('Start no earlier than')
+      .fill(datetimeLocalValue(-2 * 60 * 60 * 1000));
+    await page.getByRole('button', { name: /launch task/i }).click();
+
+    // The form stays open with the error next to the field it's about.
+    const error = page.locator('#task-form-error').getByRole('alert');
+    await expect(error).toContainText(/in the past/i);
+    await expect(page.getByLabel('Start no earlier than')).toBeVisible();
+
+    const res = await request.get('/task/');
+    expect(await res.json()).toHaveLength(0);
+  });
+
+  test('an unscheduled task still submits and runs right away', async ({
+    page,
+    request,
+  }) => {
+    await openNewTaskForm(page);
+    await page.getByLabel(/new task type/i).selectOption({ label: 'echo_task' });
+
+    // "Schedule task?" left unchecked — the fields are hidden, and their
+    // values (if any) must not reach the server.
+    await page.getByRole('button', { name: /launch task/i }).click();
+
+    // Wait for the swapped-in row rather than racing the POST.
+    await expect(
+      page.getByRole('cell', { name: 'echo_task' }).first(),
+    ).toBeVisible();
+
+    const res = await request.get('/task/');
+    const tasks = (await res.json()) as Array<{
+      state: string;
+      scheduleDescription: string;
+    }>;
+    expect(tasks).toHaveLength(1);
+    // It went straight onto the queue — no schedule of its own. (Asserted
+    // as "not scheduled" rather than "WAITING" so a worker draining the
+    // queue alongside the suite can't make this flaky.)
+    expect(['SCHEDULED', 'RECURRING']).not.toContain(tasks[0].state);
+    expect(tasks[0].scheduleDescription).toBe('');
+  });
+});

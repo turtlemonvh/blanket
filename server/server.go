@@ -130,13 +130,14 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/ui/partials/new-task", s.uiNewTaskPartial)
 	r.GET("/ui/partials/task-type-env", s.uiTaskTypeEnvPartial)
 	r.GET("/ui/partials/task-type-warnings", s.uiTaskTypeWarningsPartial)
+	r.GET("/ui/partials/schedule-preview", s.uiSchedulePreviewPartial)
+	r.GET("/ui/partials/form-error", s.uiFormErrorPartial)
 	r.GET("/ui/partials/custom-env-row", s.uiCustomEnvRowPartial)
 	r.GET("/ui/partials/new-worker", s.uiNewWorkerPartial)
 	r.GET("/ui/partials/blank", s.uiBlankPartial)
 	r.GET("/ui/partials/upcoming-onetime-rows", s.uiUpcomingOneTimeRowsPartial)
 	r.GET("/ui/partials/upcoming-series-rows", s.uiUpcomingSeriesRowsPartial)
-	r.GET("/ui/partials/series-schedule", s.uiSeriesSchedulePartial)   // ?id=<template id>
-	r.GET("/ui/partials/schedule-preview", s.uiSchedulePreviewPartial) // ?cron=<expr>; see #97
+	r.GET("/ui/partials/series-schedule", s.uiSeriesSchedulePartial) // ?id=<template id>
 	// Series lifecycle actions. Thin form-friendly wrappers over the same
 	// functions PUT /task/:id/{pause,resume,cancel,schedule} call, whose
 	// response is the re-rendered schedule block (inline error included)

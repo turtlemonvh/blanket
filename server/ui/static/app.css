@@ -203,3 +203,70 @@ tr:hover td { background: #fafbfc; }
 .series-link { font-size: 0.75rem; margin-top: 0.15rem; }
 .series-link a { color: var(--muted); text-decoration: none; }
 .series-link a:hover { color: var(--accent); text-decoration: underline; }
+
+/* --- Schedule editor (schedule_editor.html) -------------------------------
+ * Reveal/hide is CSS-only, driven by the "Schedule task?" checkbox and the
+ * one-time/repeating radios via :checked sibling rules, so the editor works
+ * before any script runs. The editor's script only mirrors this into the
+ * disabled state of the inputs, so the hidden half is never submitted.
+ */
+.schedule-editor { margin-bottom: 0.75rem; }
+.schedule-editor .field-help {
+  margin: 0.2rem 0 0;
+  font-size: 0.85rem;
+  max-width: 62ch;
+}
+.schedule-editor label { cursor: pointer; }
+
+.schedule-fields { display: none; }
+.schedule-toggle:checked ~ .schedule-fields,
+.schedule-editor.schedule-open .schedule-fields { display: block; }
+
+.schedule-modes {
+  margin: 0.6rem 0 0;
+  padding: 0.6rem 0.75rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.schedule-modes legend { padding: 0 0.35rem; font-weight: 600; }
+.schedule-modes > label { margin-right: 1rem; }
+
+.schedule-panel { display: none; margin-top: 0.75rem; }
+.schedule-mode-once:checked ~ .schedule-panel-once,
+.schedule-mode-repeating:checked ~ .schedule-panel-repeating { display: block; }
+.schedule-panel > label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+.schedule-panel input[type="text"] { min-width: 16rem; }
+.schedule-panel input[type="text"],
+.schedule-panel input[type="datetime-local"] {
+  font: inherit;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.schedule-preview {
+  margin-top: 0.5rem;
+  min-height: 1.25rem;
+  font-size: 0.9rem;
+}
+.schedule-preview .schedule-description { font-weight: 600; color: var(--ok); }
+.schedule-preview .schedule-next { display: block; margin-top: 0.15rem; }
+.schedule-preview .schedule-error { color: var(--danger); }
+
+/* Inline submit error inside the new-task form (see uiFormError). */
+.task-form-error:empty { display: none; }
+.task-form-error .flash { margin-top: 0.75rem; }
+
+.flash-error {
+  background: #fbe9e9;
+  border-color: #ecb9b9;
+  color: var(--danger);
+}
+.flash-success {
+  background: #e6f4ea;
+  border-color: #b2d8bf;
+  color: var(--ok);
+}
