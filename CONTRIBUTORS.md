@@ -187,6 +187,46 @@ curl -sSfL https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js \
     -o server/ui/static/htmx-sse.js
 ```
 
+### SSE and the back/forward cache
+
+`server/ui/static/sse-lifecycle.js` is **not** vendored — it's ours, and
+it is load-bearing. Don't delete it.
+
+Every UI page opens at least one SSE stream (`/ui/sse/tasks`,
+`/ui/sse/workers`, `/task/:id/log`, `/worker/:id/log`). Browsers keep a
+navigated-away page alive in the back/forward cache **with its
+`EventSource` connections still open**, so after a handful of tab
+switches the cached pages hold enough live sockets to exhaust Chrome's
+six-connections-per-host HTTP/1.1 limit; the page you just loaded then
+sits with its own stream and its htmx partial fetches `(pending)` until
+the browser evicts something. It looks exactly like a hung server (#103).
+
+The script closes each `[sse-connect]` element's stream on `pagehide`
+and reopens it on a `pageshow` with `event.persisted`, by firing
+`htmx:beforeCleanupElement` / `htmx:afterProcessNode` through
+`htmx.trigger` — the two events htmx's SSE extension already listens
+for, so the vendored `htmx-sse.js` stays untouched. It loads from
+`_layout.html` immediately after `htmx-sse.js`; both halves are asserted
+by `TestUI_Layout_LoadsSSELifecycleScript`.
+
+The server side of the same problem lives in `sseStream`
+(`server/ui.go`): it selects on `c.Request.Context().Done()` so a
+dropped client is noticed at once. gin's `c.Stream` only checks its
+client-gone channel *between* steps, so without that the handler would
+block in its keepalive wait for up to 30s after the browser hung up,
+holding a `CLOSE-WAIT` socket and a goroutine.
+
+Playwright can't reproduce the *hang* itself: it launches Chromium with
+`--disable-back-forward-cache`, and even with that switch dropped Chrome
+won't bfcache a page that has a CDP client attached. What
+`tests/e2e/specs/sse_bfcache.spec.ts` does instead is dispatch the
+`pagehide`/`pageshow` events by hand and assert the stream actually ends
+and is actually reopened — the contract the script exists to satisfy —
+plus a navigation-cycle smoke check. Verify the end-to-end symptom by
+hand in a real Chrome: switch tabs several times with DevTools' Network
+panel open and confirm nothing stays `(pending)`, and that `ss -tn |
+grep :8773` doesn't grow.
+
 ## Issue Workflow
 
 GitHub issues + `status:` labels are authoritative for what's actionable.

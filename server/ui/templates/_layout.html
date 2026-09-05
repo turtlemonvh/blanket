@@ -7,6 +7,9 @@
     <link rel="stylesheet" href="/ui/static/app.css">
     <script src="/ui/static/htmx.min.js"></script>
     <script src="/ui/static/htmx-sse.js"></script>
+    <!-- Closes SSE streams on pagehide / reopens on a bfcache restore. See
+         server/ui/static/sse-lifecycle.js and issue #103. -->
+    <script src="/ui/static/sse-lifecycle.js"></script>
 </head>
 <body>
     <nav class="topbar">

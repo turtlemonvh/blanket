@@ -24,6 +24,31 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+      // sse_bfcache.spec.ts wants the back/forward cache, which this
+      // project's default launch args disable. See the project below.
+      testIgnore: /sse_bfcache\.spec\.ts/,
+    },
+    {
+      // Playwright's default Chromium args include
+      // `--disable-back-forward-cache` ("avoids surprises like main request
+      // not being intercepted during page.goBack()"), so the bug in issue
+      // #103 — SSE streams kept alive by bfcached pages exhausting the
+      // per-host connection limit — has no chance of reproducing under the
+      // default project. This one drops that single switch and runs only the
+      // bfcache spec.
+      //
+      // Dropping the switch is necessary but not sufficient: Chrome still
+      // refuses to bfcache a page with a CDP client attached, so the spec
+      // runs as a navigation smoke check today and self-reports as such.
+      // See the header comment in specs/sse_bfcache.spec.ts.
+      name: 'chromium-bfcache',
+      testMatch: /sse_bfcache\.spec\.ts/,
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: {
+          ignoreDefaultArgs: ['--disable-back-forward-cache'],
+        },
+      },
     },
   ],
 
