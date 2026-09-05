@@ -50,6 +50,23 @@ type Task struct {
 	ExecEnv       map[string]string `json:"defaultEnv"`    // Combined with default env
 	Tags          []string          `json:"tags"`          // tags for capabilities of workers
 
+	// RunId is a fencing token for one execution attempt of this task
+	// (turtlemonvh/blanket#23 phase 1). The worker generates it
+	// immediately before cmd.Start() and sends it on every subsequent
+	// transition for that run (run / progress / finish); the server stores
+	// it on the first transition that carries one.
+	//
+	// It's what makes those transitions idempotent: a retry after a lost
+	// response carries the same token and is accepted as a no-op, while a
+	// token that doesn't match the stored one means two runners believe
+	// they own this task and is rejected with 409.
+	//
+	// An empty token — from a worker built before this field existed — is
+	// treated as legacy-permissive on the server side, so a mixed-version
+	// install keeps working. That leniency goes away with the schema bump
+	// in phase 4.
+	RunId string `json:"runId"`
+
 	// Scheduling (turtlemonvh/blanket#61). All additive: zero values
 	// (0, "", zero ObjectId) mean "no scheduling", so records written
 	// before this feature existed still load and behave exactly as

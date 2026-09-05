@@ -3,7 +3,9 @@ package bolt
 import (
 	"fmt"
 	"github.com/stretchr/testify/assert"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 	bolt "go.etcd.io/bbolt"
 	"io/ioutil"
@@ -196,3 +198,136 @@ func TestTasks(t *testing.T) {
 	// Add tasks of each type using tt.NewTask()
 }
 */
+
+// TestUpdateWorker_MergesServerOwnedFields is the regression test for the
+// live bug UpdateWorker's blind overwrite caused (turtlemonvh/blanket#23
+// phase 1): a worker re-registering silently undid a stopWorker, so a
+// worker an operator had just stopped carried on claiming tasks.
+//
+// A worker always registers itself with Stopped=false (see
+// WorkerConf.MustRegister), so the merge is what makes the stop stick.
+// The worker-owned fields in the same update must still land.
+func TestUpdateWorker_MergesServerOwnedFields(t *testing.T) {
+	DB, closefn := NewTestDB()
+	defer closefn()
+
+	w := &worker.WorkerConf{
+		Id:            objectid.NewObjectId(),
+		Tags:          []string{"exec:bash"},
+		Pid:           100,
+		CheckInterval: 2,
+	}
+	assert.NoError(t, DB.UpdateWorker(w))
+
+	stopped, err := DB.StopWorker(w.Id)
+	assert.NoError(t, err)
+	assert.True(t, stopped.Stopped)
+	assert.NotZero(t, stopped.LastHeardTs)
+
+	// The worker restarts (or just re-registers) and sends its own view of
+	// the record, which says Stopped=false and carries a new pid.
+	reregister := &worker.WorkerConf{
+		Id:            w.Id,
+		Tags:          []string{"exec:bash", "os:unix"},
+		Pid:           200,
+		Logfile:       "worker.200.log",
+		StartedTs:     time.Now().Unix(),
+		CheckInterval: 3,
+		Stopped:       false,
+		LastHeardTs:   0,
+	}
+	assert.NoError(t, DB.UpdateWorker(reregister))
+
+	fetched, err := DB.GetWorker(w.Id)
+	assert.NoError(t, err)
+
+	// Server-owned: unchanged by the worker's update.
+	assert.True(t, fetched.Stopped, "a worker re-registering must not undo a stopWorker")
+	assert.Equal(t, stopped.LastHeardTs, fetched.LastHeardTs)
+
+	// Worker-owned: taken from the update.
+	assert.Equal(t, 200, fetched.Pid)
+	assert.Equal(t, "worker.200.log", fetched.Logfile)
+	assert.Equal(t, []string{"exec:bash", "os:unix"}, fetched.Tags)
+	assert.Equal(t, 3.0, fetched.CheckInterval)
+	assert.Equal(t, reregister.StartedTs, fetched.StartedTs)
+
+	// And the caller's struct reflects what was actually stored.
+	assert.True(t, reregister.Stopped)
+}
+
+// TestStartWorker_ClearsStopped covers the server-side un-stop the merge
+// makes necessary: since a worker can no longer clear its own Stopped flag
+// by re-registering, PUT /worker/:id/restart has to do it explicitly.
+func TestStartWorker_ClearsStopped(t *testing.T) {
+	DB, closefn := NewTestDB()
+	defer closefn()
+
+	w := &worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}}
+	assert.NoError(t, DB.UpdateWorker(w))
+	_, err := DB.StopWorker(w.Id)
+	assert.NoError(t, err)
+
+	started, err := DB.StartWorker(w.Id)
+	assert.NoError(t, err)
+	assert.False(t, started.Stopped)
+	assert.NotZero(t, started.LastHeardTs)
+
+	fetched, err := DB.GetWorker(w.Id)
+	assert.NoError(t, err)
+	assert.False(t, fetched.Stopped)
+}
+
+// TestRunTask_IdempotentAndFenced exercises the RunId fencing token at the
+// database layer, where the HTTP handler's status mapping isn't in the way.
+func TestRunTask_IdempotentAndFenced(t *testing.T) {
+	DB, closefn := NewTestDB()
+	defer closefn()
+
+	tsk := &tasks.Task{Id: objectid.NewObjectId(), State: "CLAIMED"}
+	assert.NoError(t, DB.SaveTask(tsk))
+
+	assert.NoError(t, DB.RunTask(tsk.Id, &database.TaskRunConfig{RunId: "R1", Pid: 7, Timeout: 10}))
+
+	// Replay of the same transition: accepted, changes nothing.
+	assert.NoError(t, DB.RunTask(tsk.Id, &database.TaskRunConfig{RunId: "R1", Pid: 7, Timeout: 10}))
+
+	// A second runner: refused.
+	err := DB.RunTask(tsk.Id, &database.TaskRunConfig{RunId: "R2", Pid: 8, Timeout: 10})
+	assert.ErrorIs(t, err, database.ErrRunIdMismatch)
+
+	// A legacy worker with no token at all: permitted.
+	assert.NoError(t, DB.RunTask(tsk.Id, &database.TaskRunConfig{Pid: 7, Timeout: 10}))
+
+	got, err := DB.GetTask(tsk.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "RUNNING", got.State)
+	assert.Equal(t, "R1", got.RunId)
+	assert.Equal(t, 7, got.Pid)
+}
+
+// TestFinishTask_FirstTerminalStateWins pins the rule the worker's retry
+// loop depends on: once a task is terminal, a later finish is accepted as a
+// no-op instead of rejected, and the state already recorded is kept.
+func TestFinishTask_FirstTerminalStateWins(t *testing.T) {
+	DB, closefn := NewTestDB()
+	defer closefn()
+
+	tsk := &tasks.Task{Id: objectid.NewObjectId(), State: "CLAIMED"}
+	assert.NoError(t, DB.SaveTask(tsk))
+	assert.NoError(t, DB.RunTask(tsk.Id, &database.TaskRunConfig{RunId: "R1", Timeout: 10}))
+
+	// A user stops it.
+	assert.NoError(t, DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "STOPPED"}))
+
+	// The worker's killed child then reports ERROR for the same run.
+	assert.NoError(t, DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "ERROR", RunId: "R1"}))
+
+	got, err := DB.GetTask(tsk.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", got.State)
+
+	// But a different run still can't touch it.
+	err = DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "SUCCESS", RunId: "R2"})
+	assert.ErrorIs(t, err, database.ErrRunIdMismatch)
+}

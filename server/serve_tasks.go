@@ -88,7 +88,11 @@ func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.Objec
 	default:
 		return ErrTaskNotCancelable
 	}
-	if err := s.DB.FinishTask(taskId, "STOPPED"); err != nil {
+	// No RunId: this is a server-issued (user-initiated) transition, not a
+	// worker reporting on a run it owns. An empty token is legacy-
+	// permissive, so it applies regardless of which run is in flight —
+	// which is the intent: a user's STOPPED wins.
+	if err := s.DB.FinishTask(taskId, &database.TaskFinishConfig{State: "STOPPED"}); err != nil {
 		return err
 	}
 	s.TaskEvents.Notify()
@@ -299,10 +303,15 @@ func (s *ServerConfig) markTaskAsRunning(c *gin.Context) {
 		LastUpdatedTs: time.Now().Unix(),
 		Pid:           cast.ToInt(c.Query("pid")),
 		TypeDigest:    c.Query("typeDigest"),
+		RunId:         c.Query("runId"),
 	}
 	err = s.DB.RunTask(taskId, tc)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		// A replay of a transition already applied comes back as nil (see
+		// bolt's RunTask), so anything here is a real refusal: 404 for a
+		// missing task, 409 for a fencing/state conflict the caller must
+		// not retry, 500 otherwise.
+		c.String(statusForTransitionError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
 		return
 	}
 
@@ -367,12 +376,15 @@ func (s *ServerConfig) markTaskAsFinished(c *gin.Context) {
 		return
 	}
 
-	err = s.DB.FinishTask(taskId, newState)
+	err = s.DB.FinishTask(taskId, &database.TaskFinishConfig{
+		State: newState,
+		RunId: c.Query("runId"),
+	})
 	if err != nil {
-		// A missing task id maps to 404; any other FinishTask error (e.g. the
-		// task isn't in a state it can be finished from) keeps the historical
-		// 400.
-		c.String(statusForDBError(err, http.StatusBadRequest), MakeErrorString(err.Error()))
+		// A missing task id maps to 404 and a fencing-token conflict to 409;
+		// any other FinishTask error (e.g. the task isn't in a state it can
+		// be finished from) keeps the historical 400.
+		c.String(statusForTransitionError(err, http.StatusBadRequest), MakeErrorString(err.Error()))
 		return
 	}
 
@@ -408,6 +420,18 @@ func (s *ServerConfig) updateTaskProgress(c *gin.Context) {
 	if task.State != "RUNNING" {
 		errMsg := fmt.Sprintf("Cannot update progress on task '%s': task is in state '%s', not RUNNING", taskId.Hex(), task.State)
 		c.String(http.StatusBadRequest, MakeErrorString(errMsg))
+		return
+	}
+
+	// Progress accepts the same fencing token as run/finish
+	// (turtlemonvh/blanket#23 phase 1). Reporting progress for a run that
+	// no longer owns this task is a 409, so a stale runner can't paint over
+	// the live one's numbers. Callers that send no token — including task
+	// scripts using BLANKET_APP_TASK_ID, which have no way to know it — are
+	// unaffected: empty is legacy-permissive here as everywhere else.
+	if runId := c.Query("runId"); runId != "" && task.RunId != "" && runId != task.RunId {
+		errMsg := fmt.Sprintf("Cannot update progress on task '%s': it is running as '%s', caller claims '%s'", taskId.Hex(), task.RunId, runId)
+		c.String(http.StatusConflict, MakeErrorString(errMsg))
 		return
 	}
 

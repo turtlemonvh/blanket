@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
@@ -437,7 +438,7 @@ func TestMcpCancelTask_DeleteOnTerminalTask(t *testing.T) {
 
 	tsk, err := s.createTask(context.Background(), "echo_task", nil)
 	assert.NoError(t, err)
-	assert.NoError(t, s.DB.FinishTask(tsk.Id, "SUCCESS"))
+	assert.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "SUCCESS"}))
 
 	res, _, err := s.mcpCancelTask(context.Background(), nil, blanketCancelTaskArgs{Id: tsk.Id.Hex(), Delete: true})
 	assert.NoError(t, err)

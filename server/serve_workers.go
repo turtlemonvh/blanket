@@ -139,11 +139,17 @@ func (s *ServerConfig) restartWorker(c *gin.Context) {
 		return
 	}
 
-	w, err := s.DB.GetWorker(workerId)
+	// Clear Stopped server-side before relaunching. UpdateWorker merges at
+	// the field level now (turtlemonvh/blanket#23 phase 1) and Stopped is
+	// server-owned, so the relaunched process can no longer un-stop itself
+	// by re-registering — which is the whole point of that merge, and means
+	// restarting has to be an explicit act here.
+	w, err := s.DB.StartWorker(workerId)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
 		return
 	}
+	s.WorkerEvents.Notify()
 
 	s.launchWorker(c, &w)
 }
