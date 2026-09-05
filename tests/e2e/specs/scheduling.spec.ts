@@ -147,14 +147,27 @@ test.describe('Upcoming page', () => {
   }) => {
     acceptDialogs(page);
     const oneTimeId = await createScheduled(request, '2h');
+    const seriesId = await createSeries(request, '*/5 * * * *');
 
     await page.goto('/ui/upcoming');
     const row = rowFor(page, oneTimeId);
     await expect(row).toBeVisible();
+    await expect(rowFor(page, seriesId)).toBeVisible();
 
+    // Both tables share one SSE stream (turtlemonvh/blanket#103): cancelling
+    // the one-time task should still push a tasks-changed event that both
+    // tbodies react to, not just the one that changed.
+    const seriesRefetch = page.waitForResponse((res) =>
+      res.url().includes('/ui/partials/upcoming-series-rows'),
+    );
     await row.getByText('Cancel', { exact: true }).click();
 
     await expect(page.getByText('No one-time tasks scheduled.')).toBeVisible();
+    await seriesRefetch;
+    // The series section is unaffected by the one-time cancel but still
+    // reflects the shared stream firing.
+    await expect(rowFor(page, seriesId)).toBeVisible();
+
     const after = await (await request.get(`/task/${oneTimeId}`)).json();
     expect(after.state).toBe('STOPPED');
   });

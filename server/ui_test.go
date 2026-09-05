@@ -812,6 +812,29 @@ func TestUI_UpcomingPage_SplitsOneTimeFromSeries(t *testing.T) {
 	assert.Contains(t, body, "Every 5 minutes")
 }
 
+// TestUI_UpcomingPage_SingleSSEStream guards against regressing to the
+// original two-EventSource layout (turtlemonvh/blanket#103): Chrome keeps a
+// navigated-away page's SSE connections alive in its back/forward cache, so
+// a page opening two streams exhausts the six-connection-per-host limit
+// twice as fast as every other page in the app, which opens one. Both
+// tbodies must still refresh on the shared stream.
+func TestUI_UpcomingPage_SingleSSEStream(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := getUI(r, "/ui/upcoming")
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	assert.Equal(t, 1, strings.Count(body, "sse-connect="),
+		"Upcoming should open exactly one SSE stream shared by both tables")
+	assert.Equal(t, 2, strings.Count(body, `hx-trigger="sse:tasks-changed`),
+		"both the one-time and series tbodies should still refresh off the shared stream")
+}
+
 func TestUI_UpcomingPage_EmptyStates(t *testing.T) {
 	cleanup := setupTestTaskType(t)
 	defer cleanup()

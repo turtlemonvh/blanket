@@ -13,9 +13,18 @@ run but hasn't yet, split into the two things that behave differently.
 Both tables refresh on the same tasks-changed SSE event the Tasks list
 uses, so a fired series, a promoted one-shot, or a cancel from another tab
 updates this page without a reload.
+
+The stream is opened once here, on the section wrapping both tables,
+rather than once per table (turtlemonvh/blanket#103) — Chrome keeps a
+navigated-away page's EventSource connections alive in its
+back/forward cache, so per-page stream count directly drives how fast
+a few tab switches exhaust the browser's six-connection-per-host
+limit. htmx-sse's hx-trigger="sse:*" handling walks up from each
+tbody to the nearest ancestor holding the EventSource, so declaring
+sse-connect once here still reaches both tbodies below.
 */}}
 {{define "content"}}
-<section>
+<section hx-ext="sse" sse-connect="/ui/sse/tasks">
     <div class="list-header">
         <h2>Upcoming</h2>
         {{/*
@@ -35,7 +44,7 @@ updates this page without a reload.
     </p>
 
     <h3 id="one-time-heading">One-time</h3>
-    <table hx-ext="sse" sse-connect="/ui/sse/tasks" aria-labelledby="one-time-heading">
+    <table aria-labelledby="one-time-heading">
         <thead>
             <tr>
                 <th>#</th>
@@ -56,7 +65,7 @@ updates this page without a reload.
     </table>
 
     <h3 id="series-heading">Series</h3>
-    <table hx-ext="sse" sse-connect="/ui/sse/tasks" aria-labelledby="series-heading">
+    <table aria-labelledby="series-heading">
         <thead>
             <tr>
                 <th>#</th>
