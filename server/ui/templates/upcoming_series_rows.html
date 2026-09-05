@@ -1,0 +1,30 @@
+{{/*
+tbody rows for the Upcoming page's "Series" section: RECURRING (live) and
+PAUSED templates. Cancelled (STOPPED) templates are filtered out server
+side — see upcomingSeries in ui_schedule.go.
+
+A paused template's nextFireTs is frozen at whatever it was when it was
+paused (resume recomputes it), so showing it would be a lie; the row shows
+when it was paused instead.
+*/}}
+{{define "upcoming-series-rows"}}
+{{range $i, $s := .Series}}
+<tr>
+    <th scope="row">{{add $i 1}}</th>
+    <td><a href="/ui/tasks/{{$s.Id}}">{{shortId $s.Task.Id}}</a></td>
+    <td>{{$s.Task.TypeId}}</td>
+    <td>{{$s.Description}} <span class="muted"><code>{{$s.Task.CronExpr}}</code></span></td>
+    <td>
+        {{if $s.Live}}{{fmtTs $s.Task.NextFireTs}}
+        {{else}}<span class="muted">Paused {{fmtTs $s.Task.PausedTs}}</span>
+        {{end}}
+    </td>
+    <td><span class="badge state-{{$s.Task.State}}">{{$s.StatusLabel}}</span></td>
+    <td class="row-actions">
+        <a href="/ui/tasks/{{$s.Id}}">View series</a>
+    </td>
+</tr>
+{{else}}
+<tr><td colspan="7" class="muted">No scheduled series. Submit a task with a cron expression to create one.</td></tr>
+{{end}}
+{{end}}

@@ -86,7 +86,7 @@
         </thead>
         <tbody id="tasks-rows"
                hx-get="/ui/partials/tasks-rows"
-               hx-trigger="sse:tasks-changed"
+               hx-trigger="sse:tasks-changed, refresh-rows"
                hx-include="#task-filter"
                hx-target="this"
                hx-swap="innerHTML">

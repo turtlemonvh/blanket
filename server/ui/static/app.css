@@ -88,6 +88,7 @@ tr:hover td { background: #fafbfc; }
 }
 .badge.state-SCHEDULED { background: #f1edfa; color: #6c4bd1; border-color: #d3c5f0; }
 .badge.state-RECURRING { background: #f1edfa; color: #6c4bd1; border-color: #d3c5f0; }
+.badge.state-PAUSED   { background: #fff6e0; color: var(--warn); border-color: #ead59a; }
 .badge.state-WAITING  { background: #eef3fb; color: var(--accent); border-color: #c4d7ec; }
 .badge.state-CLAIMED  { background: #eef3fb; color: var(--accent); border-color: #c4d7ec; }
 .badge.state-RUNNING  { background: #fff6e0; color: var(--warn); border-color: #ead59a; }
@@ -132,6 +133,71 @@ tr:hover td { background: #fafbfc; }
   color: inherit;
   padding: 0.1rem 0.35rem;
 }
+
+/* ---------------------------------------------------------------------
+ * Scheduling UI (turtlemonvh/blanket#98): the series card, the series
+ * detail page's schedule block, and the compact series backlink on task
+ * rows. Same palette and border radii as the tables above — a card is
+ * just a panel-tinted box, not a new visual language.
+ * ------------------------------------------------------------------- */
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.card-head h3 { margin: 0; font-size: 1rem; }
+
+/* Two-column definition list: label in the muted colour, value beside it. */
+.card-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+.card-fields dt { color: var(--muted); }
+.card-fields dd { margin: 0; }
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+/* The series' "change the schedule" form. Its contents are the shared
+ * schedule-editor partial (schedule_editor.html), which brings its own
+ * rules below; this only rules the form off from the actions above it.
+ */
+.series-schedule-form {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+.series-schedule-form .card-actions { margin-top: 0.5rem; }
+.series-schedule-heading { margin: 0 0 0.5rem; font-size: 0.95rem; }
+
+.inline-error {
+  margin: 0 0 0.5rem;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+/* Compact "part of series …" backlink under a task row's id. */
+.series-link { font-size: 0.75rem; margin-top: 0.15rem; }
+.series-link a { color: var(--muted); text-decoration: none; }
+.series-link a:hover { color: var(--accent); text-decoration: underline; }
 
 /* --- Schedule editor (schedule_editor.html) -------------------------------
  * Reveal/hide is CSS-only, driven by the "Schedule task?" checkbox and the

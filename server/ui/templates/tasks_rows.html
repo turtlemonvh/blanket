@@ -1,8 +1,29 @@
+{{/*
+Row actions fire a "refresh-rows" event at the #tasks-rows tbody rather
+than issuing their own htmx.ajax GET: the tbody's own hx-get carries
+whatever narrowing applies where these rows are rendered (the Tasks page's
+filter form via hx-include, or ?parentId= on a series detail page's Past
+runs table), and re-fetching a bare /ui/partials/tasks-rows would silently
+throw that away.
+*/}}
 {{define "tasks-rows"}}
 {{range $i, $t := .Tasks}}
 <tr>
     <th scope="row">{{add $i 1}}</th>
-    <td><a href="/ui/tasks/{{hex $t.Id}}">{{shortId $t.Id}}</a></td>
+    <td>
+        <a href="/ui/tasks/{{hex $t.Id}}">{{shortId $t.Id}}</a>
+        {{/*
+        A run spawned by a scheduled series links back to it (#98). Skipped
+        when the list is already filtered to one series (the Past runs table
+        on the series detail page), where it would repeat on every row —
+        see HideSeriesLink in ui_schedule.go / uiTasksRowsPartial.
+        */}}
+        {{if and (not $.HideSeriesLink) (not $t.ParentId.IsZero)}}
+        <div class="series-link">
+            <a href="/ui/tasks/{{hex $t.ParentId}}">part of series {{shortId $t.ParentId}}</a>
+        </div>
+        {{end}}
+    </td>
     <td>{{$t.TypeId}}</td>
     <td>{{join $t.Tags ", "}}</td>
     <td>{{fmtTs $t.CreatedTs}}</td>
@@ -22,14 +43,14 @@
            hx-put="/task/{{hex $t.Id}}/cancel?force=true"
            hx-confirm="This task is RUNNING; cancelling will kill its process. Continue?"
            hx-swap="none"
-           hx-on::after-request="htmx.ajax('GET', '/ui/partials/tasks-rows', '#tasks-rows')">
+           hx-on::after-request="htmx.trigger('#tasks-rows', 'refresh-rows')">
             Cancel
         </a>
         {{else}}
         <a class="danger"
            hx-put="/task/{{hex $t.Id}}/cancel"
            hx-swap="none"
-           hx-on::after-request="htmx.ajax('GET', '/ui/partials/tasks-rows', '#tasks-rows')">
+           hx-on::after-request="htmx.trigger('#tasks-rows', 'refresh-rows')">
             Cancel
         </a>
         {{end}}
@@ -38,7 +59,7 @@
         <a class="danger"
            hx-delete="/task/{{hex $t.Id}}"
            hx-swap="none"
-           hx-on::after-request="htmx.ajax('GET', '/ui/partials/tasks-rows', '#tasks-rows')">
+           hx-on::after-request="htmx.trigger('#tasks-rows', 'refresh-rows')">
             Delete
         </a>
         {{end}}
