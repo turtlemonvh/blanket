@@ -949,9 +949,29 @@ func (s *ServerConfig) renderUI(c *gin.Context, t *template.Template, data gin.H
 	}
 }
 
+// sseKeepaliveInterval is how long an idle SSE stream waits before writing a
+// comment line to keep intermediaries from timing the connection out.
+const sseKeepaliveInterval = 30 * time.Second
+
 func (s *ServerConfig) sseStream(c *gin.Context, hub *EventHub, eventName string) {
 	ch := hub.Subscribe()
 	defer hub.Unsubscribe(ch)
+
+	// One ticker for the whole stream rather than a fresh time.After per
+	// loop iteration: each time.After allocates a timer that stays on the
+	// runtime heap until it fires, so a busy stream accumulates up to 30s
+	// worth of dead timers.
+	keepalive := time.NewTicker(sseKeepaliveInterval)
+	defer keepalive.Stop()
+
+	// Cancelled as soon as the client's connection goes away. gin's
+	// c.Stream only checks its client-gone channel *between* steps, so
+	// without this the handler would sit in the select below for up to a
+	// full keepalive interval after the browser closed the EventSource --
+	// holding a CLOSE-WAIT socket and a goroutine the whole time. That
+	// matters because browsers close these streams often: see issue #103
+	// and server/ui/static/sse-lifecycle.js.
+	done := c.Request.Context().Done()
 
 	seq := 0
 	send := func(w io.Writer) {
@@ -970,9 +990,11 @@ func (s *ServerConfig) sseStream(c *gin.Context, hub *EventHub, eventName string
 			return true
 		}
 		select {
+		case <-done:
+			return false
 		case <-ch:
 			send(w)
-		case <-time.After(30 * time.Second):
+		case <-keepalive.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 		}
 		return true
