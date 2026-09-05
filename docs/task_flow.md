@@ -96,6 +96,16 @@ Three consequences worth noting:
   where the process was killed (`STOPPED`, `TIMEDOUT`) leave it `null` —
   there is no exit status of the task's own to report.
 
+Adding `&stream` (or opening `GET /task/:id/log` with
+`Accept: application/x-ndjson`) attaches the same loop to the same
+transitions and reports each one as it is observed, rather than only the
+last: one `state` event per transition, `log` events once the task
+reaches `CLAIMED` and its log files exist, and a terminal `result` event
+carrying the completion payload. It observes the state machine; it does
+not change it. See
+[api.md](api.md#streaming-submission-post-taskwaitstream) for the event
+schema.
+
 ### Scheduling: `scheduledTs` / recurring tasks (turtlemonvh/blanket#61)
 
 By default a submitted task is immediately eligible to be claimed
