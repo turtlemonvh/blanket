@@ -18,7 +18,9 @@
 //   - PUT /task/:id/progress (missing task): TestUpdateProgress_MissingTask
 //   - PUT /task/:id/progress (wrong state): TestUpdateProgress_WrongState
 //   - PUT /task/:id/finish: TestFinishTask_Valid, TestFinishTask_MissingTask,
-//     TestFinishTask_WrongState, TestFinishTask_InvalidState
+//     TestFinishTask_WrongState, TestFinishTask_InvalidState,
+//     TestFinishTask_InvalidExitCode (serve_sync_test.go)
+//   - POST /task/?wait (synchronous submission): server/serve_sync_test.go
 //   - POST /task/claim/:workerid edges: TestClaim_MissingWorker,
 //     TestClaim_NoMatchingTask, TestClaim_DeletedTaskDoesNotPanic
 //   - claim-task happy path: covered by worker integration test TestProcessOne
@@ -48,6 +50,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
@@ -428,7 +431,7 @@ func TestCancelTaskById_AlreadyTerminal(t *testing.T) {
 
 	tsk, err := s.createTask(context.Background(), "echo_task", nil)
 	assert.NoError(t, err)
-	assert.NoError(t, s.DB.FinishTask(tsk.Id, "SUCCESS"))
+	assert.NoError(t, s.DB.FinishTask(tsk.Id, database.FinishState("SUCCESS")))
 
 	err = s.cancelTaskById(context.Background(), tsk.Id, false)
 	assert.ErrorIs(t, err, ErrTaskNotCancelable)

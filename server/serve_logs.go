@@ -106,9 +106,18 @@ func (s *ServerConfig) streamLog(c *gin.Context, sub *tailed_file.TailedFileSubs
 // tailLines reads the last n lines from a file. Returns an empty string if
 // the file doesn't exist or is empty.
 func tailLines(filepath string, n int) (string, error) {
+	content, _, err := tailLinesTruncated(filepath, n)
+	return content, err
+}
+
+// tailLinesTruncated is tailLines plus a flag saying whether anything was
+// dropped off the front — the synchronous completion payload reports
+// stdoutTruncated / stderrTruncated so a caller can tell "that's all the
+// output" from "that's the tail of the output" (turtlemonvh/blanket#27).
+func tailLinesTruncated(filepath string, n int) (string, bool, error) {
 	f, err := os.Open(filepath)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer f.Close()
 
@@ -118,13 +127,17 @@ func tailLines(filepath string, n int) (string, error) {
 		lines = append(lines, scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
-		return "", err
+		return "", false, err
 	}
 
-	if len(lines) > n {
+	truncated := len(lines) > n
+	if truncated {
 		lines = lines[len(lines)-n:]
 	}
-	return strings.Join(lines, "\n") + "\n", nil
+	if len(lines) == 0 {
+		return "", false, nil
+	}
+	return strings.Join(lines, "\n") + "\n", truncated, nil
 }
 
 func (s *ServerConfig) tailTaskLog(c *gin.Context) {

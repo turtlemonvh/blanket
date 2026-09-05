@@ -56,6 +56,41 @@ $ blanket submit -t echo_task -e '{"GREETING": "hi"}' -q
 69ded2adce42aa8a11ac9de0
 ```
 
+### Waiting for the result (`?wait`)
+
+Submitting normally returns as soon as the task is queued, and you poll
+`GET /task/:id` to find out how it went. For a task that finishes in a
+couple of seconds, `?wait` collapses that into one call: it blocks until
+the task reaches a terminal state and returns its state, exit code,
+output, and parsed result artifact together.
+
+```bash
+# Block up to the default 30s
+curl -s -X POST 'localhost:8773/task/?wait' -d '{"type": "echo_task"}'
+
+# Block up to 60s, and let curl --fail notice a failed task (502)
+curl -sf -X POST 'localhost:8773/task/?wait=60s&fail_on_error=true' \
+    -d '{"type": "echo_task"}'
+
+# Just the exit code
+curl -s -X POST 'localhost:8773/task/?wait=60s' \
+    -d '{"type": "echo_task"}' | jq -r '.task.exitCode'
+```
+
+If the wait runs out the response is a **504** carrying the task id and a
+url to poll — the task itself is unaffected and keeps running. A wait
+longer than `tasks.sync.maxWait` (default 300s) is rejected with a 400
+rather than silently clamped. A task type can declare a
+[`result_file`](task_type_definitions.md#result_file) to have a JSON
+artifact parsed into the response's `result` field. See
+[api.md](api.md#synchronous-submission-post-taskwait) for the full
+payload, the response table, and the `tasks.sync.*` config keys.
+
+Two caveats: workers poll for work, so even a trivial task takes roughly
+2-4 seconds of wall clock; and because the wait holds a connection open
+on an unauthenticated endpoint, `tasks.sync.maxWait` is worth lowering if
+the server is reachable beyond a trusted network.
+
 ## Scheduling tasks
 
 Delay a one-shot task, or make it recurring, with `notBefore` / `cron`

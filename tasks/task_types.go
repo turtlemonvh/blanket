@@ -23,6 +23,12 @@ const (
 
 var validConfigfileName = regexp.MustCompile(`^\w+\.toml$`)
 
+// windowsDrivePrefix matches an absolute Windows path by its drive letter
+// ("C:\results\out.json", "c:/results/out.json"). Used by
+// CleanResultFile; see the comment there for why filepath.VolumeName
+// isn't enough.
+var windowsDrivePrefix = regexp.MustCompile(`^[A-Za-z]:`)
+
 // Task types are just a load of configuration loaded with viper with a few extra methods
 type TaskType struct {
 	ConfigFile        string // path to TOML config file on disk
@@ -205,7 +211,56 @@ func ReadTaskType(configFile io.Reader) (TaskType, error) {
 		return tt, fmt.Errorf("TaskType config file is missing required field 'command'.")
 	}
 
+	// result_file is joined to a server-controlled directory at read time,
+	// so an escaping or absolute value is rejected here, at load: a task
+	// type that declares one never reaches the serving path at all.
+	if _, err := CleanResultFile(tt.Config.GetString("result_file")); err != nil {
+		return tt, err
+	}
+
 	return tt, nil
+}
+
+// CleanResultFile validates a task type's `result_file` value and returns
+// it as a cleaned, slash-separated path relative to the task's ResultDir.
+// An empty value is valid and yields "" (the type declares no result
+// artifact).
+//
+// The value is config-supplied but ends up joined to a server-controlled
+// directory, so it's treated as untrusted input: absolute paths, Windows
+// drive/UNC paths, and anything that still escapes the directory after
+// cleaning are rejected. Called both at task-type load time
+// (ReadTaskType) and again at read time (the server's result reader), so
+// a type loaded through some other path can't skip the check.
+func CleanResultFile(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+
+	// Normalize separators first so a Windows-style value is checked the
+	// same way on every platform. The drive-letter test is explicit
+	// rather than filepath.VolumeName, which only recognizes "C:\..." on
+	// Windows -- a task type is portable config and the same file may
+	// well be validated on Linux and run on Windows.
+	slashed := strings.ReplaceAll(raw, `\`, "/")
+	if strings.HasPrefix(slashed, "/") || windowsDrivePrefix.MatchString(raw) {
+		return "", fmt.Errorf("result_file %q must be a relative path inside the task's result directory, not an absolute path", raw)
+	}
+
+	cleaned := path.Clean(slashed)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", fmt.Errorf("result_file %q escapes the task's result directory", raw)
+	}
+
+	return cleaned, nil
+}
+
+// ResultFile returns the cleaned `result_file` declared by this task type,
+// or "" if it declares none. The error case can only be reached by a type
+// that bypassed ReadTaskType's load-time validation.
+func (t *TaskType) ResultFile() (string, error) {
+	return CleanResultFile(t.Config.GetString("result_file"))
 }
 
 func (t *TaskType) String() string {

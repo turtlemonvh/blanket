@@ -3,7 +3,9 @@ package bolt
 import (
 	"fmt"
 	"github.com/stretchr/testify/assert"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 	bolt "go.etcd.io/bbolt"
 	"io/ioutil"
@@ -183,6 +185,64 @@ func TestGetTask_OldFormatRecordStillLoads(t *testing.T) {
 	assert.Equal(t, "", task.CronExpr)
 	assert.Equal(t, int64(0), task.NextFireTs)
 	assert.True(t, task.ParentId.IsZero())
+	// exitCode is likewise additive: a record written before the field
+	// existed decodes with nil, no migration needed
+	// (turtlemonvh/blanket#27).
+	assert.Nil(t, task.ExitCode)
+}
+
+// TestFinishTask_ExitCode covers the FinishTask(taskId,
+// *TaskFinishConfig) contract (turtlemonvh/blanket#27): a supplied exit
+// code is stored, and a nil one leaves whatever is there alone rather
+// than clearing it -- a cancel has no process to report on.
+func TestFinishTask_ExitCode(t *testing.T) {
+	DB, closefn := NewTestDB()
+	defer closefn()
+
+	newWaitingTask := func() objectid.ObjectId {
+		tsk := tasks.Task{
+			Id:        objectid.NewObjectId(),
+			TypeId:    "echo_task",
+			State:     "WAITING",
+			CreatedTs: time.Now().Unix(),
+		}
+		assert.NoError(t, DB.SaveTask(&tsk))
+		return tsk.Id
+	}
+
+	// A supplied exit code is recorded alongside the terminal state.
+	code := 3
+	withCode := newWaitingTask()
+	assert.NoError(t, DB.FinishTask(withCode, &database.TaskFinishConfig{NewState: "ERROR", ExitCode: &code}))
+	stored, err := DB.GetTask(withCode)
+	assert.NoError(t, err)
+	assert.Equal(t, "ERROR", stored.State)
+	if assert.NotNil(t, stored.ExitCode) {
+		assert.Equal(t, 3, *stored.ExitCode)
+	}
+
+	// No exit code supplied: the field stays nil, and the state change
+	// still lands.
+	withoutCode := newWaitingTask()
+	assert.NoError(t, DB.FinishTask(withoutCode, database.FinishState("STOPPED")))
+	stored, err = DB.GetTask(withoutCode)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", stored.State)
+	assert.Nil(t, stored.ExitCode)
+
+	// SUCCESS still forces progress to 100.
+	zero := 0
+	success := newWaitingTask()
+	assert.NoError(t, DB.FinishTask(success, &database.TaskFinishConfig{NewState: "SUCCESS", ExitCode: &zero}))
+	stored, err = DB.GetTask(success)
+	assert.NoError(t, err)
+	assert.Equal(t, 100, stored.Progress)
+	if assert.NotNil(t, stored.ExitCode) {
+		assert.Equal(t, 0, *stored.ExitCode)
+	}
+
+	// A task not in a finishable state is still rejected.
+	assert.Error(t, DB.FinishTask(success, database.FinishState("ERROR")))
 }
 
 /*

@@ -428,7 +428,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("Error starting task execution")
-		terr := tasks.MarkAsFinished(t, "ERROR")
+		terr := tasks.MarkAsFinished(t, "ERROR", nil)
 		if terr != nil {
 			log.WithFields(log.Fields{
 				"err":    terr.Error(),
@@ -518,7 +518,10 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 				// Ran out of time
 				// Kill process and return with error
 				loopTimeout.Stop()
-				err = tasks.MarkAsFinished(t, "TIMEDOUT")
+				// No exit code here: the process is about to be killed,
+				// so whatever cmd.Wait() reports is a signal death rather
+				// than the task's own status.
+				err = tasks.MarkAsFinished(t, "TIMEDOUT", nil)
 				if err != nil {
 					log.WithFields(log.Fields{
 						"err":    err.Error(),
@@ -551,12 +554,14 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	}()
 
 	err = cmd.Wait()
+	exitCode := processExitCode(cmd)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"err":    err.Error(),
-			"taskId": t.Id,
+			"err":      err.Error(),
+			"taskId":   t.Id,
+			"exitCode": exitCode,
 		}).Error("problems finishing task execution")
-		terr := tasks.MarkAsFinished(t, "ERROR")
+		terr := tasks.MarkAsFinished(t, "ERROR", exitCode)
 		if terr != nil {
 			log.WithFields(log.Fields{
 				"err":    terr.Error(),
@@ -567,7 +572,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		return err
 	}
 
-	err = tasks.MarkAsFinished(t, "SUCCESS")
+	err = tasks.MarkAsFinished(t, "SUCCESS", exitCode)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err":    err.Error(),
@@ -576,6 +581,27 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	}
 
 	return err
+}
+
+// processExitCode reads the exit status of a finished command, for
+// reporting back to the server on PUT /task/:id/finish?exitCode=N
+// (turtlemonvh/blanket#27).
+//
+// Returns nil rather than a number whenever there is no real exit status
+// to report: the process never started (ProcessState is nil), or it was
+// terminated by a signal, which os.ProcessState.ExitCode() reports as -1.
+// A killed task (STOPPED / TIMEDOUT) therefore reports exitCode: null
+// instead of a made-up -1, keeping "no exit code" and "exited 0"
+// distinguishable at the API.
+func processExitCode(cmd *exec.Cmd) *int {
+	if cmd == nil || cmd.ProcessState == nil {
+		return nil
+	}
+	code := cmd.ProcessState.ExitCode()
+	if code < 0 {
+		return nil
+	}
+	return &code
 }
 
 // Create the execution directory for a task

@@ -38,6 +38,7 @@ var CheckDescriptions = map[string]string{
 	"006": "description is present and non-empty",
 	"007": "documentation is present and non-empty",
 	"008": "declared input count is in the healthy range (2-5)",
+	"009": "result_file is a relative path contained in the result dir",
 	"010": "tag is a near-miss (edit distance <=2) of a known tag",
 	"011": "unnamespaced tag has a namespaced value-match (e.g. bash -> exec:bash)",
 	"012": "tag is new: not declared anywhere, not used by any other type (opt-in)",
@@ -159,6 +160,18 @@ func ValidateTaskType(tt *TaskType, loadErr error) []Finding {
 			Type: name, Code: "008", Level: LevelWarn,
 			Message:    fmt.Sprintf("%d declared inputs is more than the healthy range (2-5)", n),
 			Suggestion: "consider whether some of these could be fixed defaults instead",
+		})
+	}
+
+	// 009: result_file is a relative path contained in the result dir.
+	// Error, not warning: an invalid value makes the whole type
+	// unloadable (ReadTaskType rejects it), so the type isn't servable
+	// until it's fixed.
+	if _, err := CleanResultFile(tt.Config.GetString("result_file")); err != nil {
+		findings = append(findings, Finding{
+			Type: name, Code: "009", Level: LevelError,
+			Message:    err.Error(),
+			Suggestion: "use a path relative to the task's result directory, e.g. result_file = \"result.json\"",
 		})
 	}
 
