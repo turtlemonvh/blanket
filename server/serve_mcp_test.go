@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/viper"
@@ -562,4 +563,84 @@ func TestToolListFitsContextBudget(t *testing.T) {
 	t.Logf("tools/list (%d tools) + Instructions: %d characters (budget: %d)", len(res.Tools), total, mcpContextBudgetChars)
 	assert.LessOrEqual(t, total, mcpContextBudgetChars,
 		"tools/list + Instructions exceeds the %d-character budget; see docs/mcp.md's levers (trim jsonschema descriptions, shorten tool descriptions, move prose into blanket_docs)", mcpContextBudgetChars)
+}
+
+// --- blanket_run_task (turtlemonvh/blanket#27) ---
+
+// driveTaskToCompletion stands in for the worker: it waits for the task
+// the tool under test just enqueued, writes the log files a real run
+// would have produced, and finishes it.
+func driveTaskToCompletion(t *testing.T, s *ServerConfig, state string, exitCode int, stdout, stderr string) chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tsk := awaitTask(t, s)
+		writeTaskLogs(t, tsk, stdout, stderr)
+		code := exitCode
+		if err := s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{NewState: state, ExitCode: &code}); err != nil {
+			t.Errorf("could not finish task: %v", err)
+			return
+		}
+		s.TaskEvents.Notify()
+	}()
+	return done
+}
+
+// TestMcpRunTask_ReturnsCompletion: the point of the second tool is that
+// one call gives the agent state, exit code and output, where
+// blanket_submit_task followed by blanket_tasks would be two.
+func TestMcpRunTask_ReturnsCompletion(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	done := driveTaskToCompletion(t, s, "ERROR", 3, "hello world\n", "a warning\n")
+	res, _, err := s.mcpRunTask(context.Background(), nil, blanketRunTaskArgs{Type: "echo_task", WaitSeconds: 20})
+	<-done
+
+	assert.NoError(t, err)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "type: echo_task")
+	assert.Contains(t, text, "state: ERROR")
+	assert.Contains(t, text, "exitCode: 3")
+	assert.Contains(t, text, "hello world")
+	assert.Contains(t, text, "a warning")
+
+	// And it released its wait subscription.
+	assert.Equal(t, 0, s.TaskEvents.SubscriberCount())
+}
+
+// TestMcpRunTask_WaitClampedAndTimesOut: nothing will ever claim this
+// task, and waitSeconds is far over the server's cap -- so the tool must
+// come back after the cap rather than after the number the model asked
+// for, and say the task is still running.
+func TestMcpRunTask_WaitClampedAndTimesOut(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	viper.Set("tasks.sync.maxWait", "1s")
+	defer viper.Set("tasks.sync.maxWait", nil)
+
+	start := time.Now()
+	res, _, err := s.mcpRunTask(context.Background(), nil, blanketRunTaskArgs{Type: "echo_task", WaitSeconds: 9999})
+	elapsed := time.Since(start)
+
+	assert.NoError(t, err)
+	assert.Less(t, elapsed, 30*time.Second, "waitSeconds should have been clamped to tasks.sync.maxWait")
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "did not finish within 1s")
+	assert.Contains(t, text, "state: WAITING")
+	assert.Equal(t, 0, s.TaskEvents.SubscriberCount())
+}
+
+func TestMcpRunTask_UnknownType(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpRunTask(context.Background(), nil, blanketRunTaskArgs{Type: "nope"})
+	assert.Error(t, err)
+	assert.Equal(t, 0, s.TaskEvents.SubscriberCount(), "a rejected run must not leak a subscription")
 }

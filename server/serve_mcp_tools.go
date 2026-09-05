@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -312,6 +313,114 @@ func (s *ServerConfig) mcpSubmitTask(ctx context.Context, req *mcp.CallToolReque
 		msg += fmt.Sprintf("; next fire: %s", time.Unix(t.NextFireTs, 0).Local().Format(time.RFC3339))
 	}
 	return textResult(msg)
+}
+
+type blanketRunTaskArgs struct {
+	Type        string            `json:"type" jsonschema:"task type name"`
+	Env         map[string]string `json:"env,omitempty" jsonschema:"env vars for the task"`
+	WaitSeconds int               `json:"waitSeconds,omitempty" jsonschema:"seconds to wait; capped by the server"`
+}
+
+// mcpRunTask is blanket_submit_task's synchronous sibling: submit, wait
+// for a terminal state, and hand back state, exit code, output and the
+// parsed result artifact in one tool result (turtlemonvh/blanket#27).
+//
+// A second tool rather than a flag on the existing one, because model
+// tool selection is driven by name and description: "run this and give
+// me the output" and "queue this and don't wait" are different
+// intentions, and letting the model pick a tool expresses that more
+// reliably than hoping it sets a boolean. blanket_submit_task's contract
+// is untouched.
+//
+// Two deliberate differences from POST /task/?wait:
+//
+//   - waitSeconds over tasks.sync.maxWait is clamped, with a note in the
+//     result, where the REST endpoint answers 400. A model can't cheaply
+//     retry a rejected call, and the tool's own description states the
+//     cap, so clamping loses nothing a caller believed.
+//   - the output tails are cut to mcp.maxLogLines (via clampLogLines),
+//     not tasks.sync.maxLogLines. A tool result goes straight into a
+//     context window; 200 lines of each stream is a lot of it.
+//
+// No notBefore/cron: waiting on a task scheduled for later, or on a
+// recurring template that never runs itself, is a guaranteed timeout.
+// Those stay on blanket_submit_task.
+func (s *ServerConfig) mcpRunTask(ctx context.Context, req *mcp.CallToolRequest, args blanketRunTaskArgs) (*mcp.CallToolResult, any, error) {
+	wait := syncDefaultWait()
+	clamped := false
+	if args.WaitSeconds > 0 {
+		wait = time.Duration(args.WaitSeconds) * time.Second
+		if max := syncMaxWait(); wait > max {
+			wait, clamped = max, true
+		}
+	}
+
+	t, err := s.newTaskForType(args.Type, args.Env)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Subscribe before enqueueing so a fast task can't finish in the gap.
+	sub := s.TaskEvents.Subscribe()
+	defer s.TaskEvents.Unsubscribe(sub)
+
+	if err := s.enqueueTask(ctx, &t); err != nil {
+		return nil, nil, err
+	}
+
+	finished, outcome, canceled := s.waitForTerminalState(ctx, sub, t.Id, wait)
+	if canceled {
+		return nil, nil, ctx.Err()
+	}
+
+	var b strings.Builder
+	if outcome == WaitOutcomeTimeout {
+		fmt.Fprintf(&b, "task %s (type=%s) did not finish within %s; it is still running -- check it with blanket_tasks(id=\"%s\")\n",
+			t.Id.Hex(), t.TypeId, wait, t.Id.Hex())
+		fmt.Fprintf(&b, "state: %s\n", finished.State)
+		return textResult(b.String())
+	}
+
+	payload := s.buildCompletionPayload(finished, outcome)
+	logLines := clampLogLines(0)
+
+	fmt.Fprintf(&b, "id: %s\n", payload.Task.Id.Hex())
+	fmt.Fprintf(&b, "type: %s\n", payload.Task.TypeId)
+	fmt.Fprintf(&b, "state: %s\n", payload.Task.State)
+	if payload.Task.ExitCode != nil {
+		fmt.Fprintf(&b, "exitCode: %d\n", *payload.Task.ExitCode)
+	} else {
+		fmt.Fprintf(&b, "exitCode: unknown (killed by a signal, or never started)\n")
+	}
+	if clamped {
+		fmt.Fprintf(&b, "note: waitSeconds was clamped to the server's tasks.sync.maxWait of %s\n", wait)
+	}
+	if payload.Result != nil {
+		if encoded, err := json.Marshal(payload.Result); err == nil {
+			fmt.Fprintf(&b, "result: %s\n", string(encoded))
+		}
+	}
+	if payload.ResultError != nil {
+		fmt.Fprintf(&b, "resultError: %s\n", *payload.ResultError)
+	}
+	fmt.Fprintf(&b, "\n--- stdout (last %d lines) ---\n%s", logLines, lastNLines(payload.Stdout, logLines))
+	fmt.Fprintf(&b, "\n--- stderr (last %d lines) ---\n%s", logLines, lastNLines(payload.Stderr, logLines))
+	return textResult(b.String())
+}
+
+// lastNLines keeps the final n lines of an already-tailed block of
+// output. The completion payload is cut to tasks.sync.maxLogLines, which
+// is a server-side sanity bound; this is the tighter context-window
+// bound an MCP result wants on top of it.
+func lastNLines(s string, n int) string {
+	if s == "" || n <= 0 {
+		return s
+	}
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[len(lines)-n:], "\n") + "\n"
 }
 
 type blanketLaunchWorkerArgs struct {

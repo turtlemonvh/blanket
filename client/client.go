@@ -116,7 +116,15 @@ func SubmitTaskWithOptions(taskType string, env map[string]interface{}, port int
 
 	body := make(map[string]interface{})
 	body["type"] = taskType
-	body["environment"] = env
+	// An empty environment is omitted rather than sent as {}: POST /task/
+	// rejects a present-but-empty "environment" as malformed, so sending
+	// one made `blanket submit -t x` (with no -e) fail against every task
+	// type that has no required env -- silently, because the 400 body
+	// unmarshals into a zero Task below. See the FIXME at the end of this
+	// function; surfacing non-2xx properly is its own change.
+	if len(env) > 0 {
+		body["environment"] = env
+	}
 	if opts.NotBefore != "" {
 		body["notBefore"] = opts.NotBefore
 	}
