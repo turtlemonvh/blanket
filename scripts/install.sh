@@ -23,6 +23,14 @@ set -e
 #   SKILLS_SRC     — local directory containing a blanket-task-type/
 #                    subdirectory with SKILL.md, copied instead of
 #                    downloading it from GitHub (offline installs)
+#   INSTALL_AUTOSTART — 1 to register blanket as a background service
+#                    (starts on login/boot) without asking, 0 to skip
+#                    without asking. Unset means "ask, but only if
+#                    there's a real terminal to ask on" — same rule as
+#                    INSTALL_SKILLS. Off by default. See docs/autostart.md;
+#                    the registration itself is `blanket service install`
+#                    (`blanket service uninstall` / `blanket uninstall`
+#                    removes it).
 #   INSTALL_SHELL_INTEGRATION — 1 to add INSTALL_DIR to PATH and source
 #                    shell completion via a marked block in the user's
 #                    shell rc file, without asking; 0 to skip without
@@ -242,6 +250,43 @@ if [ -n "$SKILL_DEST_ROOT" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Autostart on login/boot (issue #59) — optional background-service
+# registration so blanket starts automatically instead of needing to be
+# run by hand each time. Off by default. The registration logic itself
+# lives in Go ("blanket service install" — a systemd user unit on Linux, a
+# launchd LaunchAgent on macOS; see command/service.go and
+# docs/autostart.md) so it's testable independent of this script; this
+# block only decides whether to invoke it, following the same
+# 1/0/unset convention as INSTALL_SKILLS above. Kept as one contiguous
+# section near the end of the script to minimize merge conflicts with
+# other in-flight edits to this file.
+echo
+DO_INSTALL_AUTOSTART=""
+case "$INSTALL_AUTOSTART" in
+  1) DO_INSTALL_AUTOSTART="yes" ;;
+  0) DO_INSTALL_AUTOSTART="no" ;;
+  *)
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+      printf "Start blanket automatically on login (systemd user unit / launchd agent)? [y/N] " > /dev/tty 2>/dev/null || true
+      REPLY=""
+      read -r REPLY < /dev/tty || REPLY=""
+      case "$REPLY" in
+        y|Y|yes|YES) DO_INSTALL_AUTOSTART="yes" ;;
+        *) DO_INSTALL_AUTOSTART="no" ;;
+      esac
+    else
+      DO_INSTALL_AUTOSTART="no"
+    fi
+    ;;
+esac
+
+if [ "$DO_INSTALL_AUTOSTART" = "yes" ]; then
+  "$INSTALL_DIR/blanket" --config "$CONFIG_DIR/config.json" service install
+else
+  echo "Skipping autostart registration. Enable it later with:"
+  echo "  $INSTALL_DIR/blanket --config $CONFIG_DIR/config.json service install"
+fi
+
 # Shell integration (issue #22): opt-in PATH + completion setup.
 #
 # Appends a clearly delimited, idempotent block to the user's shell rc file

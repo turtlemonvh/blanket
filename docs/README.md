@@ -22,6 +22,10 @@ here go deeper.
   permissions, and the default security posture.
 - [**Offline install**](offline_install.md) — installing on machines
   with no internet access and only local-user permissions.
+- [**Autostart on login/boot**](autostart.md) — registering blanket as
+  a background service (systemd user unit / launchd LaunchAgent /
+  Task Scheduler entry), opting in at install time, and
+  `blanket uninstall`.
 
 ## For maintainers
 

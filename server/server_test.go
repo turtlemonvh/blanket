@@ -7,14 +7,26 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/lib/bolt"
+	"github.com/turtlemonvh/blanket/lib/docs"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
+
+// TestMain seeds the docs package with docs/*.md read straight off disk.
+// Production wires this up via main's go:embed instead (see #66 -- go:embed
+// can't reach outside its own package directory, so a non-root package like
+// this one can't embed ../docs itself); `go test ./server/...` never runs
+// main, so tests that exercise the blanket_docs MCP tool need their own FS.
+func TestMain(m *testing.M) {
+	docs.SetFS(os.DirFS("../docs"))
+	os.Exit(m.Run())
+}
 
 const testConfig = `
 # https://npf.io/2014/08/intro-to-toml/
@@ -50,9 +62,17 @@ executor="bash"
 
 `
 
-// FIXME: Make this a re-usable test utility for use in worker tests
-// Returns a server that can be run and killed, and a config for working with the system
-// Uses boltdb for backend
+// NewTestServer returns a server config backed by in-memory BoltDB
+// database and queue instances, and a cleanup func to release them.
+//
+// worker's integration tests need the same thing (see
+// worker/worker_test.go), and now get it from lib/testutil.NewTestServer
+// instead of hand-rolling it -- see #78. This in-package copy stays: it
+// can't be replaced by lib/testutil's version here, since that package
+// imports server to build a *ServerConfig, and server's own internal test
+// files importing something that imports server back is a compile-time
+// import cycle ("import cycle not allowed in test"). Keep the two in sync
+// if their shape ever needs to change.
 func NewTestServer() (*ServerConfig, func()) {
 	DB, DBCloser := bolt.NewTestDB()
 	Q, QCloser := bolt.NewTestQueue()

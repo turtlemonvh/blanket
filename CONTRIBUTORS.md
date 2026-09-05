@@ -135,6 +135,16 @@ Templates, CSS, and vendored htmx live under `server/ui/` and are
 pulled into the binary via `//go:embed` (see `server/ui.go`). No
 separate asset deploy, no runtime filesystem lookups.
 
+The `docs/*.md` pages served by the `blanket_docs` MCP tool are embedded
+the same way, but from `main.go` rather than `server/`: `go:embed` can
+only reach files inside (or below) its own package's directory, and
+`docs/` needed to stay markdown-only (#66), so the root package — the
+only package that sits next to `docs/` — is the one place that can
+`//go:embed docs/*.md`. `main.go` hands that `fs.FS` to `lib/docs` via
+`docs.SetFS`, which owns the page-key map and lookup logic; `go test
+./server/...` doesn't run `main`, so `server`'s tests seed it themselves
+in a `TestMain` (`os.DirFS("../docs")`).
+
 To refresh the vendored htmx bundle:
 
 ```bash
