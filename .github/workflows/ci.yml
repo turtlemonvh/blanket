@@ -66,6 +66,87 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  # Native windows-latest job (issue #79). Unlike `test`, this doesn't use
+  # Docker (Docker/Playwright on Windows runners is out of scope per the
+  # issue discussion) — it builds the binary directly with the Go
+  # toolchain the runner provides, then runs the subset of the test suite
+  # that actually exercises Windows-specific code: the packages with
+  # _windows.go files (worker/, command/) plus lib/service (rendered
+  # cross-platform, but the Windows Scheduled Task path only gets a real
+  # Windows-host run here), and a small PowerShell smoke script covering
+  # both native Windows executors (cmd, powershell). See CONTRIBUTORS.md's
+  # CI section for what this job does and deliberately doesn't cover.
+  windows:
+    name: windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the pinned toolchain version straight out of go.mod (the
+      # `toolchain` directive) rather than a hardcoded version here — see
+      # CLAUDE.md's "three Go version pins must stay in sync" gotcha. This
+      # intentionally isn't a fourth pin.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build -o blanket-windows-amd64.exe .
+
+      # Only the packages with Windows-specific code paths: worker/ has
+      # signal_windows.go + daemon_windows.go, command/ has
+      # service_windows.go, lib/service renders the Scheduled Task
+      # definition (and its paths_test.go has a %LOCALAPPDATA% branch that
+      # only runs on windows). Not `go test ./...` — Docker- and
+      # browser-dependent surfaces are covered by the Linux `test` job.
+      - name: Go tests (Windows-specific packages)
+        run: go test -v -count=1 ./worker/... ./command/... ./lib/service/...
+
+      - name: Smoke test
+        run: pwsh scripts/smoke.ps1 -Binary .\blanket-windows-amd64.exe
+
+      # install.ps1's first-ever CI run (issue #79). Exercises it twice
+      # against the binary just built (BINARY_PATH skips the release
+      # download) with a scratch $PROFILE/home so it can't touch the
+      # runner's real user profile, asserting the marked shell-integration
+      # block in $PROFILE is idempotent — same property scripts/smoke.sh
+      # already checks for install.sh's .bashrc block on Linux.
+      - name: install.ps1 (offline, twice)
+        run: |
+          $ErrorActionPreference = "Stop"
+          $scratchHome = Join-Path $env:RUNNER_TEMP "install-ps1-home"
+          New-Item -ItemType Directory -Path $scratchHome -Force | Out-Null
+          $env:LOCALAPPDATA = Join-Path $scratchHome "AppData\Local"
+          $global:PROFILE = Join-Path $scratchHome "Profile.ps1"
+
+          $env:BINARY_PATH = (Resolve-Path .\blanket-windows-amd64.exe).Path
+          $env:INSTALL_SKILLS = "0"
+          $env:INSTALL_AUTOSTART = "0"
+          $env:INSTALL_SHELL_INTEGRATION = "1"
+
+          & .\scripts\install.ps1
+          & .\scripts\install.ps1
+
+          if (-not (Test-Path $global:PROFILE)) {
+            Write-Error "install.ps1: expected $global:PROFILE to exist after install"
+            exit 1
+          }
+          $lines = Get-Content $global:PROFILE
+          $markerCount = ($lines | Select-String -Pattern '^# >>> blanket >>>$').Count
+          if ($markerCount -ne 1) {
+            Write-Error "install.ps1: expected exactly one blanket marked block in `$PROFILE after two installs, got $markerCount"
+            Get-Content $global:PROFILE | Write-Host
+            exit 1
+          }
+          if (-not ($lines -match 'blanket.exe completion powershell')) {
+            Write-Error "install.ps1: `$PROFILE missing PowerShell completion sourcing line"
+            exit 1
+          }
+          Write-Host "install.ps1: OK (marked block present exactly once after two installs)"
+
   # Cross-compile only runs on master pushes. It catches darwin/windows-only
   # breakage at the tip of master without spending minutes on every PR (and
   # the test job above already exercises the linux build end-to-end).

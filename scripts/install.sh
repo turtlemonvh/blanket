@@ -41,7 +41,7 @@ set -e
 
 REPO="turtlemonvh/blanket"
 RAW_BASE="https://raw.githubusercontent.com/$REPO/master"
-EXAMPLE_TYPES="echo_task.toml bash_task.toml python_hello.toml windows_echo.toml"
+EXAMPLE_TYPES="echo_task.toml bash_task.toml python_hello.toml windows_echo.toml windows_powershell.toml"
 
 # Agent harnesses this script knows how to install the skill for, and
 # where each one looks for skills. Extend this as other harnesses'
