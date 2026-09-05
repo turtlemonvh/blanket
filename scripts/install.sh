@@ -31,6 +31,13 @@ set -e
 #                    the registration itself is `blanket service install`
 #                    (`blanket service uninstall` / `blanket uninstall`
 #                    removes it).
+#   INSTALL_SHELL_INTEGRATION — 1 to add INSTALL_DIR to PATH and source
+#                    shell completion via a marked block in the user's
+#                    shell rc file, without asking; 0 to skip without
+#                    asking (and remove any block a previous run added).
+#                    Unset means "ask, but only if there's a real
+#                    terminal to ask on" — see the "Shell integration"
+#                    section below.
 
 REPO="turtlemonvh/blanket"
 RAW_BASE="https://raw.githubusercontent.com/$REPO/master"
@@ -280,12 +287,172 @@ else
   echo "  $INSTALL_DIR/blanket --config $CONFIG_DIR/config.json service install"
 fi
 
-# PATH hint
+# Shell integration (issue #22): opt-in PATH + completion setup.
+#
+# Appends a clearly delimited, idempotent block to the user's shell rc file
+# that (a) adds INSTALL_DIR to PATH if it isn't already there, and (b)
+# sources blanket's shell completion (`blanket completion <shell>`) — same
+# pattern nvm/conda use. Shell is detected from $SHELL: bash -> ~/.bashrc,
+# zsh -> ~/.zshrc, fish -> ~/.config/fish/config.fish. Re-running install
+# replaces the block in place (matched by the marker lines below) rather
+# than duplicating it. Unsupported/undetected shells get printed manual
+# instructions instead of being guessed at.
+#
+# Consent follows the same "ask only if there's a real terminal" pattern as
+# INSTALL_SKILLS above:
+#   INSTALL_SHELL_INTEGRATION=1 — do it without asking
+#   INSTALL_SHELL_INTEGRATION=0 — skip without asking, and remove any block
+#                                  a previous run added (uninstall)
+#   unset                       — prompt only if there's a real terminal,
+#                                  otherwise skip and print manual steps
+# ---------------------------------------------------------------------------
+BLOCK_START="# >>> blanket >>>"
+BLOCK_END="# <<< blanket <<<"
+
+# Echoes the shell-specific rc block for $1 (bash|zsh|fish). $INSTALL_DIR
+# and the marker lines are expanded now (install time); "\$PATH" and the
+# completion invocation stay literal so they run at shell-startup time.
+build_shell_block() {
+  case "$1" in
+    fish)
+      cat <<BLOCK
+$BLOCK_START
+# Added by blanket's install.sh: PATH entry + shell completion.
+# To remove: delete the lines between the markers above and below, or
+# re-run the installer with INSTALL_SHELL_INTEGRATION=0.
+if not contains "$INSTALL_DIR" \$PATH
+    set -gx PATH "$INSTALL_DIR" \$PATH
+end
+if command -v blanket >/dev/null 2>&1
+    blanket completion fish | source
+end
+$BLOCK_END
+BLOCK
+      ;;
+    zsh)
+      cat <<BLOCK
+$BLOCK_START
+# Added by blanket's install.sh: PATH entry + shell completion.
+# To remove: delete the lines between the markers above and below, or
+# re-run the installer with INSTALL_SHELL_INTEGRATION=0.
+case ":\$PATH:" in
+  *":$INSTALL_DIR:"*) ;;
+  *) export PATH="$INSTALL_DIR:\$PATH" ;;
+esac
+if command -v blanket >/dev/null 2>&1; then
+  autoload -Uz compinit && compinit
+  source <(blanket completion zsh)
+fi
+$BLOCK_END
+BLOCK
+      ;;
+    *)
+      cat <<BLOCK
+$BLOCK_START
+# Added by blanket's install.sh: PATH entry + shell completion.
+# To remove: delete the lines between the markers above and below, or
+# re-run the installer with INSTALL_SHELL_INTEGRATION=0.
+case ":\$PATH:" in
+  *":$INSTALL_DIR:"*) ;;
+  *) export PATH="$INSTALL_DIR:\$PATH" ;;
+esac
+if command -v blanket >/dev/null 2>&1; then
+  source <(blanket completion bash)
+fi
+$BLOCK_END
+BLOCK
+      ;;
+  esac
+}
+
+# Removes any existing marked block from $1 (no-op if absent), then trims
+# the blank line(s) left at EOF — the block is always appended at EOF, so a
+# trailing blank line after stripping was the separator we added before it.
+strip_shell_block() {
+  rc_file="$1"
+  [ -f "$rc_file" ] || return 0
+  grep -qF "$BLOCK_START" "$rc_file" 2>/dev/null || return 0
+  awk -v start="$BLOCK_START" -v end="$BLOCK_END" '
+    $0 == start { skip=1; next }
+    skip && $0 == end { skip=0; next }
+    skip { next }
+    { print }
+  ' "$rc_file" > "$rc_file.blanket.tmp" && mv "$rc_file.blanket.tmp" "$rc_file"
+  awk '
+    { if ($0 == "") { blank = blank "\n"; next }
+      printf "%s", blank; blank=""; print }
+  ' "$rc_file" > "$rc_file.blanket.tmp" && mv "$rc_file.blanket.tmp" "$rc_file"
+}
+
+write_shell_block() {
+  rc_file="$1"
+  shell_name="$2"
+  mkdir -p "$(dirname "$rc_file")"
+  touch "$rc_file"
+  strip_shell_block "$rc_file"
+  {
+    [ -s "$rc_file" ] && echo ""
+    build_shell_block "$shell_name"
+  } >> "$rc_file"
+}
+
+echo
+RC_FILE=""
+SHELL_NAME=""
+case "$(basename "${SHELL:-}")" in
+  bash) RC_FILE="$HOME/.bashrc"; SHELL_NAME="bash" ;;
+  zsh)  RC_FILE="$HOME/.zshrc"; SHELL_NAME="zsh" ;;
+  fish) RC_FILE="$HOME/.config/fish/config.fish"; SHELL_NAME="fish" ;;
+esac
+
+if [ -n "$SHELL_NAME" ]; then
+  DO_SHELL_INTEGRATION=""
+  case "$INSTALL_SHELL_INTEGRATION" in
+    1) DO_SHELL_INTEGRATION="yes" ;;
+    0) DO_SHELL_INTEGRATION="no" ;;
+    *)
+      if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        printf "Add %s to PATH and enable %s completion in %s? [y/N] " \
+          "$INSTALL_DIR" "$SHELL_NAME" "$RC_FILE" > /dev/tty 2>/dev/null || true
+        REPLY=""
+        read -r REPLY < /dev/tty || REPLY=""
+        case "$REPLY" in
+          y|Y|yes|YES) DO_SHELL_INTEGRATION="yes" ;;
+          *) DO_SHELL_INTEGRATION="no" ;;
+        esac
+      else
+        DO_SHELL_INTEGRATION="no"
+      fi
+      ;;
+  esac
+
+  if [ "$DO_SHELL_INTEGRATION" = "yes" ]; then
+    write_shell_block "$RC_FILE" "$SHELL_NAME"
+    echo "Updated $RC_FILE: added PATH entry + $SHELL_NAME completion for blanket"
+    echo "  (marked block between '$BLOCK_START' and '$BLOCK_END')."
+    echo "  Start a new shell, or run: . $RC_FILE"
+    echo "  To undo: remove that block, or re-run with INSTALL_SHELL_INTEGRATION=0"
+  elif [ "$INSTALL_SHELL_INTEGRATION" = "0" ]; then
+    strip_shell_block "$RC_FILE"
+    echo "Skipped shell integration (INSTALL_SHELL_INTEGRATION=0); any earlier block in $RC_FILE was removed."
+  else
+    echo "Skipped shell integration. To add PATH + $SHELL_NAME completion yourself, append this to $RC_FILE:"
+    build_shell_block "$SHELL_NAME" | sed 's/^/  /'
+    echo "Or re-run this installer with INSTALL_SHELL_INTEGRATION=1."
+  fi
+else
+  echo "Note: could not detect a supported shell from \$SHELL ('${SHELL:-unset}') to set up"
+  echo "  PATH + completion automatically. Supported: bash, zsh, fish. Add manually, e.g. for bash:"
+  build_shell_block bash | sed 's/^/  /'
+fi
+
+# Fallback PATH note for the current shell session, independent of whether
+# the rc-file integration above ran (that only takes effect in new shells).
 echo
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *)
-    echo "Note: $INSTALL_DIR is not on your PATH. Add it with:"
+    echo "Note: $INSTALL_DIR is not on your current shell's PATH yet. For this session:"
     echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
     echo
     ;;

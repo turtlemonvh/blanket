@@ -28,6 +28,12 @@
 #                    itself is `blanket.exe service install`
 #                    (`blanket.exe service uninstall` / `blanket.exe
 #                    uninstall` removes it).
+#   INSTALL_SHELL_INTEGRATION — 1 to add INSTALL_DIR to PATH and enable
+#                    PowerShell completion via a marked block in $PROFILE,
+#                    without asking; 0 to skip without asking (and remove
+#                    any block a previous run added). Unset means "ask,
+#                    but only in an interactive console" — see the "Shell
+#                    integration" section below.
 
 $ErrorActionPreference = "Stop"
 $Repo = "turtlemonvh/blanket"
@@ -237,11 +243,112 @@ if ($doInstallAutostart) {
     Write-Host "  $OutFile --config $ConfigFile service install"
 }
 
-# PATH hint
+# Shell integration (issue #22): opt-in PATH + completion setup for
+# PowerShell, mirroring the install.sh block below for bash/zsh/fish.
+#
+# Appends a clearly delimited, idempotent block to $PROFILE (the current
+# user's PowerShell profile) that (a) adds InstallDir to PATH for future
+# sessions if it isn't already there, and (b) loads blanket's PowerShell
+# completion. Re-running install replaces the block in place (matched by
+# the marker lines below) rather than duplicating it.
+#
+# Consent follows the same pattern as INSTALL_SKILLS above:
+#   INSTALL_SHELL_INTEGRATION=1 — do it without asking
+#   INSTALL_SHELL_INTEGRATION=0 — skip without asking, and remove any block
+#                                  a previous run added (uninstall)
+#   unset                       — prompt only in an interactive console,
+#                                  otherwise skip and print manual steps
+# ---------------------------------------------------------------------------
+$BlockStart = "# >>> blanket >>>"
+$BlockEnd = "# <<< blanket <<<"
+
+function Get-ShellBlock {
+    param([string]$InstallDir)
+    @"
+$BlockStart
+# Added by blanket's install.ps1: PATH entry + shell completion.
+# To remove: delete the lines between the markers above and below, or
+# re-run the installer with `$env:INSTALL_SHELL_INTEGRATION = "0".
+if (`$env:PATH -split ";" -notcontains "$InstallDir") {
+    `$env:PATH = "$InstallDir;" + `$env:PATH
+}
+if (Get-Command blanket.exe -ErrorAction SilentlyContinue) {
+    blanket.exe completion powershell | Out-String | Invoke-Expression
+}
+$BlockEnd
+"@
+}
+
+function Remove-ShellBlock {
+    param([string]$ProfilePath)
+    if (-not (Test-Path $ProfilePath)) { return }
+    $lines = @(Get-Content -Path $ProfilePath)
+    if (-not ($lines -contains $BlockStart)) { return }
+    $result = New-Object System.Collections.Generic.List[string]
+    $skip = $false
+    foreach ($line in $lines) {
+        if (-not $skip -and $line -eq $BlockStart) { $skip = $true; continue }
+        if ($skip -and $line -eq $BlockEnd) { $skip = $false; continue }
+        if ($skip) { continue }
+        $result.Add($line)
+    }
+    # Trim trailing blank lines (the block is always appended at EOF, so
+    # any left at EOF now were the separator we added before it).
+    while ($result.Count -gt 0 -and $result[$result.Count - 1] -eq "") {
+        $result.RemoveAt($result.Count - 1)
+    }
+    Set-Content -Path $ProfilePath -Value $result -Encoding UTF8
+}
+
+function Write-ShellBlock {
+    param([string]$ProfilePath, [string]$InstallDir)
+    $profileDir = Split-Path -Path $ProfilePath -Parent
+    if ($profileDir -and -not (Test-Path $profileDir)) {
+        New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+    }
+    if (-not (Test-Path $ProfilePath)) {
+        New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
+    }
+    Remove-ShellBlock -ProfilePath $ProfilePath
+    $existing = Get-Content -Path $ProfilePath -Raw -ErrorAction SilentlyContinue
+    if ($existing -and $existing.Trim().Length -gt 0) {
+        Add-Content -Path $ProfilePath -Value ""
+    }
+    Add-Content -Path $ProfilePath -Value (Get-ShellBlock -InstallDir $InstallDir)
+}
+
+Write-Host ""
+$doShellIntegration = $false
+if ($env:INSTALL_SHELL_INTEGRATION -eq "1") {
+    $doShellIntegration = $true
+} elseif ($env:INSTALL_SHELL_INTEGRATION -eq "0") {
+    $doShellIntegration = $false
+} elseif (-not [Console]::IsInputRedirected) {
+    $reply = Read-Host "Add $InstallDir to PATH and enable PowerShell completion in `$PROFILE ($PROFILE)? [y/N]"
+    $doShellIntegration = ($reply -match '^(y|yes)$')
+}
+
+if ($doShellIntegration) {
+    Write-ShellBlock -ProfilePath $PROFILE -InstallDir $InstallDir
+    Write-Host "Updated $PROFILE : added PATH entry + PowerShell completion for blanket"
+    Write-Host "  (marked block between '$BlockStart' and '$BlockEnd')."
+    Write-Host "  Start a new PowerShell session, or run: . `$PROFILE"
+    Write-Host "  To undo: remove that block, or re-run with `$env:INSTALL_SHELL_INTEGRATION = `"0`""
+} elseif ($env:INSTALL_SHELL_INTEGRATION -eq "0") {
+    Remove-ShellBlock -ProfilePath $PROFILE
+    Write-Host "Skipped shell integration (`$env:INSTALL_SHELL_INTEGRATION = `"0`"); any earlier block in $PROFILE was removed."
+} else {
+    Write-Host "Skipped shell integration. To add PATH + completion yourself, append this to `$PROFILE ($PROFILE):"
+    (Get-ShellBlock -InstallDir $InstallDir) -split "`n" | ForEach-Object { Write-Host "  $_" }
+    Write-Host "Or re-run this installer with `$env:INSTALL_SHELL_INTEGRATION = `"1`"."
+}
+
+# Fallback PATH note for the current session, independent of whether the
+# $PROFILE integration above ran (that only takes effect in new sessions).
 Write-Host ""
 $pathDirs = $env:PATH -split ";"
 if ($pathDirs -notcontains $InstallDir) {
-    Write-Host "Note: $InstallDir is not on your PATH. Add it with:"
+    Write-Host "Note: $InstallDir is not on your current session's PATH yet. For this session:"
     Write-Host "  `$env:PATH = `"$InstallDir;`$env:PATH`""
     Write-Host "  # Or permanently via System Properties > Environment Variables"
     Write-Host ""
