@@ -25,6 +25,17 @@ func (h *EventHub) Unsubscribe(ch chan struct{}) {
 	h.mu.Unlock()
 }
 
+// SubscriberCount reports how many live subscriptions the hub is holding.
+// Exists for tests that need to assert a handler released its
+// subscription on every exit path (notably the synchronous-wait handler's
+// client-disconnect path, server/serve_sync.go); it's cheap enough to be
+// useful for diagnostics too.
+func (h *EventHub) SubscriberCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.subs)
+}
+
 func (h *EventHub) Notify() {
 	h.mu.Lock()
 	for ch := range h.subs {

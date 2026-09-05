@@ -53,7 +53,7 @@ type BlanketDB interface {
 	GetTasks(tc *TaskSearchConf) ([]tasks.Task, int, error)
 	SaveTask(t *tasks.Task) error
 	RunTask(taskId objectid.ObjectId, fields *TaskRunConfig) error
-	FinishTask(taskId objectid.ObjectId, newState string) error
+	FinishTask(taskId objectid.ObjectId, fields *TaskFinishConfig) error
 	UpdateTaskProgress(taskId objectid.ObjectId, progress int) error
 	CleanupStalledTasks() error
 }
@@ -191,4 +191,25 @@ type TaskRunConfig struct {
 	LastUpdatedTs int64
 	Pid           int
 	TypeDigest    string
+}
+
+// TaskFinishConfig carries everything set on a task as it moves to a
+// terminal state. Mirrors TaskRunConfig above: a struct rather than a
+// widening parameter list, so the next finish-time field doesn't churn
+// the BlanketDB interface again (turtlemonvh/blanket#27).
+type TaskFinishConfig struct {
+	// NewState is the terminal state to move to; one of
+	// tasks.ValidTerminalTaskStates.
+	NewState string
+	// ExitCode is the process exit status, when it's known. nil (the
+	// zero value) leaves the task's ExitCode untouched — which is the
+	// right behavior for the paths that have no process to report on
+	// (PUT /task/:id/cancel, a task stopped before it ever ran).
+	ExitCode *int
+}
+
+// FinishState is the common case: a terminal state with no exit code to
+// record.
+func FinishState(newState string) *TaskFinishConfig {
+	return &TaskFinishConfig{NewState: newState}
 }

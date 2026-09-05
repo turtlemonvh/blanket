@@ -233,7 +233,7 @@ func (DB *BlanketBoltDB) RunTask(taskId objectid.ObjectId, fields *database.Task
 // docs/task_flow.md's Scheduling section. Cancelling a template clears
 // PausedTs implicitly by leaving it as-is on the now-STOPPED record; it's
 // only meaningful while State == "PAUSED".
-func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, newState string) error {
+func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, fields *database.TaskFinishConfig) error {
 	// Set lots of fields
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
 		switch t.State {
@@ -241,9 +241,15 @@ func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, newState string) e
 		default:
 			return fmt.Errorf("Task found in unexpected state; found '%s', expected one of 'RUNNING', 'WAITING', 'SCHEDULED', 'RECURRING', or 'PAUSED'", t.State)
 		}
-		t.State = newState
+		t.State = fields.NewState
 		if t.State == "SUCCESS" {
 			t.Progress = 100
+		}
+		// Only overwrite the exit code when the caller actually has one;
+		// a cancel has no process to report on and shouldn't clobber an
+		// exit code a racing finish already wrote.
+		if fields.ExitCode != nil {
+			t.ExitCode = fields.ExitCode
 		}
 		t.LastUpdatedTs = time.Now().Unix()
 		return nil
