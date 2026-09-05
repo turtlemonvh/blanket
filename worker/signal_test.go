@@ -17,10 +17,10 @@ func TestForceStopProcess_ZeroPidIsNoop(t *testing.T) {
 // child process and confirms ForceStopProcess actually terminates it —
 // the behavior the stop-worker "force" option relies on.
 //
-// Unix-only: there's no portable "just sleep" command on Windows, and the
-// Windows implementation isn't otherwise exercised by CI (its build is
-// cross-compile-checked only, not run — see CLAUDE.md's cross-compile
-// gotcha).
+// Unix-only: there's no portable "just sleep" command on Windows. See
+// TestForceStopProcess_KillsRunningProcess_Windows in
+// signal_windows_test.go for the Windows equivalent, run by the
+// `windows` CI job (.github/workflows/ci.yml).
 func TestForceStopProcess_KillsRunningProcess(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("exercised on unix only; see comment above")

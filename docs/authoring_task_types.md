@@ -139,7 +139,10 @@ executor = "bash"
 
 No bash/WSL dependency — runs anywhere `cmd.exe` (or `powershell`) is
 available. See
-[`examples/types/windows_echo.toml`](../examples/types/windows_echo.toml).
+[`examples/types/windows_echo.toml`](../examples/types/windows_echo.toml)
+(`cmd`) and
+[`examples/types/windows_powershell.toml`](../examples/types/windows_powershell.toml)
+(`powershell`).
 
 ```toml
 description = "Write a fixed string to stdout via cmd.exe."

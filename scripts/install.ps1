@@ -39,7 +39,7 @@ $ErrorActionPreference = "Stop"
 $Repo = "turtlemonvh/blanket"
 $RawBase = "https://raw.githubusercontent.com/$Repo/master"
 $Binary = "blanket-windows-amd64.exe"
-$ExampleTypes = @("echo_task.toml", "bash_task.toml", "python_hello.toml", "windows_echo.toml")
+$ExampleTypes = @("echo_task.toml", "bash_task.toml", "python_hello.toml", "windows_echo.toml", "windows_powershell.toml")
 
 # Agent harnesses this script knows how to install the skill for, and
 # where each one looks for skills. Extend this as other harnesses' skill
