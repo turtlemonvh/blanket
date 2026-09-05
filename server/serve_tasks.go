@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -88,7 +89,7 @@ func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.Objec
 	default:
 		return ErrTaskNotCancelable
 	}
-	if err := s.DB.FinishTask(taskId, "STOPPED"); err != nil {
+	if err := s.DB.FinishTask(taskId, database.FinishState("STOPPED")); err != nil {
 		return err
 	}
 	s.TaskEvents.Notify()
@@ -367,7 +368,21 @@ func (s *ServerConfig) markTaskAsFinished(c *gin.Context) {
 		return
 	}
 
-	err = s.DB.FinishTask(taskId, newState)
+	// exitCode is optional and worker-supplied: absent (or empty) means
+	// "no exit status to record", e.g. a task killed by a signal. A
+	// present-but-unparseable value is a client bug, not a silent no-op.
+	fc := &database.TaskFinishConfig{NewState: newState}
+	if raw, ok := c.GetQuery("exitCode"); ok && raw != "" {
+		code, convErr := strconv.Atoi(raw)
+		if convErr != nil {
+			errMsg := fmt.Sprintf("Invalid 'exitCode' parameter '%s'; must be an integer", raw)
+			c.String(http.StatusBadRequest, MakeErrorString(errMsg))
+			return
+		}
+		fc.ExitCode = &code
+	}
+
+	err = s.DB.FinishTask(taskId, fc)
 	if err != nil {
 		// A missing task id maps to 404; any other FinishTask error (e.g. the
 		// task isn't in a state it can be finished from) keeps the historical
@@ -568,12 +583,28 @@ func (s *ServerConfig) createTask(ctx context.Context, typeName string, env map[
 
 // TESTME
 // FIXME: Also grab extra tags, e.g. machine specific tag
+//
+// With ?wait (turtlemonvh/blanket#27) the handler additionally blocks
+// until the task reaches a terminal state and answers with the completion
+// payload instead of the bare task record. Submission itself is
+// unchanged in every respect -- same body, same validation, same upload
+// handling, same enqueue -- which is why the synchronous mode is a query
+// parameter here rather than a second route to keep in sync. See
+// server/serve_sync.go.
 func (s *ServerConfig) postTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
 	var req map[string]interface{}
 	var taskData io.ReadCloser
 	var err error
+
+	// Parsed up front so a bad ?wait is rejected before anything is
+	// created -- a 400 here must not leave a queued task behind.
+	waitParams, err := parseSyncWaitParams(c)
+	if err != nil {
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
+		return
+	}
 
 	// FIXME: Save location of these files, will need to move to whatever worker executes this
 	// Try to get content from: file, then form value, then body
@@ -667,12 +698,36 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 		}
 	}
 
+	// Subscribe before enqueueing, so a task that finishes between the
+	// enqueue and the subscribe can't leave the waiter listening for a
+	// notification that has already been sent. Unsubscribed on every exit
+	// path below, including the client-disconnect one.
+	var sub chan struct{}
+	if waitParams.Requested {
+		sub = s.TaskEvents.Subscribe()
+		defer s.TaskEvents.Unsubscribe(sub)
+	}
+
 	if err := s.enqueueTask(c.Request.Context(), &t); err != nil {
 		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
 		return
 	}
 
-	c.JSON(http.StatusCreated, t)
+	if !waitParams.Requested {
+		c.JSON(http.StatusCreated, t)
+		return
+	}
+
+	finished, outcome, disconnected := s.waitForTerminalState(c, sub, t.Id, waitParams.Wait)
+	if disconnected {
+		// Client hung up. The task keeps running and its results stay
+		// fetchable by id; there is nobody left to tell.
+		log.WithFields(log.Fields{
+			"taskId": t.Id.Hex(),
+		}).Info("client disconnected while waiting for task to finish; task left running")
+		return
+	}
+	s.respondAfterWait(c, finished, outcome, waitParams)
 }
 
 // Always returns 200, even if item doesn't exist

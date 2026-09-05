@@ -49,9 +49,17 @@ func MarkAsRunning(t *Task, extraVars map[string]string) error {
 
 // Should only be called by worker
 // Set task to one of the following states: ERROR/SUCCESS/TIMEDOUT/STOPPED
-func MarkAsFinished(t *Task, state string) error {
+//
+// exitCode is the process exit status, or nil when there isn't one to
+// report (the process never started, or was killed by a signal). It rides
+// along as a query parameter the same way MarkAsRunning passes timeout /
+// pid / typeDigest.
+func MarkAsFinished(t *Task, state string, exitCode *int) error {
 	urlParams := url.Values{}
 	urlParams.Set("state", state)
+	if exitCode != nil {
+		urlParams.Set("exitCode", fmt.Sprintf("%d", *exitCode))
+	}
 	paramsString := urlParams.Encode()
 	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/finish", viper.GetInt("port"), t.Id.Hex()) + "?" + paramsString
 	req, err := http.NewRequest("PUT", reqURL, nil)
