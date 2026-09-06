@@ -134,6 +134,12 @@ func (DB *BlanketBoltDB) UpdateWorker(w *worker.WorkerConf) error {
 			// Server-owned fields survive a worker's own update.
 			merged.Stopped = current.Stopped
 			merged.LastHeardTs = current.LastHeardTs
+			merged.StoppedReason = current.StoppedReason
+			// Lost is server-owned too, but a re-registering worker is
+			// itself evidence of life, so this is the one server-owned
+			// field an update clears rather than preserves. Leaving it set
+			// would strand the badge on a worker that plainly came back.
+			merged.Lost = false
 		}
 
 		bts, err := json.Marshal(&merged)
@@ -161,7 +167,33 @@ func (DB *BlanketBoltDB) UpdateWorker(w *worker.WorkerConf) error {
 func (DB *BlanketBoltDB) StartWorker(workerId objectid.ObjectId) (worker.WorkerConf, error) {
 	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
 		w.Stopped = false
+		w.StoppedReason = ""
+		w.Lost = false
 		w.LastHeardTs = time.Now().Unix()
+		return nil
+	})
+}
+
+// HeartbeatWorker records that the server just heard from a worker
+// (turtlemonvh/blanket#23 phase 3): LastHeardTs is stamped from the
+// server's own clock and the Lost flag, if the reaper had set one, is
+// cleared.
+//
+// The timestamp is deliberately not a parameter. Every staleness
+// calculation in the reaper is `now - LastHeardTs`, and both halves have
+// to come from the same clock or the answer measures the difference
+// between two machines' idea of the time rather than whether the worker is
+// alive. (Workers are same-host today, so the skew would be zero — but the
+// reaper deletes state on the strength of this number, and "it happens to
+// be the same clock" is not a property worth depending on.)
+//
+// Returns the updated record so the handler can answer with the worker's
+// current Stopped flag: that round trip is what lets a drain take effect
+// within one check interval instead of one poll of the whole config.
+func (DB *BlanketBoltDB) HeartbeatWorker(workerId objectid.ObjectId) (worker.WorkerConf, error) {
+	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
+		w.LastHeardTs = time.Now().Unix()
+		w.Lost = false
 		return nil
 	})
 }
@@ -174,6 +206,9 @@ func (DB *BlanketBoltDB) StartWorker(workerId objectid.ObjectId) (worker.WorkerC
 func (DB *BlanketBoltDB) StopWorker(workerId objectid.ObjectId) (worker.WorkerConf, error) {
 	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
 		w.Stopped = true
+		// An explicit stop is its own explanation, and it overrides
+		// whatever the reaper may have written earlier.
+		w.StoppedReason = ""
 		w.LastHeardTs = time.Now().Unix()
 		return nil
 	})

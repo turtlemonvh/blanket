@@ -75,6 +75,48 @@ func (s *ServerConfig) updateWorker(c *gin.Context) {
 	c.String(http.StatusOK, "{}")
 }
 
+// heartbeatWorker records a worker's liveness ping
+// (turtlemonvh/blanket#23 phase 3).
+//
+// A separate route rather than a flag on PUT /worker/:id, for three
+// reasons. It takes no body, so it cannot carry a stale view of the
+// worker's own fields into the record — the merge that PUT /worker/:id
+// performs exists precisely because a re-registering worker used to undo a
+// stop that had just landed, and a call sent every check interval is the
+// worst possible vehicle for that risk. It is also the only worker call
+// with a *response* the worker acts on, which the update route (which
+// answers `{}`) has no shape for. And it keeps "I am alive" cheap and
+// legible in the access log, which is worth something for a call that
+// arrives once per worker per interval forever.
+//
+// LastHeardTs comes from the server's clock, inside the DB transaction;
+// nothing the worker sends is trusted for it. See DB.HeartbeatWorker.
+func (s *ServerConfig) heartbeatWorker(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+
+	workerId, err := SafeObjectId(c.Param("id"))
+	if err != nil {
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
+		return
+	}
+
+	w, err := s.DB.HeartbeatWorker(workerId)
+	if err != nil {
+		// A heartbeat for a worker that isn't in the database is a 404,
+		// not a 500: it happens legitimately when an operator deletes a
+		// worker whose process is still winding down.
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
+		return
+	}
+
+	c.JSON(http.StatusOK, worker.HeartbeatResponse{
+		Stopped:          w.Stopped,
+		LastHeardTs:      w.LastHeardTs,
+		ServerInstanceId: s.InstanceId(),
+		ServerStartedTs:  s.StartedTs(),
+	})
+}
+
 // stopWorkerById marks w as stopped and bumps its LastHeardTs, atomically
 // (via DB.StopWorker — a single bolt transaction rather than a separate
 // read/modify/write). The worker's own poll loop observes the Stopped flag

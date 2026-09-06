@@ -19,6 +19,15 @@ func (s *ServerConfig) getConfigProcessed(c *gin.Context) {
 		conf[key] = viper.GetString(key)
 	}
 
+	// Identity of this server *process*, which no config key can supply:
+	// the instance id a worker's heartbeat response carries, and when the
+	// process started. Exposed here so an operator (or a script) can see
+	// what the workers are seeing without sending a heartbeat, and so
+	// "did the server restart?" is answerable from one GET.
+	// turtlemonvh/blanket#23 phase 3.
+	conf["instanceId"] = s.InstanceId()
+	conf["serverStartedTs"] = s.StartedTs()
+
 	execPath, err := osext.Executable()
 	if err != nil {
 		log.WithFields(log.Fields{

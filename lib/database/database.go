@@ -52,6 +52,15 @@ type BlanketDB interface {
 	// worker clear its own Stopped flag by re-registering; see the
 	// field-level merge documented on the bolt implementation.
 	StartWorker(workerId objectid.ObjectId) (worker.WorkerConf, error)
+	// HeartbeatWorker records that the server just heard from a worker:
+	// it stamps LastHeardTs from the *server's* clock and clears Lost,
+	// returning the updated record so the handler can answer with the
+	// worker's current Stopped flag (turtlemonvh/blanket#23 phase 3).
+	//
+	// Deliberately takes no timestamp argument. A worker-supplied one
+	// would make every staleness calculation in the reaper a measure of
+	// the worker's clock skew rather than its liveness.
+	HeartbeatWorker(workerId objectid.ObjectId) (worker.WorkerConf, error)
 	CleanupStalledWorkers() error
 	// Task functions
 	GetTask(taskId objectid.ObjectId) (tasks.Task, error)
