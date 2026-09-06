@@ -28,15 +28,15 @@ func (s *ServerConfig) getWorkers(c *gin.Context) {
 // Get just the configuration for this worker as json
 func (s *ServerConfig) getWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
-	workerId, err := SafeObjectId(c.Param("id"))
+	workerId, err := s.getWorkerId(c)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
 	worker, err := s.DB.GetWorker(workerId)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
 		return
 	}
 	c.JSON(http.StatusOK, worker)
@@ -47,9 +47,9 @@ func (s *ServerConfig) getWorker(c *gin.Context) {
 func (s *ServerConfig) updateWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
-	workerId, err := SafeObjectId(c.Param("id"))
+	workerId, err := s.getWorkerId(c)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -112,16 +112,16 @@ func (s *ServerConfig) stopWorkerById(ctx context.Context, workerId objectid.Obj
 func (s *ServerConfig) stopWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
-	workerId, err := SafeObjectId(c.Param("id"))
+	workerId, err := s.getWorkerId(c)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
 	force := c.Query("force") == "true"
 
 	if err := s.stopWorkerById(c.Request.Context(), workerId, force); err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
 		return
 	}
 
@@ -133,9 +133,9 @@ func (s *ServerConfig) stopWorker(c *gin.Context) {
 func (s *ServerConfig) restartWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
-	workerId, err := SafeObjectId(c.Param("id"))
+	workerId, err := s.getWorkerId(c)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -169,9 +169,9 @@ func (s *ServerConfig) deleteWorkerById(ctx context.Context, workerId objectid.O
 // Should only be called by the worker itself as it is shutting down
 func (s *ServerConfig) deleteWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
-	workerId, err := SafeObjectId(c.Param("id"))
+	workerId, err := s.getWorkerId(c)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -265,16 +265,16 @@ func (s *ServerConfig) launchWorker(c *gin.Context, w *worker.WorkerConf) {
 func (s *ServerConfig) getWorkerLogfile(c *gin.Context) {
 	c.Header("Content-Type", "text/plain")
 
-	workerId, err := SafeObjectId(c.Param("id"))
+	workerId, err := s.getWorkerId(c)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
 	// FIXME: Return bytes or string?
 	w, err := s.DB.GetWorker(workerId)
 	if err != nil {
-		c.String(http.StatusInternalServerError, fmt.Sprintf(`Error: "%s"`, err.Error()))
+		c.String(statusForDBError(err, http.StatusInternalServerError), fmt.Sprintf(`Error: "%s"`, err.Error()))
 		return
 	}
 
@@ -293,16 +293,16 @@ func (s *ServerConfig) streamWorkerLog(c *gin.Context) {
 	var err error
 	var workerId objectid.ObjectId
 
-	workerId, err = SafeObjectId(c.Param("id"))
+	workerId, err = s.getWorkerId(c)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
 	// FIXME: Return bytes or string?
 	w, err := s.DB.GetWorker(workerId)
 	if err != nil {
-		c.String(http.StatusInternalServerError, fmt.Sprintf(`Error: "%s"`, err.Error()))
+		c.String(statusForDBError(err, http.StatusInternalServerError), fmt.Sprintf(`Error: "%s"`, err.Error()))
 		return
 	}
 

@@ -5,6 +5,23 @@ The blanket server exposes a JSON REST API on the configured port
 HTMX UI, the CLI, and any external client. All bodies are JSON unless
 noted otherwise.
 
+## Errors
+
+Every `:id` route (task or worker) applies one rule consistently: an id
+that fails to parse as an `objectid.ObjectId` (malformed -- not valid hex,
+wrong length) is a **400**; a well-formed id naming no record is a
+**404**. The two are distinguishable client errors -- a malformed id is a
+bug in the caller, a missing one might just mean "already deleted" -- and
+neither is ever a 500 (turtlemonvh/blanket#115). `DELETE /task/:id` and
+`DELETE /worker/:id` are the one deliberate exception: both are
+idempotent-delete endpoints and answer 200 even for a well-formed id
+naming nothing, same as if it had just been deleted.
+
+Most JSON handlers report an error as `{"error": "<message>"}`; a few
+older ones return a plain-text message instead (streaming/tail
+endpoints and the web UI in particular) -- check the specific handler if
+you need the exact shape.
+
 ## Tasks
 
 User-facing endpoints — submit, list, inspect, cancel.
