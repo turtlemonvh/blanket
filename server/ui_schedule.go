@@ -341,14 +341,14 @@ func seriesScheduleEditor(task tasks.Task) ScheduleEditorView {
 // seriesFromParam resolves the :id path parameter to a task, writing the
 // error response itself and returning ok=false when it can't.
 func (s *ServerConfig) seriesFromParam(c *gin.Context) (tasks.Task, bool) {
-	taskId, err := SafeObjectId(c.Param("id"))
+	taskId, err := s.getTaskId(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, err.Error())
 		return tasks.Task{}, false
 	}
 	task, err := s.DB.GetTask(taskId)
 	if err != nil {
-		c.String(http.StatusNotFound, err.Error())
+		c.String(statusForDBError(err, http.StatusInternalServerError), err.Error())
 		return tasks.Task{}, false
 	}
 	return task, true
@@ -365,7 +365,7 @@ func (s *ServerConfig) uiSeriesSchedulePartial(c *gin.Context) {
 	}
 	task, err := s.DB.GetTask(taskId)
 	if err != nil {
-		c.String(http.StatusNotFound, err.Error())
+		c.String(statusForDBError(err, http.StatusInternalServerError), err.Error())
 		return
 	}
 	s.renderSeriesSchedule(c, task, http.StatusOK, "")

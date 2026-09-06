@@ -78,7 +78,10 @@ for AI sessions:
 - **Platform-specific code uses `//go:build` tags, not runtime switches.**
 - **Logging:** prefer `log "github.com/sirupsen/logrus"`.
 - **IDs are `lib/objectid.ObjectId`** — don't hand-roll UUIDs.
-- **Error status codes:** missing-id → 404 via `ItemNotFoundError`.
+- **Error status codes:** missing-id → 404 via `ItemNotFoundError`;
+  malformed-id (fails to parse as `objectid.ObjectId`) → 400, never 500 —
+  see `docs/api.md`'s Errors section and `server/server_util.go`'s
+  `SafeObjectId`/`InvalidIdError`.
 
 ## Commit style
 
