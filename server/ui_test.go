@@ -21,8 +21,10 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
+	"github.com/turtlemonvh/blanket/worker"
 )
 
 func getUI(r http.Handler, path string) *httptest.ResponseRecorder {
@@ -1269,4 +1271,53 @@ func TestUI_TasksRows_SeriesBacklink(t *testing.T) {
 	body := rows.Body.String()
 	assert.Contains(t, body, "part of series "+tmpl.Id.Hex()[:8])
 	assert.Contains(t, body, `href="/ui/tasks/`+tmpl.Id.Hex()+`"`)
+}
+
+// --- worker state in the UI (turtlemonvh/blanket#23 phase 3) ---
+
+// A worker the reaper has marked lost has to be visible as such. "Lost"
+// is not "stopped" — the process may well still be running, it just isn't
+// checking in — so the list shows a third state rather than a stopped
+// yes/no.
+func TestUI_WorkersRows_ShowsWorkerState(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	active := worker.WorkerConf{Id: objectid.NewObjectId(), Pid: 11}
+	lost := worker.WorkerConf{Id: objectid.NewObjectId(), Pid: 22}
+	stopped := worker.WorkerConf{Id: objectid.NewObjectId(), Pid: 33}
+	for _, w := range []*worker.WorkerConf{&active, &lost, &stopped} {
+		assert.NoError(t, s.DB.UpdateWorker(w))
+	}
+	// Lost and Stopped are server-owned; set them the way the server does.
+	_, err := s.DB.CleanupStalledWorkers(&database.ReapOptions{
+		Now: time.Now,
+		// Every pid is alive: a live process with a stale heartbeat is
+		// exactly the case that produces LOST without STOPPED.
+		IsAlive:          func(pid int, pidStartTs int64) (bool, bool) { return true, true },
+		WorkerStaleAfter: time.Nanosecond,
+		WorkerDeadAfter:  time.Hour,
+	})
+	assert.NoError(t, err)
+	_, err = s.DB.StopWorker(stopped.Id)
+	assert.NoError(t, err)
+	// The heartbeat clears Lost, so give the "active" one a fresh one.
+	_, err = s.DB.HeartbeatWorker(active.Id)
+	assert.NoError(t, err)
+
+	body := getUI(r, "/ui/partials/workers-rows").Body.String()
+	assert.Contains(t, body, `<span class="badge state-LOST"`)
+	assert.Contains(t, body, `<span class="badge state-ACTIVE">active</span>`)
+	assert.Contains(t, body, `<span class="badge state-STOPPED">stopped</span>`)
+
+	// ...and the detail page explains it: the timestamp the reaper acts on,
+	// and why a reaped worker was stopped.
+	detail := getUI(r, "/ui/workers/"+lost.Id.Hex()).Body.String()
+	assert.Contains(t, detail, "Last Heard")
+	assert.Contains(t, detail, `<span class="badge state-LOST">lost</span>`)
+
+	stoppedDetail := getUI(r, "/ui/workers/"+stopped.Id.Hex()).Body.String()
+	assert.NotContains(t, stoppedDetail, "Stopped Reason",
+		"an operator stop needs no explanation; only a reaper stop carries one")
 }

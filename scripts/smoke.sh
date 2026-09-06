@@ -370,3 +370,114 @@ done
 kill "$WORKER_PID" 2>/dev/null || true
 wait "$WORKER_PID" 2>/dev/null || true
 WORKER_PID=""
+
+# ---------------------------------------------------------------------------
+# The reaper (turtlemonvh/blanket#23 phase 3).
+#
+# Only a subprocess suite can cover this: the reaper's whole job is to
+# clean up after a process that died without saying anything, and
+# `kill -9` on a real worker is the only honest way to produce that. The
+# thresholds are compressed in the harness config (see
+# scripts/lib/harness.sh) so a check that takes minutes in production
+# takes seconds here.
+# ---------------------------------------------------------------------------
+
+# A worker killed outright never registers itself as stopped. The server
+# must notice on its own: heartbeat goes stale, the pid is conclusively
+# gone, so the record is marked lost and stopped.
+reaper_worker_id="$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+prev_dir="$PWD"
+cd "$WORKDIR"
+"$BINARY" --config "$CONFIG" worker \
+    --id "$reaper_worker_id" \
+    --tags "exec:bash,os:unix" --checkinterval 0.5 \
+    --logfile "$WORKDIR/reaper-worker.log" \
+    > "$WORKDIR/reaper-worker.out" 2>&1 &
+# Tracked in WORKER_PID so the EXIT trap cleans it up if an assertion
+# below fails before the deliberate kill.
+WORKER_PID=$!
+cd "$prev_dir"
+
+registered=0
+for _ in $(seq 1 50); do
+    # No -f: GET /worker/:id answers 500 for a worker that hasn't
+    # registered yet, and curl would print "curl: (22)" noise on each of
+    # the polls before it does.
+    if curl -sS "$BASE/worker/$reaper_worker_id" 2>/dev/null | jq -e '.pid > 0' > /dev/null 2>&1; then
+        registered=1
+        break
+    fi
+    sleep 0.2
+done
+[[ "$registered" -eq 1 ]] || fail "reaper test worker did not register within 10s"
+
+# The heartbeat is what keeps it out of the reaper's way, so make sure the
+# server has actually heard from it before killing it.
+curl -fsS "$BASE/worker/$reaper_worker_id" | jq -e '.lastHeardTs > 0' > /dev/null \
+    || fail "worker never heartbeated: $(curl -fsS "$BASE/worker/$reaper_worker_id")"
+
+kill -9 "$WORKER_PID" 2>/dev/null || true
+wait "$WORKER_PID" 2>/dev/null || true
+WORKER_PID=""
+
+reaped=0
+for _ in $(seq 1 80); do
+    w="$(curl -fsS "$BASE/worker/$reaper_worker_id")"
+    if jq -e '.lost == true and .stopped == true' <<<"$w" > /dev/null 2>&1; then
+        reaped=1
+        break
+    fi
+    sleep 0.25
+done
+[[ "$reaped" -eq 1 ]] \
+    || fail "killed worker was not marked lost/stopped within 20s: ${w:-<no response>}"
+
+jq -e '.stoppedReason | test("reaper")' <<<"$w" > /dev/null \
+    || fail "reaped worker carries no reason: $w"
+
+# A task claimed by a worker that then died, and which provably never
+# started (no outcome journal, no pid on the record), goes back on the
+# queue rather than sitting CLAIMED forever. Claimed here on behalf of a
+# worker whose pid is not a live process, which is exactly the state the
+# kill above leaves behind — but arranged deliberately so the assertion
+# isn't racing a real worker's claim loop.
+dead_worker_id="$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+curl -fsS -X PUT -H 'Content-Type: application/json' \
+    -d "{\"id\":\"$dead_worker_id\",\"tags\":[\"exec:bash\",\"os:unix\"],\"pid\":4194303,\"checkInterval\":0.5}" \
+    "$BASE/worker/$dead_worker_id" > /dev/null \
+    || fail "could not register the stand-in dead worker"
+
+requeue_resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
+    -d '{"type":"echo_task"}' "$BASE/task/")"
+requeue_task_id="$(jq -r '.id' <<<"$requeue_resp")"
+[[ -n "$requeue_task_id" && "$requeue_task_id" != "null" ]] \
+    || fail "could not extract requeue task id: $requeue_resp"
+
+# Claim until we get the task we just submitted: anything else still in
+# the queue from earlier in this script is claimed first (the queue is
+# FIFO-ish by id). Those extras are claimed by the same dead worker, so
+# the reaper requeues them too -- which is the same behaviour under test,
+# not a side effect that needs cleaning up.
+claimed_ours=0
+for _ in $(seq 1 10); do
+    claim_resp="$(curl -sS -X POST "$BASE/task/claim/$dead_worker_id")"
+    [[ -z "$claim_resp" ]] && break   # 204: queue empty
+    if jq -e --arg id "$requeue_task_id" '.id == $id and .state == "CLAIMED"' <<<"$claim_resp" > /dev/null 2>&1; then
+        claimed_ours=1
+        break
+    fi
+done
+[[ "$claimed_ours" -eq 1 ]] \
+    || fail "stand-in worker never claimed the submitted task; last response: ${claim_resp:-<204 empty queue>}"
+
+requeued=0
+for _ in $(seq 1 80); do
+    check="$(curl -fsS "$BASE/task/$requeue_task_id")"
+    if jq -e '.state == "WAITING" and .requeueCount == 1 and .workerId == "000000000000000000000000"' <<<"$check" > /dev/null 2>&1; then
+        requeued=1
+        break
+    fi
+    sleep 0.25
+done
+[[ "$requeued" -eq 1 ]] \
+    || fail "claimed-but-never-started task was not requeued within 20s: ${check:-<no response>}"

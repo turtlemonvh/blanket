@@ -123,6 +123,14 @@ harness_init() {
 }
 
 # harness_write_config [logLevel]
+#
+# The reaper block compresses turtlemonvh/blanket#23 phase 3's thresholds
+# from minutes to seconds. Done with the reaper's own keys rather than
+# `timeMultiplier`, deliberately: the multiplier scales *every* duration in
+# the system, including the worker's retry budgets and poll interval, and
+# compressing those as a side effect of wanting a fast reaper would make
+# the rest of the suite flakier. These values are still far above the
+# worker's 0.5s check interval, so a healthy worker is never marked lost.
 harness_write_config() {
     local log_level="${1:-warn}"
     cat > "$CONFIG" <<EOF
@@ -132,6 +140,14 @@ harness_write_config() {
   "tasks": {
     "typesPaths": ["$WORKDIR/types"],
     "resultsPath": "$WORKDIR/results"
+  },
+  "reaper": {
+    "enabled": true,
+    "interval": "500ms",
+    "workerStaleAfter": "3s",
+    "workerDeadAfter": "6s",
+    "taskStaleAfter": "3s",
+    "maxRequeues": 3
   },
   "logLevel": "${log_level}"
 }
