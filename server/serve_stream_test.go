@@ -203,7 +203,7 @@ func TestSyncSubmit_StreamCompletes(t *testing.T) {
 		// the log files and deliver a line or two live.
 		time.Sleep(750 * time.Millisecond)
 
-		require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{NewState: "SUCCESS", ExitCode: intPtr(0)}))
+		require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "SUCCESS", ExitCode: intPtr(0)}))
 		s.TaskEvents.Notify()
 	})
 
@@ -491,7 +491,7 @@ func TestStreamTaskLog_NDJSONIsStructured(t *testing.T) {
 	finished := false
 	for {
 		if !finished && strings.Contains(collected, `"type":"log"`) {
-			require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{NewState: "SUCCESS", ExitCode: intPtr(0)}))
+			require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "SUCCESS", ExitCode: intPtr(0)}))
 			s.TaskEvents.Notify()
 			finished = true
 		}
@@ -540,7 +540,7 @@ func TestStreamTaskLog_StaysOpenUntilTerminal(t *testing.T) {
 	case <-time.After(6 * idleWindow):
 	}
 
-	require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{NewState: "SUCCESS", ExitCode: intPtr(0)}))
+	require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "SUCCESS", ExitCode: intPtr(0)}))
 	s.TaskEvents.Notify()
 
 	select {

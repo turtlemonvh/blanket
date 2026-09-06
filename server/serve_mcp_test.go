@@ -577,7 +577,7 @@ func driveTaskToCompletion(t *testing.T, s *ServerConfig, state string, exitCode
 		tsk := awaitTask(t, s)
 		writeTaskLogs(t, tsk, stdout, stderr)
 		code := exitCode
-		if err := s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{NewState: state, ExitCode: &code}); err != nil {
+		if err := s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: state, ExitCode: &code}); err != nil {
 			t.Errorf("could not finish task: %v", err)
 			return
 		}

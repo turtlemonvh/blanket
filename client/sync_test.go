@@ -100,7 +100,7 @@ func finishLikeAWorker(t *testing.T, s *server.ServerConfig, tsk tasks.Task, sta
 	require.NoError(t, os.WriteFile(filepath.Join(tsk.ResultDir, "blanket.stdout.log"), []byte(stdout), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(tsk.ResultDir, "blanket.stderr.log"), []byte(stderr), 0644))
 	code := exitCode
-	require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{NewState: state, ExitCode: &code}))
+	require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: state, ExitCode: &code}))
 	s.TaskEvents.Notify()
 }
 
