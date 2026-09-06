@@ -10,12 +10,14 @@ package server
 
 import (
 	"encoding/json"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1320,4 +1322,54 @@ func TestUI_WorkersRows_ShowsWorkerState(t *testing.T) {
 	stoppedDetail := getUI(r, "/ui/workers/"+stopped.Id.Hex()).Body.String()
 	assert.NotContains(t, stoppedDetail, "Stopped Reason",
 		"an operator stop needs no explanation; only a reaper stop carries one")
+}
+
+// TestUI_TemplateCacheIsConcurrencySafe is the regression test for a
+// fatal-error crash, not a mere data race: two handlers that both missed
+// the template cache used to write the same map at the same time, and
+// "concurrent map writes" is a runtime *fatal* error — gin's Recovery
+// middleware cannot catch it, so it takes the whole server down.
+//
+// It is easy to reach in production. Every SSE-driven refresh
+// (`workers-changed`, `tasks-changed`) fans out to every open tab at once,
+// and turtlemonvh/blanket#23 phase 3's reaper adds a server-side source of
+// those events. CI found it within a minute of the reaper shipping.
+func TestUI_TemplateCacheIsConcurrencySafe(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	// Start from a cold cache, so every request below has to parse.
+	uiTemplatesMu.Lock()
+	saved := uiTemplates
+	uiTemplates = map[string]*template.Template{}
+	uiTemplatesMu.Unlock()
+	defer func() {
+		uiTemplatesMu.Lock()
+		uiTemplates = saved
+		uiTemplatesMu.Unlock()
+	}()
+
+	paths := []string{
+		"/ui/partials/workers-rows",
+		"/ui/partials/tasks-rows",
+		"/ui/partials/task-types-rows",
+		"/ui/partials/blank",
+		"/ui/workers",
+		"/ui/",
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		for _, p := range paths {
+			wg.Add(1)
+			go func(p string) {
+				defer wg.Done()
+				if w := getUI(r, p); w.Code >= 500 {
+					t.Errorf("%s: %d", p, w.Code)
+				}
+			}(p)
+		}
+	}
+	wg.Wait()
 }
