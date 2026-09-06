@@ -1,0 +1,17 @@
+# Browser-suite fixture for turtlemonvh/blanket#104: a task type that
+# declares a `result_file`, so the task detail page has a result artifact to
+# render.
+#
+# It lives here rather than in testdata/types/ because that directory is
+# deliberately kept to the one minimal smoke fixture (see CLAUDE.md); the
+# browser suite's config (testdata/blanket.test.json) lists this directory
+# as a second tasks.typesPaths entry. Nothing runs the command: the browser
+# suite starts a server with no worker, and task_output.spec.ts seeds the
+# artifact by uploading it with the submission.
+
+tags = ["exec:bash", "os:unix"]
+timeout = 10
+description = "Writes a JSON result artifact; used by the browser suite"
+command = "echo '{\"answer\": 42}' > result.json"
+executor = "bash"
+result_file = "result.json"

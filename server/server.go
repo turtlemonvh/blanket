@@ -179,6 +179,7 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/ui/partials/upcoming-onetime-rows", s.uiUpcomingOneTimeRowsPartial)
 	r.GET("/ui/partials/upcoming-series-rows", s.uiUpcomingSeriesRowsPartial)
 	r.GET("/ui/partials/series-schedule", s.uiSeriesSchedulePartial) // ?id=<template id>
+	r.GET("/ui/partials/task-log", s.uiTaskLogPartial)               // ?id=<task id>&stream=stdout|stderr|both
 	// Series lifecycle actions. Thin form-friendly wrappers over the same
 	// functions PUT /task/:id/{pause,resume,cancel,schedule} call, whose
 	// response is the re-rendered schedule block (inline error included)
@@ -189,6 +190,10 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.PUT("/ui/series/:id/schedule", s.uiSeriesChangeSchedule)
 	r.GET("/ui/sse/tasks", s.sseTaskEvents)
 	r.GET("/ui/sse/workers", s.sseWorkerEvents)
+	// The log pane's "both" view: stdout and stderr interleaved, each line
+	// pre-rendered with the badge that says which stream it came from. UI-only
+	// -- the public log routes emit the task's bytes, not markup. See ui_logs.go.
+	r.GET("/ui/sse/tasks/:id/log", s.uiTaskLogStream)
 
 	// Redirect to ui
 	r.GET("/", func(c *gin.Context) {

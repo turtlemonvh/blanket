@@ -17,6 +17,7 @@ package server
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -192,4 +193,50 @@ func TestUI_Layout_LoadsSSELifecycleScript(t *testing.T) {
 	assert.Contains(t, js, "pageshow")
 	assert.Contains(t, js, "htmx:beforeCleanupElement")
 	assert.Contains(t, js, "htmx:afterProcessNode")
+}
+
+// The combined log stream (turtlemonvh/blanket#104): both of a task's log
+// files on one connection, each line already rendered with the badge that
+// says which stream it came from.
+//
+// Needs a real listener for the same reason the tests above do — c.Stream
+// calls CloseNotify(), which httptest.NewRecorder doesn't implement.
+func TestUI_TaskLogStream_InterleavesBothStreams(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	tsk := seedUIResultTask(t, s, "", "SUCCESS", intPtr(0))
+	writeTaskLogs(t, tsk, "out one\n", "err one\n")
+
+	srv := httptest.NewServer(s.GetRouter())
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/ui/sse/tasks/"+tsk.Id.Hex()+"/log", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// The task is already terminal, so the handler drains both files and
+	// then closes on its own idle window. Read to EOF rather than guessing
+	// how many frames arrive first.
+	body := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(resp.Body)
+		body <- string(b)
+	}()
+
+	select {
+	case got := <-body:
+		assert.Contains(t, got, `<span class="log-tag">stdout</span>out one`)
+		assert.Contains(t, got, `<span class="log-tag">stderr</span>err one`)
+		assert.Contains(t, got, "event:message")
+	case <-time.After(20 * time.Second):
+		t.Fatal("combined log stream did not deliver both streams and close within 20s")
+	}
 }

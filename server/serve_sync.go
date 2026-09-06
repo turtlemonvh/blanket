@@ -320,11 +320,11 @@ func (s *ServerConfig) waitForTerminalState(ctx context.Context, sub chan struct
 func (s *ServerConfig) buildCompletionPayload(task tasks.Task, outcome string) CompletionPayload {
 	maxLines := syncMaxLogLines()
 
-	stdout, stdoutTruncated, err := tailLinesTruncated(path.Join(task.ResultDir, "blanket.stdout.log"), maxLines)
+	stdout, stdoutTruncated, err := tailLinesTruncated(path.Join(task.ResultDir, TaskStdoutLogFile), maxLines)
 	if err != nil {
 		stdout, stdoutTruncated = "", false
 	}
-	stderr, stderrTruncated, err := tailLinesTruncated(path.Join(task.ResultDir, "blanket.stderr.log"), maxLines)
+	stderr, stderrTruncated, err := tailLinesTruncated(path.Join(task.ResultDir, TaskStderrLogFile), maxLines)
 	if err != nil {
 		stderr, stderrTruncated = "", false
 	}
@@ -355,21 +355,39 @@ func (s *ServerConfig) buildCompletionPayload(task tasks.Task, outcome string) C
 // (nil, message) when a declared file exists but couldn't be turned into
 // a result, so a malformed result never masquerades as an absent one.
 func readTaskResult(task tasks.Task, maxBytes int64) (interface{}, string) {
-	tt, err := task.GetTaskType()
-	if err != nil {
-		// The type may have been edited or removed while the task ran.
-		// Not fatal: there's simply no declared result to read.
-		return nil, ""
-	}
-
-	rel, err := tt.ResultFile()
-	if err != nil {
-		return nil, err.Error()
+	rel, errMsg := taskResultFile(task)
+	if errMsg != "" {
+		return nil, errMsg
 	}
 	if rel == "" {
 		return nil, ""
 	}
 	return readResultFileAt(task.ResultDir, rel, maxBytes)
+}
+
+// taskResultFile returns the cleaned, result-dir-relative path this task's
+// type declares as its `result_file` -- "" when it declares none, or when
+// its type can no longer be loaded. The second return carries the same
+// message readTaskResult reports as resultError for a path that fails
+// validation.
+//
+// Split out of readTaskResult so the task detail page can say *which*
+// artifact it is showing (and link it under /results/) without deriving
+// the path a second time: one reader, one containment rule, for the API
+// and the UI alike. See buildTaskResultView in server/ui_logs.go.
+func taskResultFile(task tasks.Task) (string, string) {
+	tt, err := task.GetTaskType()
+	if err != nil {
+		// The type may have been edited or removed while the task ran.
+		// Not fatal: there's simply no declared result to read.
+		return "", ""
+	}
+
+	rel, err := tt.ResultFile()
+	if err != nil {
+		return "", err.Error()
+	}
+	return rel, ""
 }
 
 // readResultFileAt is readTaskResult once the declared path is known:

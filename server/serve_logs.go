@@ -140,6 +140,44 @@ func tailLinesTruncated(filepath string, n int) (string, bool, error) {
 	return strings.Join(lines, "\n") + "\n", truncated, nil
 }
 
+// Log file names the worker writes under a task's ResultDir
+// (SetupExecutionDirectory). Named here because three surfaces now join
+// them to a result dir -- the raw log routes below, the completion payload
+// (serve_sync.go), and the UI's log pane (ui_logs.go).
+const (
+	TaskStdoutLogFile = "blanket.stdout.log"
+	TaskStderrLogFile = "blanket.stderr.log"
+)
+
+// rawLogStreamFor resolves the `?stream=` parameter shared by
+// GET /task/:id/log and GET /task/:id/log/tail onto one of the task's two
+// log files.
+//
+// Absent or empty means stdout, so both routes behave exactly as they
+// always have; `stderr` selects the other file. `both` is deliberately
+// *not* accepted here: these routes emit an undecorated byte stream with
+// nothing to tell the two apart, so interleaving them would hand the
+// caller an ambiguous result. A client that wants both at once has the
+// structured stream (`?format=ndjson`), whose log events carry a `stream`
+// discriminator.
+//
+// Returns ("", "", false) after writing a 400 for an unrecognized value:
+// silently falling back to stdout would let a typo look like an empty
+// stderr.
+func rawLogStreamFor(c *gin.Context) (filename string, stream string, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(c.Query("stream"))) {
+	case "", LogStreamStdout:
+		return TaskStdoutLogFile, LogStreamStdout, true
+	case LogStreamStderr:
+		return TaskStderrLogFile, LogStreamStderr, true
+	default:
+		c.String(http.StatusBadRequest, MakeErrorString(fmt.Sprintf(
+			"Invalid 'stream' parameter '%s'; must be 'stdout' or 'stderr'. For both at once use the structured stream (?format=ndjson), whose log events carry a 'stream' field.",
+			c.Query("stream"))))
+		return "", "", false
+	}
+}
+
 func (s *ServerConfig) tailTaskLog(c *gin.Context) {
 	taskId, err := s.getTaskId(c)
 	if err != nil {
@@ -150,14 +188,17 @@ func (s *ServerConfig) tailTaskLog(c *gin.Context) {
 		c.String(http.StatusNotFound, err.Error())
 		return
 	}
+	logFile, _, ok := rawLogStreamFor(c)
+	if !ok {
+		return
+	}
 	n := DEFAULT_LOG_TAIL_LINES
 	if q := c.Query("n"); q != "" {
 		if parsed, err := strconv.Atoi(q); err == nil && parsed > 0 {
 			n = parsed
 		}
 	}
-	stdoutPath := path.Join(task.ResultDir, fmt.Sprintf("blanket.stdout.log"))
-	content, err := tailLines(stdoutPath, n)
+	content, err := tailLines(path.Join(task.ResultDir, logFile), n)
 	if err != nil {
 		c.String(http.StatusOK, "")
 		return

@@ -278,3 +278,109 @@ tr:hover td { background: #fafbfc; }
   border-color: #ead59a;
   color: var(--warn);
 }
+
+/* ---------------------------------------------------------------------
+ * Exit codes and the task log pane (turtlemonvh/blanket#104).
+ *
+ * The pane's colours were inline styles on task_detail.html's <pre>; they
+ * move here unchanged so the three views (stdout / stderr / both) share
+ * one definition. Same palette as the state badges above — an exit code is
+ * just another small status token, not a new visual language.
+ * ------------------------------------------------------------------- */
+
+.exit-code {
+  display: inline-block;
+  min-width: 1.6rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  text-align: center;
+}
+.exit-code.exit-ok  { background: #e6f4ea; color: var(--ok);     border-color: #b2d8bf; }
+.exit-code.exit-bad { background: #fbe9e9; color: var(--danger); border-color: #ecb9b9; }
+
+/* Toolbar above the pane: the stream toggle on the left, the pin-to-bottom
+ * checkbox pushed to the right. */
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.log-toolbar .log-pin {
+  margin-left: auto;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* Segmented control: three buttons sharing one outline. */
+.log-toggle { display: inline-flex; }
+.log-toggle .log-toggle-btn {
+  border-radius: 0;
+  margin-left: -1px;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.7rem;
+}
+.log-toggle .log-toggle-btn:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+.log-toggle .log-toggle-btn:last-child { border-radius: 0 4px 4px 0; }
+.log-toggle .log-toggle-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  position: relative; /* keep the active button's border above its siblings */
+}
+.log-toggle .log-toggle-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.log-note { font-size: 0.85rem; max-width: 72ch; margin: 0 0 0.5rem; }
+
+.log-pane {
+  max-height: 420px;
+  overflow: auto;
+  background: #0e1014;
+  color: #d4d4d4;
+  padding: 0.75rem;
+  border-radius: 6px;
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.log-pane .log-meta { color: #7d838c; font-style: italic; }
+
+/* Per-line stream badge, "both" view only. Fixed width so the log text
+ * still lines up in a column the way an unbadged pane does. */
+.log-pane-badged .log-tag {
+  display: inline-block;
+  width: 4.2em;
+  margin-right: 0.6em;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6f7681;
+  user-select: none;
+}
+.log-pane-badged .log-line-stderr { color: #f0a9a9; }
+.log-pane-badged .log-line-stderr .log-tag { color: #b4746f; }
+
+/* The parsed result_file block on the task detail page. */
+.result-file { margin: 0 0 0.5rem; }
+.result-details {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 0.5rem 0.75rem;
+}
+.result-details > summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.result-json {
+  margin: 0.5rem 0 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}

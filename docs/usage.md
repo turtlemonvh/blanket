@@ -250,11 +250,38 @@ server-rendered htmx UI baked into the binary, no separate deploy.
 
 | Page | What it's for |
 | ---- | ------------- |
-| **Tasks** (`/ui/`) | Every task record: filter by state/type/tags/date, submit a new one, cancel or delete. |
+| **Tasks** (`/ui/`) | Every task record: filter by state/type/tags/date, submit a new one, cancel or delete. An **Exit** column shows each finished task's exit code. |
 | **Upcoming** (`/ui/upcoming`) | What hasn't run yet — see below. |
 | **Workers** (`/ui/workers`) | Launch, stop, restart workers; tail their logs. |
 | **Task Types** (`/ui/task-types`) | The loaded TOML types and their settings. |
 | **About** (`/ui/about`) | Version, config file, effective settings. |
+
+### Task detail
+
+`/ui/tasks/<id>` is one task's page: its metadata, its environment, its
+result artifact, and its log.
+
+- **Exit code** sits next to the state, and also has its own column in the
+  Tasks list. A dash means *no exit status*, not zero: a task that hasn't
+  finished, one killed by a signal (`STOPPED` / `TIMEDOUT`), and one that
+  never started all report none. Only a `0` badge means the process
+  exited 0.
+- **Result** appears only when the task's type declares a
+  [`result_file`](task_type_definitions.md#result_file). It shows the parsed artifact as
+  pretty-printed JSON — collapsed behind a disclosure if it's long — next
+  to a link to the raw file, and says so instead if the file couldn't be
+  parsed or the finished task never wrote it. It is read through exactly
+  the same code path as `POST /task/?wait`'s `result` / `resultError`
+  fields, so the page and the API always agree.
+- **Log** has a **stdout / stderr / both** toggle. `stdout` is the
+  default and is the raw live stream blanket has always shown; `stderr`
+  is the same thing pointed at the other file; `both` mixes the two with
+  a per-line badge saying which stream each line came from. A running
+  task streams into the pane as it goes (interleaved by arrival in the
+  combined view); a finished one shows the stored tail, and the combined
+  view then groups stdout before stderr, because the two files carry no
+  shared ordering once written. **Pin to bottom** keeps the newest line
+  in view.
 
 ### Upcoming
 

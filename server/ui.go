@@ -77,6 +77,24 @@ var uiFuncs = template.FuncMap{
 	// "(paused)"/"(stopped)" annotation — for the places that show a
 	// status badge right next to the schedule and don't want it twice.
 	"cronDesc": cronDescription,
+	// exitCode renders a task's *int exit status (turtlemonvh/blanket#104)
+	// the same way in the task rows and on the detail page. A func rather
+	// than a shared {{define}} because the two live in template sets that
+	// are parsed separately, and the markup is three tags long.
+	//
+	// nil is a dash, not a zero: a task that hasn't finished, one killed by
+	// a signal, and one that never started all report no exit status, and
+	// showing "0" for any of them would read as success.
+	"exitCode": func(code *int) template.HTML {
+		if code == nil {
+			return template.HTML(`<span class="muted">&mdash;</span>`)
+		}
+		class := "exit-bad"
+		if *code == 0 {
+			class = "exit-ok"
+		}
+		return template.HTML(fmt.Sprintf(`<span class="exit-code %s">%d</span>`, class, *code))
+	},
 }
 
 // uiTemplates is populated lazily per page so the partial templates
@@ -217,11 +235,18 @@ func (s *ServerConfig) uiTaskDetailPage(c *gin.Context) {
 	}
 	t := mustParseUIPage("task-detail",
 		"ui/templates/task_detail.html",
-		"ui/templates/series_card.html")
+		"ui/templates/series_card.html",
+		"ui/templates/task_log.html")
 	s.renderUI(c, t, gin.H{
 		"Title":  "Task " + taskId.Hex()[:8],
 		"Task":   task,
 		"Series": s.lookupSeries(task.ParentId),
+		// The log pane's default (stdout) view, rendered inline so the
+		// page needs no follow-up request for what it always showed; the
+		// toggle swaps this same partial. Nil Result means the task type
+		// declares no result_file and the page shows no result block.
+		"Log":    buildTaskLogView(task, LogStreamStdout),
+		"Result": buildTaskResultView(task),
 	})
 }
 
