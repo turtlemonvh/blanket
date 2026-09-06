@@ -27,21 +27,18 @@ import (
  * Utility functions
  */
 
-// Either gets the task id from a context object or returns an error
-// Will also set the response for the request if there was a problem
+// getTaskId parses the "id" path parameter as an objectid.ObjectId.
+// Callers are responsible for writing the response on error -- an
+// InvalidIdError maps to 400 (see #115); it never writes to c itself, so
+// a caller that wants a different status/body (e.g. the UI's flash
+// pattern) can still decide that for itself.
 func (s *ServerConfig) getTaskId(c *gin.Context) (objectid.ObjectId, error) {
-	var err error
-	var tid objectid.ObjectId
+	return SafeObjectId(c.Param("id"))
+}
 
-	taskIdStr := c.Param("id")
-	if !objectid.IsObjectIdHex(taskIdStr) {
-		err = fmt.Errorf("'%s' is not not a valid objectid", taskIdStr)
-		c.String(http.StatusInternalServerError, fmt.Sprintf(`{"error": "%s"}`, err.Error()))
-	} else {
-		tid = objectid.ObjectIdHex(taskIdStr)
-	}
-
-	return tid, err
+// getWorkerId is getTaskId's counterpart for worker routes -- see #115.
+func (s *ServerConfig) getWorkerId(c *gin.Context) (objectid.ObjectId, error) {
+	return SafeObjectId(c.Param("id"))
 }
 
 // ErrTaskNotCancelable is returned by cancelTaskById when a task exists
@@ -158,13 +155,14 @@ func (s *ServerConfig) getTask(c *gin.Context) {
 
 	taskId, err = s.getTaskId(c)
 	if err != nil {
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
 	var task tasks.Task
 	task, err = s.DB.GetTask(taskId)
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
 		return
 	}
 
@@ -179,7 +177,7 @@ func (s *ServerConfig) claimTask(c *gin.Context) {
 
 	workerId, err := SafeObjectId(c.Param("workerid"))
 	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -291,6 +289,7 @@ func (s *ServerConfig) markTaskAsRunning(c *gin.Context) {
 	var taskId objectid.ObjectId
 	taskId, err = s.getTaskId(c)
 	if err != nil {
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -361,6 +360,7 @@ func (s *ServerConfig) markTaskAsFinished(c *gin.Context) {
 	var taskId objectid.ObjectId
 	taskId, err = s.getTaskId(c)
 	if err != nil {
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -422,6 +422,7 @@ func (s *ServerConfig) updateTaskProgress(c *gin.Context) {
 	var taskId objectid.ObjectId
 	taskId, err = s.getTaskId(c)
 	if err != nil {
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -777,6 +778,7 @@ func (s *ServerConfig) removeTask(c *gin.Context) {
 
 	taskId, err := s.getTaskId(c)
 	if err != nil {
+		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
 
@@ -808,13 +810,14 @@ func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 
 	taskId, err = s.getTaskId(c)
 	if err != nil {
+		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
 
 	var task tasks.Task
 	task, err = s.DB.GetTask(taskId)
 	if err != nil {
-		c.String(http.StatusInternalServerError, "Error fetching information about task while preparing to open logfile stream")
+		c.String(statusForDBError(err, http.StatusInternalServerError), "Error fetching information about task while preparing to open logfile stream")
 		return
 	}
 

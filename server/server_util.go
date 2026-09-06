@@ -27,13 +27,30 @@ func MapKeys(m map[string]bool) []string {
 	return ks
 }
 
-// Safely convert a string to an object id
-func SafeObjectId(workerIdStr string) (objectid.ObjectId, error) {
-	oid := objectid.NewObjectId()
-	if !objectid.IsObjectIdHex(workerIdStr) {
-		return oid, fmt.Errorf("Invalid worker id")
+// InvalidIdError indicates a path or query parameter failed to parse as a
+// lib/objectid.ObjectId -- the id is malformed, not merely absent (see
+// #115). Every handler that resolves an id maps this to 400; a
+// well-formed but absent id surfaces instead as a
+// database.ItemNotFoundError from the DB layer, which statusForDBError
+// maps to 404.
+type InvalidIdError struct {
+	Value string
+}
+
+func (e InvalidIdError) Error() string {
+	return fmt.Sprintf("'%s' is not a valid id", e.Value)
+}
+
+// SafeObjectId parses idStr as an objectid.ObjectId, returning an
+// InvalidIdError if it doesn't parse. The single place every :id
+// path/query parameter (task or worker) is resolved -- see getTaskId and
+// getWorkerId, its ServerConfig-bound wrappers for the common c.Param("id")
+// case.
+func SafeObjectId(idStr string) (objectid.ObjectId, error) {
+	if !objectid.IsObjectIdHex(idStr) {
+		return objectid.ObjectId{}, InvalidIdError{Value: idStr}
 	}
-	return objectid.ObjectIdHex(workerIdStr), nil
+	return objectid.ObjectIdHex(idStr), nil
 }
 
 // statusForDBError maps a database.ItemNotFoundError (a missing worker or

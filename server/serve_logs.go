@@ -181,11 +181,12 @@ func rawLogStreamFor(c *gin.Context) (filename string, stream string, ok bool) {
 func (s *ServerConfig) tailTaskLog(c *gin.Context) {
 	taskId, err := s.getTaskId(c)
 	if err != nil {
+		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
 	task, err := s.DB.GetTask(taskId)
 	if err != nil {
-		c.String(http.StatusNotFound, err.Error())
+		c.String(statusForDBError(err, http.StatusInternalServerError), err.Error())
 		return
 	}
 	logFile, _, ok := rawLogStreamFor(c)
@@ -208,14 +209,14 @@ func (s *ServerConfig) tailTaskLog(c *gin.Context) {
 }
 
 func (s *ServerConfig) tailWorkerLog(c *gin.Context) {
-	workerId, err := SafeObjectId(c.Param("id"))
+	workerId, err := s.getWorkerId(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
 	w, err := s.DB.GetWorker(workerId)
 	if err != nil {
-		c.String(http.StatusNotFound, err.Error())
+		c.String(statusForDBError(err, http.StatusInternalServerError), err.Error())
 		return
 	}
 	n := DEFAULT_LOG_TAIL_LINES
