@@ -91,6 +91,69 @@ Two caveats: workers poll for work, so even a trivial task takes roughly
 on an unauthenticated endpoint, `tasks.sync.maxWait` is worth lowering if
 the server is reachable beyond a trusted network.
 
+### Running a task from the CLI (`--wait` / `--follow`)
+
+`blanket submit --wait` turns submit into "run this and tell me how it
+went": it blocks, prints the completion payload, and **exits with the
+task's own exit code**, which is what makes it usable in a pipeline.
+
+```bash
+# Block, print the payload as JSON, exit with the task's exit code
+$ blanket submit -t echo_task --wait
+{
+  "task": { "id": "68b4...", "state": "SUCCESS", "exitCode": 0, ... },
+  "waitOutcome": "completed",
+  "stdout": "hello world\n",
+  ...
+}
+
+# The point of mirroring the exit code
+$ blanket submit -t deploy --wait && echo "deployed"
+
+# Watch it run: task stdout on stdout, task stderr on stderr
+$ blanket submit -t long_build --follow
+building...
+warning: deprecated flag          # this one went to stderr
+blanket: task 68b4... finished: state=SUCCESS exitCode=0
+
+# Just the id, and the exit code
+$ blanket submit -t echo_task --wait -q
+68b4c1f2a3e4d5b6c7a8f9e0
+
+# Give it longer than the server's default
+$ blanket submit -t slow_task --wait --wait-timeout 120s
+```
+
+| Flag | Meaning |
+| ---- | ------- |
+| `--wait` | Block until the task finishes; print the completion payload as JSON. |
+| `--follow` / `-f` | Implies `--wait`. Consumes the NDJSON event stream and writes the task's output to the matching local stream as it arrives; prints a one-line summary to **stderr** at the end instead of the payload (the output has already been printed). |
+| `--wait-timeout` | How long to block — a duration (`"90s"`) or a number of seconds. Defaults to the server's `tasks.sync.defaultWait`; over `tasks.sync.maxWait` is rejected. |
+| `-q` | With either: print only the task id, and no summary. The exit code is unaffected. |
+
+Exit codes:
+
+| Situation | Exit code |
+| --------- | --------- |
+| Task finished | The task's own `exitCode` (`0` for a clean run, `3` for `exit 3`, ...) |
+| Task finished with no exit code of its own (killed by a signal, `TIMEDOUT`, never started) | `0` if `SUCCESS`, else `1` |
+| The wait expired with the task still running | `124`, the code `timeout(1)` uses for the same thing. The task keeps running; its id is on stderr. |
+| The submission itself failed (bad type, server unreachable) | `1` |
+
+`--follow` preserves the stdout/stderr split, so
+`blanket submit -t x --follow 2>/dev/null` behaves the way it would for
+the underlying command. Ordering *between* the two streams is
+best-effort: blanket tails two separate files and can't reconstruct the
+interleaving the task produced. `--wait`/`--follow` can't be combined
+with `--not-before`/`--cron` — there'd be nothing to wait for.
+
+The same stream is available over HTTP as `POST /task/?wait&stream`
+(NDJSON by default, SSE with `Accept: text/event-stream`), and
+`GET /task/:id/log` serves it for an already-running task with
+`Accept: application/x-ndjson`. See
+[api.md](api.md#streaming-submission-post-taskwaitstream) for the event
+schema.
+
 ## Scheduling tasks
 
 Delay a one-shot task, or make it recurring, with `notBefore` / `cron`

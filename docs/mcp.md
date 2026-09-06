@@ -28,7 +28,7 @@ somewhere more exposed than a private network, set `mcp.mode =
 
 ## What's exposed
 
-Nine tools, gated by `mcp.mode`:
+Ten tools, gated by `mcp.mode`:
 
 | Tool | Args | Tier |
 | --- | --- | --- |
@@ -38,11 +38,42 @@ Nine tools, gated by `mcp.mode`:
 | `blanket_workers` | `id?`, `log_lines?` | readonly |
 | `blanket_write_task_type` | `name`, `toml` | create |
 | `blanket_submit_task` | `type`, `env?`, `notBefore?`, `cron?` | create |
+| `blanket_run_task` | `type`, `env?`, `waitSeconds?` | create |
 | `blanket_launch_worker` | `tags`, `count?` | create |
 | `blanket_cancel_task` | `id`, `force?`, `delete?` | all |
 | `blanket_stop_worker` | `id`, `delete?` | all |
 
 `create` mode includes `readonly`'s tools; `all` includes both.
+
+### `blanket_submit_task` vs `blanket_run_task`
+
+Two verbs rather than one tool with a mode flag: model tool selection is
+driven by name and description, and "queue this and don't wait" and "run
+this and give me the output" are different intentions.
+
+- **`blanket_submit_task`** queues a task and returns its id and state.
+  It is the one that takes `notBefore` / `cron`, since a scheduled or
+  recurring submission is by definition not something to wait for.
+- **`blanket_run_task`** submits, waits for a terminal state, and returns
+  state, exit code, both output tails, and the parsed
+  [`result_file`](task_type_definitions.md#result_file) in a single tool
+  result — one call where submit-then-poll-then-fetch-logs was three.
+  Reach for it for anything short.
+
+  `waitSeconds` defaults to `tasks.sync.defaultWait` (30s) and is
+  **clamped** to `tasks.sync.maxWait` (300s) rather than rejected, with a
+  note in the result — unlike `POST /task/?wait`, which answers 400 over
+  the cap, because a model can't cheaply retry a rejected call. If the
+  wait runs out the tool says so and names the task id; the task keeps
+  running and `blanket_tasks(id=...)` picks it back up.
+
+  Output tails are cut to `mcp.maxLogLines` (default 50 lines per
+  stream), tighter than the REST payload's `tasks.sync.maxLogLines`,
+  because a tool result lands directly in a context window.
+
+Both need a worker whose tags are a superset of the task type's tags
+before anything actually runs — `blanket_run_task` with no matching
+worker just burns its wait and reports the task still `WAITING`.
 
 Every tool returns plain text (compact tables for lists, a labeled
 key-value block for a single item), not JSON — this keeps the response
@@ -50,16 +81,22 @@ small and just as readable to an agent.
 
 ## Context cost
 
-`tools/list` plus the server's instructions text is kept under **4,400
-characters (~1,100 tokens)** in the default `mcp.mode = "all"` — the
+`tools/list` plus the server's instructions text is kept under **5,000
+characters (~1,250 tokens)** in the default `mcp.mode = "all"` — the
 worst case, since narrower modes register fewer tools. This is a
 test-enforced budget (`TestToolListFitsContextBudget`), not just a
 target; the actual measured size is logged by that test on every run.
-As of this writing that measured size is 4,320 characters (the budget was
-bumped from 4,000 when `blanket_submit_task` gained `notBefore`/`cron`
-and `blanket_cancel_task`'s description grew to cover the new task
-states it can cancel — turtlemonvh/blanket#61's pause/resume/schedule
-rework).
+As of this writing that measured size is 4,958 characters.
+
+The budget has been raised twice, each time for a tool surface that grew
+rather than prose that sprawled: 4,000 → 4,400 when
+`blanket_submit_task` gained `notBefore`/`cron` and
+`blanket_cancel_task`'s description grew to cover the new task states it
+can cancel (turtlemonvh/blanket#61's pause/resume/schedule rework), and
+4,400 → 5,000 for the tenth tool, `blanket_run_task`
+(turtlemonvh/blanket#27) — submit-and-wait is the interaction an agent
+actually wants, and a tool it can't see is worth nothing. Descriptions
+were trimmed first; the raise covers what was left.
 
 If you're tight on context budget elsewhere, set `mcp.mode = "readonly"`
 to cut this further, or wait for the tool-search / dynamic-discovery
@@ -119,8 +156,12 @@ Set `mcp.enabled = false` to not mount `/mcp` at all.
    findings either way so you can fix and retry.
 3. `blanket_workers()` — check whether a worker exists whose tags are a
    superset of `hello`'s tags. If not, `blanket_launch_worker(tags=[...])`.
-4. `blanket_submit_task(type="hello")` — queues the task; returns its id.
-5. `blanket_tasks(id="<id>", log_lines=50)` — check status
+4. `blanket_run_task(type="hello")` — submits and waits; returns the
+   state, exit code and output in one result. Or
+   `blanket_submit_task(type="hello")` to queue it and move on, which
+   returns just the id.
+5. `blanket_tasks(id="<id>", log_lines=50)` — for a task you queued
+   rather than ran: check status
    (`WAITING`/`RUNNING`/`SUCCESS`/`ERROR`/...) and the last 50 lines of
    its stdout log, for debugging a failure.
 

@@ -35,19 +35,26 @@ func mcpModeAllows(mode string, t mcpToolTier) bool {
 }
 
 // mcpContextBudgetChars is a design tripwire, not a hard protocol limit —
-// the measured tools/list + Instructions size (currently ~4320 chars,
-// bumped from 4000 when blanket_submit_task and blanket_cancel_task grew
-// notBefore/cron and wider-state descriptions for turtlemonvh/blanket#61's
-// pause/resume/schedule rework) is close to this budget by design; nine
-// tools' worth of descriptions is a lean surface, not accumulated bloat.
+// the measured tools/list + Instructions size (currently ~4960 chars) is
+// close to this budget by design; ten tools' worth of descriptions is a
+// lean surface, not accumulated bloat. It has been raised twice, each
+// time for a tool surface that grew rather than for prose that sprawled:
+// 4000 -> 4400 when blanket_submit_task and blanket_cancel_task grew
+// notBefore/cron and wider-state descriptions (turtlemonvh/blanket#61's
+// pause/resume/schedule rework), and 4400 -> 5000 for the tenth tool,
+// blanket_run_task (turtlemonvh/blanket#27) — submit-and-wait is the
+// interaction an agent actually wants, and a tool it can't see is worth
+// nothing. Descriptions were trimmed first; the raise covers what was
+// left.
+//
 // If a future addition trips TestToolListFitsContextBudget, prefer moving
 // prose into blanket_docs over shaving wording that an agent actually
 // needs to call a tool correctly — see
 // docs/superpowers/plans/2026-09-01-blanket-mcp-interface.md's Context
 // budget section for the full lever ordering.
-const mcpContextBudgetChars = 4400
+const mcpContextBudgetChars = 5000
 
-const mcpInstructions = `blanket runs shell tasks defined by TOML task types. To author a new task type: call blanket_docs(page="authoring") for the guide, then blanket_write_task_type to save and validate it. To run it: blanket_submit_task queues a task of that type, but it only runs once a worker is available whose tags are a superset of the type's tags -- use blanket_workers to check, blanket_launch_worker to start one. Check status and logs with blanket_tasks(id=...).`
+const mcpInstructions = `blanket runs shell tasks defined by TOML task types. To author a new task type: call blanket_docs(page="authoring") for the guide, then blanket_write_task_type to save and validate it. To run it: blanket_run_task submits and waits, returning the output; blanket_submit_task queues without waiting. Either only runs once a worker is available whose tags are a superset of the type's tags -- use blanket_workers to check, blanket_launch_worker to start one. Check status and logs with blanket_tasks(id=...).`
 
 // buildMCPServer constructs the MCP server for s, registering only the
 // tools allowed by the configured mcp.mode.
@@ -127,6 +134,10 @@ func (s *ServerConfig) registerCreateMCPTools(srv *mcp.Server, mode string) {
 		Name:        "blanket_submit_task",
 		Description: "Submit a task of the given type. Requires an available worker whose tags superset the type's tags to run. Optional notBefore delays it once; cron makes it a recurring template instead (excl. w/ each other).",
 	}, s.mcpSubmitTask)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "blanket_run_task",
+		Description: "Submit a task, wait for it, and return its state, exit code, output and parsed result in one call. Prefer this for short tasks; needs a matching worker. waitSeconds is capped by tasks.sync.maxWait.",
+	}, s.mcpRunTask)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_launch_worker",
 		Description: "Launch one or more workers with given tags.",

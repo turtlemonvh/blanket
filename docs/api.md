@@ -16,6 +16,8 @@ POST   /task/                   # submit a new task (JSON or multipart form)
                                  # ?wait[=30s] blocks until the task finishes
                                  # and returns its outcome — see
                                  # "Synchronous submission" below
+                                 # &stream returns it as a live event stream
+                                 # instead — see "Streaming submission"
 DELETE /task/:id                # delete a task; kills it if running.
                                  # For a RECURRING/PAUSED task template,
                                  # this removes the record outright — see
@@ -35,7 +37,9 @@ PUT    /task/:id/schedule       # change a live series' schedule -- body
                                  # template, or {"notBefore": "..."} for a
                                  # SCHEDULED one-shot task. 400 on a state/body
                                  # mismatch or an invalid value.
-GET    /task/:id/log            # stream stdout (SSE)
+GET    /task/:id/log            # stream stdout (SSE), or the structured
+                                 # event stream with Accept:
+                                 # application/x-ndjson / ?format=ndjson
 GET    /task/:id/log/tail       # last N lines of stdout
 ```
 
@@ -141,6 +145,115 @@ Two caveats worth knowing before reaching for `?wait`:
   (orphan recovery is not implemented yet), and a synchronous caller
   waiting on such a task simply burns its whole wait budget and gets a
   504.
+
+### Streaming submission: `POST /task/?wait&stream`
+
+Adding `stream` keeps the connection open and emits one event per update
+while the task runs, ending with a terminal `result` event that carries
+the completion payload above **verbatim**. The stream is
+self-terminating: a client that reads to the `result` event never needs a
+second fetch.
+
+```
+POST /task/?wait&stream          # events, then the completion payload
+POST /task/?wait=60s&stream      # ...with a 60s budget
+POST /task/?stream               # a stream implies a wait; same as ?wait&stream
+```
+
+```bash
+curl -sN -X POST 'localhost:8773/task/?wait=60s&stream' \
+    -d '{"type": "echo_task"}'
+```
+
+A stream is always **200**. The status line is sent before the task's
+outcome is known, so `fail_on_error` has no effect here and there is no
+504: the `result` event's `waitOutcome` (`"completed"` /
+`"wait_timeout"`) carries the distinction, and `task.state` /
+`task.exitCode` carry the task's own outcome. A `wait_timeout` result
+event means the budget expired with the task still running — it is
+untouched and pollable by id, exactly as with the blocking 504.
+
+Disconnecting mid-stream is fine and changes nothing about the task.
+
+#### The event schema
+
+Every event is a JSON object with `ts` (unix seconds), `taskId`, and
+`type`. Beyond that:
+
+| `type` | Extra fields |
+| ------ | ------------ |
+| `state` | `state`, and `previousState` — `null` on the first event, which reports the state the task was already in rather than a transition. |
+| `log` | `stream` (`"stdout"` / `"stderr"`), `seq`, `line` (no trailing newline). |
+| `result` | The completion payload's fields, flattened: `waitOutcome`, `task`, `stdout`, `stderr`, `stdoutTruncated`, `stderrTruncated`, `result`, `resultError`. |
+
+```
+{"ts":1756900000,"taskId":"68b4...","type":"state","state":"WAITING","previousState":null}
+{"ts":1756900002,"taskId":"68b4...","type":"state","state":"CLAIMED","previousState":"WAITING"}
+{"ts":1756900002,"taskId":"68b4...","type":"state","state":"RUNNING","previousState":"CLAIMED"}
+{"ts":1756900002,"taskId":"68b4...","type":"log","stream":"stdout","seq":1,"line":"hello world"}
+{"ts":1756900003,"taskId":"68b4...","type":"state","state":"SUCCESS","previousState":"RUNNING"}
+{"ts":1756900003,"taskId":"68b4...","type":"result","waitOutcome":"completed","task":{...},"stdout":"hello world\n","stderr":"","result":null,"resultError":null}
+```
+
+Notes that matter in practice:
+
+* **`state` events are the debugging tool.** Without them a caller that
+  waits 30s and times out can't tell "no worker was free to claim this"
+  (still `WAITING`) from "the task is genuinely slow" (reached
+  `RUNNING`). Since blanket's workers are hand-launched, the first case
+  is common.
+* **`log` delivery is best-effort and lags.** The worker flushes
+  `blanket.stdout.log` on its own poll interval, and the stream can't
+  attach to the log files until the task reaches `CLAIMED` (they don't
+  exist before the worker sets the execution directory up). The
+  `result` event repeats both tails, so a client that reads to the end
+  always has the authoritative output even if it missed live lines.
+* **`seq` is per stream, per connection.** `stdout` and `stderr` each
+  count from 1. It is not a position in the file, and a reconnecting
+  client sees it restart.
+* **Ordering between `stdout` and `stderr` is not the task's.** They are
+  two files tailed separately; blanket cannot reconstruct the
+  interleaving the task produced.
+* Unknown event types should be skipped, not treated as errors — that's
+  what lets a later blanket add one without breaking your client.
+
+#### Framing: NDJSON or SSE
+
+The JSON object on the wire is identical either way; only the wrapping
+differs, and one encoder produces both.
+
+| `Accept` | Framing | `Content-Type` |
+| -------- | ------- | -------------- |
+| anything else (the default) | One JSON object per line | `application/x-ndjson` |
+| `text/event-stream` | SSE frames, `event:` set to the event's `type`, `data:` to the same JSON | `text/event-stream` |
+
+NDJSON is the default because the callers this exists for — `curl` in a
+pipeline, the Go CLI, an agent's HTTP client — all parse line-delimited
+JSON trivially. SSE is there for browser consumers and matches how
+`GET /task/:id/log` already behaves.
+
+### Structured log stream: `GET /task/:id/log`
+
+The default is unchanged: SSE frames of raw stdout lines with
+`event: message`, which is what the embedded UI consumes. Asking for the
+structured stream instead gets the same events, from the same encoder,
+so the two surfaces can't drift:
+
+```bash
+curl -sN -H 'Accept: application/x-ndjson' localhost:8773/task/<id>/log
+curl -sN 'localhost:8773/task/<id>/log?format=ndjson'
+```
+
+| Request | Response |
+| ------- | -------- |
+| default | `text/event-stream`, raw stdout lines as `event: message` frames (unchanged) |
+| `Accept: application/x-ndjson`, or `?format=ndjson` (`?format=events` is a synonym) | `application/x-ndjson`, the `state` / `log` / `result` events above |
+
+The structured variant has no wait budget: it stays open until the task
+reaches a terminal state (ending with a `completed` result event) or the
+client goes away. Both variants now stay open while the task is live —
+before this they closed after the first five idle seconds regardless of
+the task's state.
 
 A `notBefore`-in-the-future or `cron` submission returns **429** with a
 JSON error body if accepting it would bring the count of live
