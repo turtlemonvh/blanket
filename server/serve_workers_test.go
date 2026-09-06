@@ -158,3 +158,87 @@ func TestDeleteWorker_AllowsStoppedWorker(t *testing.T) {
 	_, err = s.DB.GetWorker(w.Id)
 	assert.Error(t, err)
 }
+
+// TestDeleteWorker_InvalidId is #115's regression test for DELETE
+// /worker/:id: a malformed id is a 400, resolved before the body is even
+// read.
+func TestDeleteWorker_InvalidId(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	req, _ := http.NewRequest("DELETE", "/worker/notanobjectid", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestDeleteWorker_MissingIdIsNoop is deleteWorker's idempotent-delete
+// counterpart to TestDeleteTask_MissingIdIsNoop: a well-formed id naming
+// no worker is not an error, same as deleting one that exists (see
+// deleteWorkerById -> DB.DeleteWorker, a bolt delete of an absent key).
+func TestDeleteWorker_MissingIdIsNoop(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	body, err := json.Marshal(&worker.WorkerConf{Stopped: true})
+	assert.NoError(t, err)
+
+	req, _ := http.NewRequest("DELETE", "/worker/"+objectid.NewObjectId().Hex(), bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// --- GET /worker/:id ---
+//
+// #115: a malformed id is a 400 (never the 500 SafeObjectId's callers used
+// to answer with), a well-formed id naming no worker is a 404 (via
+// database.ItemNotFoundError / statusForDBError), and a real worker still
+// fetches as before.
+
+func TestGetWorker_InvalidId(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	req, _ := http.NewRequest("GET", "/worker/notanobjectid", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestGetWorker_MissingId(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	req, _ := http.NewRequest("GET", "/worker/"+objectid.NewObjectId().Hex(), nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestGetWorker_Valid(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}}
+	assert.NoError(t, s.DB.UpdateWorker(&w))
+
+	req, _ := http.NewRequest("GET", "/worker/"+w.Id.Hex(), nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var fetched worker.WorkerConf
+	assert.NoError(t, json.Unmarshal(rec.Body.Bytes(), &fetched))
+	assert.Equal(t, w.Id, fetched.Id)
+}

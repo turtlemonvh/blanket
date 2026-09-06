@@ -234,14 +234,14 @@ func (s *ServerConfig) uiTasksPage(c *gin.Context) {
 // task_detail.html would have meant wrapping nearly every row and both log
 // sections in {{if}}; see renderSeriesDetail in ui_schedule.go.
 func (s *ServerConfig) uiTaskDetailPage(c *gin.Context) {
-	taskId, err := SafeObjectId(c.Param("id"))
+	taskId, err := s.getTaskId(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
 	task, err := s.DB.GetTask(taskId)
 	if err != nil {
-		c.String(http.StatusNotFound, err.Error())
+		c.String(statusForDBError(err, http.StatusInternalServerError), err.Error())
 		return
 	}
 	if isSeriesTemplate(task) {
@@ -291,14 +291,14 @@ func (s *ServerConfig) uiWorkersPage(c *gin.Context) {
 
 // uiWorkerDetailPage renders one worker's metadata and log stream.
 func (s *ServerConfig) uiWorkerDetailPage(c *gin.Context) {
-	workerId, err := SafeObjectId(c.Param("id"))
+	workerId, err := s.getWorkerId(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
 	w, err := s.DB.GetWorker(workerId)
 	if err != nil {
-		c.String(http.StatusNotFound, err.Error())
+		c.String(statusForDBError(err, http.StatusInternalServerError), err.Error())
 		return
 	}
 	t := mustParseUIPage("worker-detail", "ui/templates/worker_detail.html")

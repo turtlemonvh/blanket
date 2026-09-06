@@ -143,11 +143,12 @@ func tailLinesTruncated(filepath string, n int) (string, bool, error) {
 func (s *ServerConfig) tailTaskLog(c *gin.Context) {
 	taskId, err := s.getTaskId(c)
 	if err != nil {
+		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
 	task, err := s.DB.GetTask(taskId)
 	if err != nil {
-		c.String(http.StatusNotFound, err.Error())
+		c.String(statusForDBError(err, http.StatusInternalServerError), err.Error())
 		return
 	}
 	n := DEFAULT_LOG_TAIL_LINES
@@ -167,14 +168,14 @@ func (s *ServerConfig) tailTaskLog(c *gin.Context) {
 }
 
 func (s *ServerConfig) tailWorkerLog(c *gin.Context) {
-	workerId, err := SafeObjectId(c.Param("id"))
+	workerId, err := s.getWorkerId(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
 	w, err := s.DB.GetWorker(workerId)
 	if err != nil {
-		c.String(http.StatusNotFound, err.Error())
+		c.String(statusForDBError(err, http.StatusInternalServerError), err.Error())
 		return
 	}
 	n := DEFAULT_LOG_TAIL_LINES

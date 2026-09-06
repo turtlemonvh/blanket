@@ -106,9 +106,10 @@ grep -q '^error: 400 ' "$bad_submit_err" \
     && fail "submit of an unknown task type printed to stdout instead of just failing: $(cat "$bad_submit_out")"
 
 # `blanket rm` on a malformed id is the other CLI path onto the same fix
-# (turtlemonvh/blanket#112): DELETE /task/:id answers a non-hex id with a
-# 500 (see server/serve_tasks.go's getTaskId), and rm must surface that
-# instead of silently succeeding.
+# (turtlemonvh/blanket#112): DELETE /task/:id used to answer a non-hex id
+# with a 500 (see server/serve_tasks.go's getTaskId); turtlemonvh/blanket#115
+# fixed that to a 400 (malformed id is a client error), and rm must surface
+# that instead of silently succeeding.
 bad_rm_err="$WORKDIR/bad-rm.err"
 set +e
 "$BINARY" --config "$CONFIG" rm not-a-valid-id > /dev/null 2> "$bad_rm_err"
@@ -117,8 +118,8 @@ set -e
 
 [[ "$bad_rm_status" -eq 1 ]] \
     || fail "rm of a malformed task id should exit 1, got $bad_rm_status (stderr: $(cat "$bad_rm_err"))"
-grep -q '^error: 500 ' "$bad_rm_err" \
-    || fail "rm of a malformed task id should print 'error: 500 <message>' on stderr, got: $(cat "$bad_rm_err")"
+grep -q '^error: 400 ' "$bad_rm_err" \
+    || fail "rm of a malformed task id should print 'error: 400 <message>' on stderr, got: $(cat "$bad_rm_err")"
 
 # Scheduled tasks (turtlemonvh/blanket#61): a task submitted with a future
 # notBefore starts SCHEDULED (not WAITING/claimable), and the background

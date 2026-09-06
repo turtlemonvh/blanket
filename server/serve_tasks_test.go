@@ -3,14 +3,20 @@
 // Covered:
 //   - POST /task/ with JSON body: TestPostTask_Valid, TestPostTask_MissingTypeField,
 //     TestPostTask_UnknownType
-//   - GET /task/:id:            TestGetTask_InvalidId, TestGetTask_Exists
+//   - GET /task/:id:            TestGetTask_InvalidId, TestGetTask_MissingId,
+//     TestGetTask_Exists
 //   - GET /task/ + state filter: TestTaskList_FilterByState
-//   - DELETE /task/:id:         TestDeleteTask
+//   - DELETE /task/:id:         TestDeleteTask, TestDeleteTask_InvalidId,
+//     TestDeleteTask_MissingIdIsNoop
 //   - PUT /task/:id/cancel from WAITING: TestCancelTask_Waiting
 //   - PUT /task/:id/cancel from RUNNING without force (rejected, no-op):
 //     TestCancelTask_RunningWithoutForce
 //   - PUT /task/:id/cancel?force=true from RUNNING: TestCancelTask_RunningWithForce
 //   - cancelTaskById RUNNING force gate: TestCancelTaskById_RunningRequiresForce
+//   - malformed/missing :id on task routes (#115), 400 vs. 404:
+//     TestGetTask_InvalidId/_MissingId, TestDeleteTask_InvalidId,
+//     TestCancelTask_InvalidId/_MissingTask, plus the cross-resource table
+//     in serve_id_routes_test.go
 //   - worker observing the STOPPED tombstone mid-run and killing the
 //     subprocess: TestProcessOne_StoppedMidFlight (worker/worker_test.go)
 //   - PUT /task/:id/progress (valid + out-of-range): TestUpdateProgress_Valid,
@@ -304,6 +310,8 @@ name = "MSG"
 
 // --- GET /task/:id ---
 
+// TestGetTask_InvalidId is the regression test for #115: a malformed id
+// is a client error (400), never the 500 getTaskId used to answer with.
 func TestGetTask_InvalidId(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()
@@ -313,7 +321,23 @@ func TestGetTask_InvalidId(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "notanobjectid")
+}
+
+// TestGetTask_MissingId is #115's other half: a well-formed id naming no
+// task is 404 (via database.ItemNotFoundError / statusForDBError), distinct
+// from a malformed one.
+func TestGetTask_MissingId(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	req, _ := http.NewRequest("GET", fmt.Sprintf("/task/%s", objectid.NewObjectId().Hex()), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestGetTask_Exists(t *testing.T) {
@@ -377,6 +401,38 @@ func TestDeleteTask(t *testing.T) {
 	assertResponseLength(t, r, req, 0)
 }
 
+// TestDeleteTask_InvalidId is #115's regression test for DELETE /task/:id:
+// a malformed id is a 400, never the 500 that motivated the issue (and
+// scripts/smoke.sh's `rm not-a-valid-id` assertion).
+func TestDeleteTask_InvalidId(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	req, _ := http.NewRequest("DELETE", "/task/notanobjectid", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestDeleteTask_MissingIdIsNoop documents removeTask's long-standing,
+// deliberate idempotent-delete contract (see its "Always returns 200,
+// even if item doesn't exist" doc comment): #115 fixes the malformed-id
+// case above to 400, but leaves this one alone -- a well-formed id naming
+// no task is not an error for DELETE.
+func TestDeleteTask_MissingIdIsNoop(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	req, _ := http.NewRequest("DELETE", fmt.Sprintf("/task/%s", objectid.NewObjectId().Hex()), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 // --- PUT /task/:id/cancel ---
 
 func TestCancelTask_Waiting(t *testing.T) {
@@ -409,6 +465,31 @@ func TestCancelTask_Waiting(t *testing.T) {
 	var stopped tasks.Task
 	json.Unmarshal(getW.Body.Bytes(), &stopped)
 	assert.Equal(t, "STOPPED", stopped.State)
+}
+
+// TestCancelTask_InvalidId is #115's regression test for PUT
+// /task/:id/cancel: a malformed id is a 400. Before the fix, getTaskId
+// wrote its own 500 here *and* cancelTask wrote a second 400 on top of
+// it -- a double response write masked by the fact that the first write
+// (the 500) always "won".
+func TestCancelTask_InvalidId(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	w := putNoBody(r, "/task/notanobjectid/cancel")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestCancelTask_MissingTask is #115's other half: a well-formed id
+// naming no task is 404.
+func TestCancelTask_MissingTask(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	w := putNoBody(r, fmt.Sprintf("/task/%s/cancel", objectid.NewObjectId().Hex()))
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestCancelTaskById_Waiting(t *testing.T) {
