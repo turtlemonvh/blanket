@@ -973,6 +973,12 @@ func (s *ServerConfig) sseStream(c *gin.Context, hub *EventHub, eventName string
 	// and server/ui/static/sse-lifecycle.js.
 	done := c.Request.Context().Done()
 
+	// Closed when the server begins shutting down. net/http's Shutdown
+	// waits indefinitely on an active connection and never force-closes
+	// one, so without this a single open UI tab would hang shutdown
+	// forever. See server/lifecycle.go and issue #23 phase 2.
+	shutdown := s.shutdownChan()
+
 	seq := 0
 	send := func(w io.Writer) {
 		c.Writer.Header()["Content-Type"] = []string{"text/event-stream"}
@@ -991,6 +997,9 @@ func (s *ServerConfig) sseStream(c *gin.Context, hub *EventHub, eventName string
 		}
 		select {
 		case <-done:
+			return false
+		case <-shutdown:
+			writeServerRestarting(w)
 			return false
 		case <-ch:
 			send(w)

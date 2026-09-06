@@ -59,6 +59,15 @@ test-api-e2e:
 test-smoke:
 	bash scripts/smoke.sh
 
+# Shutdown / restart tests for the built binary (turtlemonvh/blanket#23
+# phase 2): SIGTERM drains with an SSE client attached and exits 0, SIGINT
+# stops without resurrecting anything, SIGUSR2 re-execs in place keeping the
+# PID. None of these are expressible in-process — see the header of
+# scripts/restart.sh. Shares scripts/lib/harness.sh with test-smoke, and
+# needs a built binary the same way.
+test-restart:
+	bash scripts/restart.sh
+
 install-playwright:
 	cd tests/e2e && npm install && npx playwright install --with-deps chromium
 
@@ -126,7 +135,7 @@ docker-test-browser: docker-image
 	$(DOCKER_RUN) make linux test-browser
 
 docker-test-smoke: docker-image
-	$(DOCKER_RUN) make linux test-smoke
+	$(DOCKER_RUN) make linux test-smoke test-restart
 
 docker-build: docker-image
 	$(DOCKER_RUN) make linux darwin windows VERSION=$(VERSION)
@@ -146,4 +155,4 @@ docker-shell: docker-image
 docker-clean:
 	-docker volume rm blanket-dev-cache blanket-npm-cache
 
-.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e test-smoke install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-browser docker-test-smoke docker-build docker-shell docker-clean
+.PHONY: setup linux darwin windows test test-integration test-browser test-api-e2e test-smoke test-restart install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-browser docker-test-smoke docker-build docker-shell docker-clean
