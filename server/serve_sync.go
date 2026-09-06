@@ -16,6 +16,7 @@ package server
 // event rather than growing a second, drifting encoder.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -132,9 +133,11 @@ type CompletionPayload struct {
 	ResultError *string `json:"resultError"`
 }
 
-// waitTimeoutBody is the 504 body: enough for the caller to pick the task
+// WaitTimeoutBody is the 504 body: enough for the caller to pick the task
 // back up asynchronously, which is exactly what the wait expiring means.
-type waitTimeoutBody struct {
+// Exported because client/client.go decodes it -- the CLI turns it into
+// its own distinct exit code (see command/submit.go).
+type WaitTimeoutBody struct {
 	Id          string `json:"id"`
 	State       string `json:"state"`
 	WaitOutcome string `json:"waitOutcome"`
@@ -154,10 +157,19 @@ type syncWaitParams struct {
 	// FailOnError makes a non-SUCCESS terminal state answer 502 instead
 	// of 200. Opt-in, so `curl --fail` has a way to notice a failed task
 	// without changing the default contract for everyone else.
+	//
+	// It has no effect on a stream: the status is written before the
+	// task's outcome is known. The result event's task.state carries it.
 	FailOnError bool
+	// Stream turns the response into the structured event stream defined
+	// in server/serve_stream.go instead of a single completion payload.
+	// Bare `?stream` (or any true-ish value) opts in; a stream implies a
+	// wait, so `?stream` on its own is `?wait&stream`.
+	Stream bool
 }
 
-// parseSyncWaitParams reads ?wait and ?fail_on_error off a request.
+// parseSyncWaitParams reads ?wait, ?fail_on_error and ?stream off a
+// request.
 //
 // Accepted forms for wait: bare `?wait` (tasks.sync.defaultWait), a Go
 // duration (`?wait=30s`, `?wait=2m`), or a bare integer read as seconds
@@ -201,6 +213,25 @@ func parseSyncWaitParams(c *gin.Context) (syncWaitParams, error) {
 		}
 	}
 
+	if raw, ok := c.GetQuery("stream"); ok {
+		if strings.TrimSpace(raw) == "" {
+			p.Stream = true
+		} else {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				return p, fmt.Errorf("invalid 'stream' value %q: must be true or false", raw)
+			}
+			p.Stream = b
+		}
+	}
+
+	// A stream with no wait budget would be a submit that never returns,
+	// so ?stream on its own means ?wait&stream.
+	if p.Stream && !p.Requested {
+		p.Requested = true
+		p.Wait = syncDefaultWait()
+	}
+
 	return p, nil
 }
 
@@ -229,10 +260,14 @@ func parseWaitDuration(raw string) (time.Duration, error) {
 // record itself; the channel is only a hint that something changed.
 //
 // Returns the final task and WaitOutcomeCompleted, or WaitOutcomeTimeout
-// with the task as last seen. A disconnected client returns
-// (task, "", true): the caller should write nothing and leave the task
-// alone, exactly as if the submit had been asynchronous.
-func (s *ServerConfig) waitForTerminalState(c *gin.Context, sub chan struct{}, taskId objectid.ObjectId, wait time.Duration) (tasks.Task, string, bool) {
+// with the task as last seen. A cancelled ctx (a disconnected HTTP
+// client, an abandoned MCP call) returns (task, "", true): the caller
+// should write nothing and leave the task alone, exactly as if the
+// submit had been asynchronous.
+//
+// Takes a plain context rather than the gin one so the MCP
+// blanket_run_task tool can share the loop with POST /task/?wait.
+func (s *ServerConfig) waitForTerminalState(ctx context.Context, sub chan struct{}, taskId objectid.ObjectId, wait time.Duration) (tasks.Task, string, bool) {
 	mult := s.timeMultiplier()
 
 	ticker := time.NewTicker(time.Duration(float64(syncPollInterval) * mult))
@@ -241,7 +276,6 @@ func (s *ServerConfig) waitForTerminalState(c *gin.Context, sub chan struct{}, t
 	defer deadline.Stop()
 
 	var last tasks.Task
-	ctx := c.Request.Context()
 
 	for {
 		task, err := s.DB.GetTask(taskId)
@@ -402,7 +436,7 @@ func readResultFileAt(dir, rel string, maxBytes int64) (interface{}, string) {
 // status carry both.
 func (s *ServerConfig) respondAfterWait(c *gin.Context, task tasks.Task, outcome string, p syncWaitParams) {
 	if outcome == WaitOutcomeTimeout {
-		c.JSON(http.StatusGatewayTimeout, waitTimeoutBody{
+		c.JSON(http.StatusGatewayTimeout, WaitTimeoutBody{
 			Id:          task.Id.Hex(),
 			State:       task.State,
 			WaitOutcome: WaitOutcomeTimeout,

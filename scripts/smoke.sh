@@ -84,6 +84,42 @@ grep -q '"state":"WAITING"' <<<"$create_resp" || fail "new task not WAITING: $cr
 tasks_body="$(curl -fsS "$BASE/task/")"
 grep -q '"type":"echo_task"' <<<"$tasks_body" || fail "/task/ missing submitted task: $tasks_body"
 
+# `blanket submit` against a bad task type must not print an all-zero
+# task id and exit 0 -- the exact regression this guards against
+# (turtlemonvh/blanket#112): a non-2xx response used to be unmarshaled as
+# if it were a successful one. It should instead print the server's
+# decoded error message on stderr and exit 1, per docs/usage.md's
+# exit-code table.
+bad_submit_out="$WORKDIR/bad-submit.out"
+bad_submit_err="$WORKDIR/bad-submit.err"
+set +e
+"$BINARY" --config "$CONFIG" submit -t no_such_task_type \
+    > "$bad_submit_out" 2> "$bad_submit_err"
+bad_submit_status=$?
+set -e
+
+[[ "$bad_submit_status" -eq 1 ]] \
+    || fail "submit of an unknown task type should exit 1, got $bad_submit_status (stdout: $(cat "$bad_submit_out"), stderr: $(cat "$bad_submit_err"))"
+grep -q '^error: 400 ' "$bad_submit_err" \
+    || fail "submit of an unknown task type should print 'error: 400 <message>' on stderr, got: $(cat "$bad_submit_err")"
+[[ -s "$bad_submit_out" ]] \
+    && fail "submit of an unknown task type printed to stdout instead of just failing: $(cat "$bad_submit_out")"
+
+# `blanket rm` on a malformed id is the other CLI path onto the same fix
+# (turtlemonvh/blanket#112): DELETE /task/:id answers a non-hex id with a
+# 500 (see server/serve_tasks.go's getTaskId), and rm must surface that
+# instead of silently succeeding.
+bad_rm_err="$WORKDIR/bad-rm.err"
+set +e
+"$BINARY" --config "$CONFIG" rm not-a-valid-id > /dev/null 2> "$bad_rm_err"
+bad_rm_status=$?
+set -e
+
+[[ "$bad_rm_status" -eq 1 ]] \
+    || fail "rm of a malformed task id should exit 1, got $bad_rm_status (stderr: $(cat "$bad_rm_err"))"
+grep -q '^error: 500 ' "$bad_rm_err" \
+    || fail "rm of a malformed task id should print 'error: 500 <message>' on stderr, got: $(cat "$bad_rm_err")"
+
 # Scheduled tasks (turtlemonvh/blanket#61): a task submitted with a future
 # notBefore starts SCHEDULED (not WAITING/claimable), and the background
 # scheduler loop (default 2s tick) promotes it to WAITING once due.
@@ -214,6 +250,76 @@ cap_status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
     -H 'Content-Type: application/json' \
     -d '{"type":"echo_task"}' "$BASE/task/?wait=99h")"
 [[ "$cap_status" == "400" ]] || fail "?wait over maxWait should be 400, got $cap_status"
+
+# ---------------------------------------------------------------------------
+# Streaming submission -- POST /task/?wait&stream, and `blanket submit
+# --follow` on top of it (turtlemonvh/blanket#27 PR 2).
+#
+# Both task types below sleep for a moment on purpose: the stream can
+# only attach to a task's log files once the worker has created them and
+# moved the task to RUNNING, so a task that starts and exits inside one
+# poll interval would prove nothing about *live* delivery (its output
+# would still arrive, but only in the terminal result event).
+# ---------------------------------------------------------------------------
+
+cat > "$WORKDIR/types/sync_stream_task.toml" <<'EOF'
+tags = ["exec:bash", "os:unix"]
+timeout = 20
+description = "Writes output, then lingers, for the &stream smoke test"
+command = "echo 'stream stdout line'; sleep 2; echo 'stream done'"
+executor = "bash"
+EOF
+
+cat > "$WORKDIR/types/sync_follow_task.toml" <<'EOF'
+tags = ["exec:bash", "os:unix"]
+timeout = 20
+description = "Writes to both streams and exits 3, for the --follow smoke test"
+command = "echo 'follow stdout line'; echo 'follow stderr line' >&2; sleep 2; exit 3"
+executor = "bash"
+EOF
+
+# The NDJSON stream: one JSON object per line, ending with a self-
+# contained result event.
+stream_body="$WORKDIR/stream.ndjson"
+curl -fsS -X POST -H 'Content-Type: application/json' \
+    -d '{"type":"sync_stream_task"}' "$BASE/task/?wait=60s&stream" -o "$stream_body" \
+    || fail "streaming submit failed; body: $(cat "$stream_body" 2>/dev/null)"
+
+jq -se 'all(.[]; has("ts") and has("taskId") and has("type"))' "$stream_body" > /dev/null \
+    || fail "every stream event should carry ts/taskId/type: $(cat "$stream_body")"
+jq -se 'any(.[]; .type == "state" and .state == "RUNNING")' "$stream_body" > /dev/null \
+    || fail "stream carried no RUNNING state event: $(cat "$stream_body")"
+jq -se 'any(.[]; .type == "log" and .stream == "stdout" and (.line | contains("stream stdout line")))' "$stream_body" > /dev/null \
+    || fail "stream carried no stdout log event: $(cat "$stream_body")"
+jq -se '.[-1] | .type == "result" and .waitOutcome == "completed" and .task.state == "SUCCESS" and .task.exitCode == 0' "$stream_body" > /dev/null \
+    || fail "stream did not end with a completed result event: $(cat "$stream_body")"
+# The result event repeats the output tail, so a client that reads only
+# the last line still has everything.
+jq -se '.[-1].stdout | contains("stream stdout line") and contains("stream done")' "$stream_body" > /dev/null \
+    || fail "terminal result event did not repeat the stdout tail: $(cat "$stream_body")"
+
+# `blanket submit --follow` consumes that stream: task stdout goes to the
+# process's stdout, task stderr to its stderr, and the process exits with
+# the task's own exit code.
+follow_out="$WORKDIR/follow.out"
+follow_err="$WORKDIR/follow.err"
+set +e
+"$BINARY" --config "$CONFIG" submit \
+    -t sync_follow_task --follow --wait-timeout 60s > "$follow_out" 2> "$follow_err"
+follow_status=$?
+set -e
+
+[[ "$follow_status" -eq 3 ]] \
+    || fail "blanket submit --follow should exit with the task's exit code 3, got $follow_status (stderr: $(cat "$follow_err"))"
+grep -q 'follow stdout line' "$follow_out" \
+    || fail "--follow did not write task stdout to its stdout: $(cat "$follow_out")"
+grep -q 'follow stderr line' "$follow_err" \
+    || fail "--follow did not write task stderr to its stderr: $(cat "$follow_err")"
+if grep -q 'follow stderr line' "$follow_out"; then
+    fail "--follow leaked a stderr line into stdout: $(cat "$follow_out")"
+fi
+grep -q 'exitCode=3' "$follow_err" \
+    || fail "--follow did not print its completion summary: $(cat "$follow_err")"
 
 kill "$WORKER_PID" 2>/dev/null || true
 wait "$WORKER_PID" 2>/dev/null || true

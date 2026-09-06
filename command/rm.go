@@ -2,11 +2,11 @@ package command
 
 import (
 	"fmt"
+	"os"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"log"
-	"net/http"
-	"os"
+	"github.com/turtlemonvh/blanket/client"
 )
 
 var rmConf RmConf
@@ -39,14 +39,15 @@ func init() {
 }
 
 func (c *RmConf) RemoveTask(taskId string) {
-	// Use RootConfig to decide what port to hit
-	req, err := http.NewRequest("DELETE", fmt.Sprintf("http://localhost:%d/task/%s", viper.GetInt("port"), taskId), nil)
-	if err != nil {
-		log.Fatalf("%s", err.Error())
+	err := client.DeleteTask(taskId, viper.GetInt("port"))
+	if err == nil {
+		return
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Fatalf("%s", err.Error())
+	if c.Force {
+		// --force means "ignore errors and warnings": don't fail the
+		// process over a delete that didn't go through.
+		return
 	}
-	defer resp.Body.Close()
+	printAPIError(err)
+	os.Exit(1)
 }

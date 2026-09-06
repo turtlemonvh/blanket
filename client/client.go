@@ -55,7 +55,7 @@ func GetTasks(c *GetTasksConf, port int) ([]map[string]interface{}, error) {
 	if paramsString != "" {
 		reqURL += "?" + paramsString
 	}
-	res, err := httpx.DoOnce(context.Background(), "GET", reqURL, nil, httpx.DefaultRequestTimeout)
+	res, err := doRequest(context.Background(), "GET", reqURL, nil, httpx.DefaultRequestTimeout)
 	if err != nil {
 		return tasks, err
 	}
@@ -72,7 +72,7 @@ func GetTasks(c *GetTasksConf, port int) ([]map[string]interface{}, error) {
 // worker could claim a given task type.
 func GetActiveWorkerTagSets(port int) ([][]string, error) {
 	reqURL := fmt.Sprintf("http://localhost:%d/worker/", port)
-	res, err := httpx.DoOnce(context.Background(), "GET", reqURL, nil, httpx.DefaultRequestTimeout)
+	res, err := doRequest(context.Background(), "GET", reqURL, nil, httpx.DefaultRequestTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,15 @@ func SubmitTaskWithOptions(taskType string, env map[string]interface{}, port int
 
 	body := make(map[string]interface{})
 	body["type"] = taskType
-	body["environment"] = env
+	// An empty environment is omitted rather than sent as {}: POST /task/
+	// rejects a present-but-empty "environment" as malformed, so sending
+	// one made `blanket submit -t x` (with no -e) fail against every task
+	// type that has no required env. A 400 from that (or any other
+	// non-2xx) surfaces below as an *APIError rather than decoding an
+	// error body into a zero Task -- see doRequest (turtlemonvh/blanket#112).
+	if len(env) > 0 {
+		body["environment"] = env
+	}
 	if opts.NotBefore != "" {
 		body["notBefore"] = opts.NotBefore
 	}
@@ -132,14 +140,22 @@ func SubmitTaskWithOptions(taskType string, env map[string]interface{}, port int
 	}
 
 	reqURL := fmt.Sprintf("http://localhost:%d/task/", port)
-	// A non-2xx now comes back as an error carrying the server's message,
-	// which replaces the old "unmarshal whatever came back and hope"
-	// handling flagged by the FIXME that used to live here.
-	res, err := httpx.DoOnce(context.Background(), "POST", reqURL, bts, httpx.DefaultRequestTimeout)
+	// doRequest classifies the response before we ever try to decode it:
+	// a non-2xx comes back as an *APIError carrying the server's message
+	// instead of a body this function would otherwise unmarshal into a
+	// zero Task.
+	res, err := doRequest(context.Background(), "POST", reqURL, bts, httpx.DefaultRequestTimeout)
 	if err != nil {
 		return t, err
 	}
 
 	err = json.Unmarshal(res.Body, &t)
 	return t, err
+}
+
+// DeleteTask removes a task record via DELETE /task/:id.
+func DeleteTask(taskId string, port int) error {
+	reqURL := fmt.Sprintf("http://localhost:%d/task/%s", port, taskId)
+	_, err := doRequest(context.Background(), "DELETE", reqURL, nil, httpx.DefaultRequestTimeout)
+	return err
 }
