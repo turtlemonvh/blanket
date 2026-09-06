@@ -51,6 +51,10 @@ stateDiagram-v2
     WAITING --> CLAIMED: POST /task/claim/:workerId
     WAITING --> STOPPED: PUT /task/:id/cancel
     CLAIMED --> RUNNING: PUT /task/:id/run
+    CLAIMED --> WAITING: reaper requeue (worker died before starting it)
+    CLAIMED --> ERROR: PUT /task/:id/finish (the command never started)
+    RUNNING --> SUCCESS: reaper, recovered from the outcome journal
+    RUNNING --> ERROR: reaper, recovered from the outcome journal
     RUNNING --> SUCCESS: PUT /task/:id/finish (exit 0)
     RUNNING --> ERROR: PUT /task/:id/finish (exit non-zero)
     RUNNING --> TIMEDOUT: timeout exceeded
@@ -226,8 +230,8 @@ interval (`scheduler.interval` config key, default `2s`) and each tick:
 
 `startBackgroundLoops` is written so a second periodic loop can be added
 alongside the scheduler with one more line — see the FIXME it replaced in
-`server/server.go`; turtlemonvh/blanket#23 phase 3 plans to add a reaper
-loop there (stalled workers/tasks, unclaimed-queue cleanup).
+`server/server.go`. [The reaper](#the-reaper) (stalled workers/tasks,
+unclaimed-queue cleanup) is the second one, and is started there too.
 
 #### Scan limit: `scheduler.maxScheduled`
 
@@ -310,8 +314,8 @@ exiting and the server acknowledging the finish, the task record still says
 acceptable: misclassifying a finished three-hour render as `ERROR` is
 exactly the failure [design.md](design.md) says not to have.
 
-The worker **never reads the journal back**. Its consumer is the reaper
-added in phase 3 of #23, which makes the two fully decoupled: nothing on
+The worker **never reads the journal back**. Its consumer is
+[the reaper](#the-reaper), which makes the two fully decoupled: nothing on
 the running path depends on the journal being readable, so every write to
 it fails open (logged at warn, task unaffected).
 
@@ -338,7 +342,7 @@ Schema (`worker.OutcomeJournal`, `worker/journal.go`):
   "taskId": "6a9c504d0372dcda2a889776",
   "workerId": "6a9c504d0372dcda2a889775",
   "pid": 48213,
-  "pidStartTs": 0,
+  "pidStartTs": 1757087998,
   "startedTs": 1757088000,
   "exitedTs": 1757088012,
   "exitCode": 0
@@ -350,9 +354,13 @@ Schema (`worker.OutcomeJournal`, `worker/journal.go`):
   reader can tell whether the journal describes the run the task record is
   currently about or a stale earlier attempt.
 - `pid` / `pidStartTs` — the **child** process, not the worker.
-  `pidStartTs` guards against pid reuse; it stays `0` ("unknown") until
-  phase 3 adds the per-platform liveness package that can read it, and a
-  reader must treat a zero value as inconclusive rather than assuming the
+  `pidStartTs` is its start time in unix seconds, read from
+  [`lib/proclive`](#pid-liveness-and-the-same-host-assumption) right after
+  `cmd.Start()`. It guards against pid reuse: a pid that exists but
+  started at a different moment belongs to a different process. It is `0`
+  ("unknown") in journals written before phase 3 of #23 and on any
+  platform that cannot report one, and a reader must treat a zero value
+  as *inconclusive* — neither alive nor dead — rather than assuming the
   pid is this process.
 - `exitCode` — `0` for success, the process's code for a non-zero exit,
   `-1` when it was killed by a signal (a timeout kill or a user cancel).
@@ -374,28 +382,171 @@ of the claim loop. Workers can only be deleted once stopped.
 
 `Stopped` is **server-owned**. `PUT /worker/:id` merges at the field level
 rather than overwriting the record (turtlemonvh/blanket#23 phase 1): the
-worker owns `pid`, `logfile`, `startedTs`, `tags` and `checkInterval`, and
-the server owns `stopped` and `lastHeardTs`. Without that split, a worker
-re-registering — which it always does with `stopped: false` — silently
-undid a stop that had just landed, and carried on claiming tasks. It also
-means restarting a worker has to clear the flag server-side, which is what
+worker owns `pid`, `pidStartTs`, `logfile`, `startedTs`, `tags` and
+`checkInterval`, and the server owns `stopped`, `stoppedReason`,
+`lastHeardTs`, and `lost`. Without that split, a worker re-registering —
+which it always does with `stopped: false` — silently undid a stop that
+had just landed, and carried on claiming tasks. It also means restarting a
+worker has to clear the flag server-side, which is what
 `PUT /worker/:id/restart` now does before relaunching the process.
+(`lost` is the one server-owned field a re-registration *clears*: a worker
+that checks back in is itself evidence of life.)
 
 ```mermaid
 stateDiagram-v2
     [*] --> RUNNING: blanket worker / POST /worker/
+    RUNNING --> RUNNING: PUT /worker/:id/heartbeat
     RUNNING --> STOPPED: PUT /worker/:id/stop
     RUNNING --> STOPPED: process exits (SIGTERM, crash)
+    RUNNING --> STOPPED: reaper, pid conclusively gone
+    STOPPED --> RUNNING: PUT /worker/:id/restart
     STOPPED --> [*]: DELETE /worker/:id
 ```
 
 (The claim loop itself — what `RUNNING` is doing between transitions — is
 its own diagram in the next section.)
 
-A worker that has stopped reporting heartbeats (`lastHeardTs`) is
-considered "lost" by the UI but is not a distinct state in the data
-model — there is no automatic transition; an operator must stop or
-delete it explicitly.
+`lost` is a **flag, not a state**: a worker whose heartbeat has gone stale
+carries `lost: true` while `stopped` stays whatever it was. It shows in
+the UI as a badge and changes nothing else — see [The reaper](#the-reaper)
+below for why a lost-but-live worker is deliberately left running.
+
+### Heartbeat
+
+Each claim-loop iteration, a worker sends `PUT /worker/:id/heartbeat`.
+The **server** stamps `lastHeardTs` from its own clock inside the
+transaction; there is no way for a worker to supply one. Every reaper
+decision is arithmetic on that number, and a worker-supplied timestamp
+would turn clock skew into either a reaper that never fires or one that
+fires on healthy workers.
+
+The response carries three things (see [api.md](api.md#workers)):
+
+- `stopped` — so a drain lands within one check interval rather than
+  waiting on some other poll. This is what makes draining workers viable
+  during an upgrade.
+- `serverInstanceId` — identifies the server *process*. A worker that sees
+  it change knows the server restarted underneath it, and logs that.
+  (Acting on it is phase 5's business; phase 1's premise is that a worker
+  rides out a server outage without needing to be told.)
+- `serverStartedTs` — when that process started serving.
+
+The same instance id and start time are on `GET /config/`, so "did the
+server restart?" is answerable without sending a heartbeat.
+
+A failed heartbeat does not back the claim loop off and is not fatal:
+missing one costs nothing until enough are missed for the reaper to
+notice, which is exactly the signal the reaper exists to act on.
+
+## The reaper
+
+A background loop (`server/reaper.go`, scheduled from
+`startBackgroundLoops` alongside the scheduler and cancelled at shutdown
+step (e)) reconciles the state a crash leaves behind: workers that stopped
+heartbeating, tasks whose worker died mid-run, and queue entries whose
+claim was never acked.
+
+Its governing rule is that **a false positive destroys real work**.
+Recording a finished three-hour render as `ERROR` is worse than leaving it
+`RUNNING` forever, because the first is silent and the second is visible.
+So it fails safe toward "alive" everywhere: it never acts on an
+inconclusive liveness answer, never infers a task's outcome, and never
+deletes a worker record.
+
+### Decision table
+
+Workers (`CleanupStalledWorkers`):
+
+| Heartbeat | Pid liveness | What happens |
+| --- | --- | --- |
+| fresh | — | nothing |
+| stale past `reaper.workerStaleAfter` | conclusively **alive** | `lost: true` for the UI. Never stopped, never deleted, its tasks untouched — killing it could orphan a running task's child. |
+| stale past `reaper.workerStaleAfter` | conclusively **dead** | `lost: true` + `stopped: true`, with a `stoppedReason`. The record is kept, so its logfile stays reachable. |
+| stale past `reaper.workerStaleAfter` | **inconclusive** | `lost: true` only… |
+| stale past `reaper.workerDeadAfter` | **inconclusive** | …and only then `stopped: true`. Heartbeat silence alone is much weaker evidence than a dead process, so it takes five times as long to act on. |
+| any | any, but already `stopped` | nothing |
+
+Tasks in `CLAIMED`/`RUNNING` that are stale past `reaper.taskStaleAfter`
+(`CleanupStalledTasks`). The outcome journal is read **before** anything
+is inferred:
+
+| Evidence | What happens |
+| --- | --- |
+| journal in `exited` or `reported` | The real outcome is applied through the same idempotent `PUT /task/:id/finish` path the worker uses, carrying the journal's `runId`: `SUCCESS` for exit 0, `ERROR` otherwise, with the journal's exit code (its `-1` becomes a `null` `exitCode`, as always). |
+| journal in `running`, child pid alive or inconclusive | Left alone. A task's child process can outlive its worker. |
+| journal in `running`, child pid conclusively dead | Left alone, and logged. The child died without recording an outcome, so there is no outcome to recover — anything written here would be invented. An operator can cancel it. |
+| journal describes a different `runId` | Left alone; it is a stale earlier attempt. |
+| no journal, task is `CLAIMED`, no pid recorded, and its worker is conclusively gone (dead pid, or record deleted) | The task provably never started, so it is **requeued**: back to `WAITING`, worker id and `runId` cleared, `requeueCount` incremented. |
+| …but `requeueCount` has reached `reaper.maxRequeues` | Failed to `ERROR` instead. A task that kills whichever worker claims it — an OOM, a driver that takes the box down — would otherwise be requeued forever, taking out every worker in turn. |
+| anything else | Left alone, and logged. |
+
+Queue entries whose claim was never acked (`CleanupUnclaimedTasks`):
+
+| The task in the database | What happens |
+| --- | --- |
+| `CLAIMED` or beyond | The claim really happened and only the ack was lost: the queue entry is dropped. Re-running could duplicate work that already had side effects. |
+| still `WAITING`/`SCHEDULED`, or no record at all | The claim never completed: the entry's worker id is cleared so somebody else can pick it up. |
+
+### Why a restart doesn't trigger a mass reap
+
+During a restart — the entire point of #23 — every worker looks stale at
+once, through no fault of its own. Three layers protect that moment:
+
+1. **Staleness is measured from `max(lastHeardTs, baseline)`**, where the
+   baseline is when this server process started serving. Every worker gets
+   a full, fresh window after a restart, and it re-arms automatically if a
+   second restart follows.
+2. **A wall-clock versus monotonic-clock divergence between two passes
+   skips the pass** and re-arms the baseline. This is the closed-laptop-lid
+   case, which layer 1 does not cover: the server slept too, so its start
+   time is now hours in the past.
+3. **A pending restart suppresses passes entirely** (phase 5's restart
+   state machine sets the flag).
+
+### Pid liveness and the same-host assumption
+
+**Blanket's workers are same-host only.** Every worker→server call
+hardcodes `http://localhost:{port}`, and pid liveness (`lib/proclive`) —
+the reaper's strongest signal — is meaningful only for a process on this
+machine.
+
+The two signals are deliberately split by that property:
+
+- The **heartbeat is portable**. It is an ordinary HTTP call and would
+  work unchanged from another host.
+- **Pid liveness is same-host**, and it is what turns "this worker has
+  gone quiet" into "this worker is definitely gone".
+
+`proclive.IsAlive` returns *both* whether a pid is alive and whether that
+answer is conclusive, and wherever it cannot answer — an unsupported
+platform, a record with no `pidStartTs`, a permissions failure — **the
+reaper falls back to heartbeat staleness alone**, against the longer
+`reaper.workerDeadAfter` threshold. That fallback is the path a remote
+worker would take today, with nothing false concluded about it.
+
+Making remote workers a supported configuration would revisit: the
+hardcoded `localhost` in the worker's call sites; whether pid liveness is
+attempted at all for an off-host worker (a pid from another machine must
+never be checked against *this* machine's process table — the reuse risk
+is total); clock skew between hosts, which the server-stamped
+`lastHeardTs` already insulates the reaper from; and
+`PUT /worker/:id/stop?force=true`, which signals a local pid and has no
+off-host equivalent. None of that is designed for today, and none of it is
+foreclosed.
+
+### Configuration
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `reaper.enabled` | `true` | The off switch. It exists because the failure this code guards against — destroyed task state — is also the failure it could itself cause, and debugging a suspected false positive shouldn't require a downgrade. |
+| `reaper.interval` | `30s` | How often a pass runs. |
+| `reaper.workerStaleAfter` | `2m` | When a silent worker is marked `lost`. Nothing is stopped or rewritten at this threshold. |
+| `reaper.workerDeadAfter` | `10m` | The only threshold that stops a worker on heartbeat silence alone, i.e. when pid liveness was inconclusive. |
+| `reaper.taskStaleAfter` | `5m` | How long a `CLAIMED`/`RUNNING` task may go without an update before the reaper looks at it. Looking is not acting. |
+| `reaper.maxRequeues` | `3` | The poison-task cap. |
+
+Every duration is scaled by `timeMultiplier` at use, so a compressed test
+run moves the interval and every threshold together and cannot false-reap.
 
 ## Worker claim loop
 
@@ -423,6 +574,10 @@ worker stopped, so the loop exits even when the server is permanently
 unreachable — the shutdown path is bounded rather than dependent on a
 round trip.
 
+Each successful iteration also sends a [heartbeat](#heartbeat), and acts on
+the `stopped` flag in its response — which is what bounds drain latency to
+one check interval.
+
 ```mermaid
 sequenceDiagram
     participant W as Worker (ProcessTasks)
@@ -438,6 +593,10 @@ sequenceDiagram
         alt refetch failed
             W->>W: sleep(CheckInterval)
         else refreshed ok
+            W->>S: PUT /worker/:id/heartbeat
+            S->>DB: lastHeardTs = server's clock; clear lost
+            S-->>W: {stopped, serverInstanceId, serverStartedTs}
+            Note over W,S: stopped -> exit the loop now (drain within one interval)
             W->>S: POST /task/claim/:workerId
             S->>Q: ClaimTask(worker)
             Q-->>S: task (or ErrQueueEmpty)
