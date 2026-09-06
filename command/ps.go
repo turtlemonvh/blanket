@@ -44,6 +44,10 @@ func init() {
 
 func ListTasks() {
 	tasks, err := client.GetTasks(&getConf, viper.GetInt("port"))
+	if err != nil {
+		printAPIError(err)
+		os.Exit(1)
+	}
 
 	if psConf.Template == "" {
 		psConf.Template = "{{.id}} {{.type}} {{.state}} {{.scheduleDescription}} {{.tags}}"

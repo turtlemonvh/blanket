@@ -88,9 +88,13 @@ func SubmitTask() {
 		Cron:      submitConf.Cron,
 	})
 	if err != nil {
-		log.WithFields(log.Fields{
-			"err": err,
-		}).Fatal("Error submitting task")
+		// Straight to stderr, not through logrus: this command forces
+		// logLevel=error before logging is initialized (see execCmd
+		// above), and logrus's formatter would bury the message this
+		// exit-code table promises (docs/usage.md) under its own
+		// timestamp/level prefix.
+		printAPIError(err)
+		os.Exit(ExitCodeError)
 	}
 	if submitConf.Quiet {
 		fmt.Println(t.Id.Hex())
@@ -135,7 +139,7 @@ func submitAndWait(env map[string]interface{}) {
 	}
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "blanket: error running task: %s\n", err.Error())
+		printAPIError(err)
 		os.Exit(ExitCodeError)
 	}
 

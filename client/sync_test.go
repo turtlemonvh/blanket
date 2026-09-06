@@ -149,6 +149,29 @@ func TestSubmitTaskAndWait_UnknownType(t *testing.T) {
 	_, err := SubmitTaskAndWait("nope", nil, port, WaitOptions{Wait: "5s"})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "{", "the server's error message should be unwrapped, not raw JSON")
+
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr, "a non-2xx before the wait even starts should be a typed *APIError")
+	assert.Equal(t, 400, apiErr.Status)
+	assert.Contains(t, apiErr.Message, "nope")
+}
+
+// TestSubmitTaskAndStream_UnknownType is TestSubmitTaskAndWait_UnknownType's
+// counterpart for the streaming path: a non-2xx that arrives before the
+// NDJSON stream even starts must surface as the same typed *APIError, not
+// get treated as (or fail while being parsed as) an event stream.
+func TestSubmitTaskAndStream_UnknownType(t *testing.T) {
+	_, port, cleanup := newTestServer(t)
+	defer cleanup()
+
+	_, err := SubmitTaskAndStream("nope", nil, port, WaitOptions{Wait: "5s"}, StreamCallbacks{})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "{", "the server's error message should be unwrapped, not raw JSON")
+
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr, "a pre-stream non-2xx should be a typed *APIError")
+	assert.Equal(t, 400, apiErr.Status)
+	assert.Contains(t, apiErr.Message, "nope")
 }
 
 // TestSubmitTaskAndStream_SplitsStreams is the CLI's --follow behaviour

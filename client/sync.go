@@ -21,7 +21,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/turtlemonvh/blanket/server"
 )
@@ -138,7 +137,7 @@ func SubmitTaskAndWait(taskType string, env map[string]interface{}, port int, op
 		res.Timeout = &timeout
 		return res, nil
 	default:
-		return res, fmt.Errorf("%s", serverErrorMessage(body, resp.StatusCode))
+		return res, newAPIError(resp.StatusCode, body)
 	}
 }
 
@@ -188,8 +187,12 @@ func SubmitTaskAndStream(taskType string, env map[string]interface{}, port int, 
 	res.Status = resp.StatusCode
 
 	if resp.StatusCode != http.StatusOK {
+		// A non-2xx before the stream even starts (bad type, malformed
+		// wait, ...) is surfaced the same way a blocking call would:
+		// an *APIError, not a body for the caller to try to parse as
+		// NDJSON.
 		body, _ := ioutil.ReadAll(resp.Body)
-		return res, fmt.Errorf("%s", serverErrorMessage(body, resp.StatusCode))
+		return res, newAPIError(resp.StatusCode, body)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -253,20 +256,4 @@ func SubmitTaskAndStream(taskType string, env map[string]interface{}, port int, 
 		return res, fmt.Errorf("task event stream ended without a result event")
 	}
 	return res, nil
-}
-
-// serverErrorMessage pulls the message out of blanket's usual
-// {"error": "..."} body, falling back to the raw body plus status.
-func serverErrorMessage(body []byte, status int) string {
-	var errBody struct {
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(body, &errBody); err == nil && errBody.Error != "" {
-		return errBody.Error
-	}
-	trimmed := strings.TrimSpace(string(body))
-	if trimmed == "" {
-		return fmt.Sprintf("server returned HTTP %d", status)
-	}
-	return fmt.Sprintf("server returned HTTP %d: %s", status, trimmed)
 }

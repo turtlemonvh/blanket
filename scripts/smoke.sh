@@ -84,6 +84,42 @@ grep -q '"state":"WAITING"' <<<"$create_resp" || fail "new task not WAITING: $cr
 tasks_body="$(curl -fsS "$BASE/task/")"
 grep -q '"type":"echo_task"' <<<"$tasks_body" || fail "/task/ missing submitted task: $tasks_body"
 
+# `blanket submit` against a bad task type must not print an all-zero
+# task id and exit 0 -- the exact regression this guards against
+# (turtlemonvh/blanket#112): a non-2xx response used to be unmarshaled as
+# if it were a successful one. It should instead print the server's
+# decoded error message on stderr and exit 1, per docs/usage.md's
+# exit-code table.
+bad_submit_out="$WORKDIR/bad-submit.out"
+bad_submit_err="$WORKDIR/bad-submit.err"
+set +e
+"$BINARY" --config "$CONFIG" submit -t no_such_task_type \
+    > "$bad_submit_out" 2> "$bad_submit_err"
+bad_submit_status=$?
+set -e
+
+[[ "$bad_submit_status" -eq 1 ]] \
+    || fail "submit of an unknown task type should exit 1, got $bad_submit_status (stdout: $(cat "$bad_submit_out"), stderr: $(cat "$bad_submit_err"))"
+grep -q '^error: 400 ' "$bad_submit_err" \
+    || fail "submit of an unknown task type should print 'error: 400 <message>' on stderr, got: $(cat "$bad_submit_err")"
+[[ -s "$bad_submit_out" ]] \
+    && fail "submit of an unknown task type printed to stdout instead of just failing: $(cat "$bad_submit_out")"
+
+# `blanket rm` on a malformed id is the other CLI path onto the same fix
+# (turtlemonvh/blanket#112): DELETE /task/:id answers a non-hex id with a
+# 500 (see server/serve_tasks.go's getTaskId), and rm must surface that
+# instead of silently succeeding.
+bad_rm_err="$WORKDIR/bad-rm.err"
+set +e
+"$BINARY" --config "$CONFIG" rm not-a-valid-id > /dev/null 2> "$bad_rm_err"
+bad_rm_status=$?
+set -e
+
+[[ "$bad_rm_status" -eq 1 ]] \
+    || fail "rm of a malformed task id should exit 1, got $bad_rm_status (stderr: $(cat "$bad_rm_err"))"
+grep -q '^error: 500 ' "$bad_rm_err" \
+    || fail "rm of a malformed task id should print 'error: 500 <message>' on stderr, got: $(cat "$bad_rm_err")"
+
 # Scheduled tasks (turtlemonvh/blanket#61): a task submitted with a future
 # notBefore starts SCHEDULED (not WAITING/claimable), and the background
 # scheduler loop (default 2s tick) promotes it to WAITING once due.

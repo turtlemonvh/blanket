@@ -140,6 +140,15 @@ Exit codes:
 | The wait expired with the task still running | `124`, the code `timeout(1)` uses for the same thing. The task keeps running; its id is on stderr. |
 | The submission itself failed (bad type, server unreachable) | `1` |
 
+A failed API call (bad type, a malformed field, ...) prints
+`error: <status> <message>` on stderr, using the server's own error text
+(`{"error": "..."}` or, for the handful of endpoints that answer with
+plain text, the body itself) rather than an empty or all-zero result
+--- `client.APIError` in `client/` is what makes that message available
+instead of a non-2xx body being decoded as if it were a success
+(turtlemonvh/blanket#112). `blanket ps` and `blanket rm` follow the same
+convention on their own client calls.
+
 `--follow` preserves the stdout/stderr split, so
 `blanket submit -t x --follow 2>/dev/null` behaves the way it would for
 the underlying command. Ordering *between* the two streams is
