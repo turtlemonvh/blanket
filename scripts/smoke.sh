@@ -345,8 +345,22 @@ done
 grep -q '"runId":"[0-9a-f]\{24\}"' <<<"$check" \
     || fail "finished task carries no runId fencing token: $check"
 
+# Poll rather than stat once: the worker acknowledges the finish to the
+# server *before* it rewrites the journal to "reported" and unlinks it (see
+# the ordering in worker.go — the ack has to come first, or a crash in the
+# window would drop an outcome nobody recorded). So the task can be SUCCESS
+# here for a beat while the journal is still on disk. What must not happen
+# is the file surviving.
 journal="$WORKDIR/results/$worker_task_id/blanket.outcome.json"
-[[ ! -e "$journal" ]] \
+journal_gone=0
+for _ in $(seq 1 40); do
+    if [[ ! -e "$journal" ]]; then
+        journal_gone=1
+        break
+    fi
+    sleep 0.25
+done
+[[ "$journal_gone" -eq 1 ]] \
     || fail "outcome journal left behind after a clean run: $(cat "$journal")"
 
 # The task's logs are still there — only the journal is cleaned up.
