@@ -21,6 +21,36 @@ const (
 	DEFAULT_LOG_TAIL_LINES = 500
 )
 
+// SSEServerRestartingEvent is the SSE event name every streaming route
+// emits as its last frame when the server is shutting down, right after a
+// `retry:` hint telling the browser how soon to reconnect.
+//
+// Two reasons it exists (turtlemonvh/blanket#23 phase 2): net/http's
+// Shutdown waits indefinitely on an active connection and never
+// force-closes it, so a streaming handler that doesn't return on its own
+// hangs shutdown forever; and a UI whose stream just died silently goes
+// stale with no indication. The UI renders it as a banner -- see
+// server/ui/static/sse-restart-banner.js.
+const SSEServerRestartingEvent = "server-restarting"
+
+// sseRestartRetryMs is the reconnect delay, in milliseconds, sent to
+// EventSource clients before a restart. Short: the server is expected back
+// within a second or two, and the browser applies its own backoff if it
+// isn't.
+const sseRestartRetryMs = 1000
+
+// writeServerRestarting emits the shutdown frame on an open SSE stream.
+// Callers return false from their c.Stream step immediately afterwards.
+func writeServerRestarting(w io.Writer) {
+	// `retry:` is a bare SSE field, not an event, so it is written
+	// directly rather than through sse.Encode.
+	fmt.Fprintf(w, "retry: %d\n\n", sseRestartRetryMs)
+	sse.Encode(w, sse.Event{
+		Event: SSEServerRestartingEvent,
+		Data:  "the server is shutting down; reconnecting",
+	})
+}
+
 // Function to server logfile lines from a subscription.
 // isComplete should return true if we know that the subscription is finished.
 // - task stopped when in terminal state
@@ -28,12 +58,24 @@ const (
 func (s *ServerConfig) streamLog(c *gin.Context, sub *tailed_file.TailedFileSubscriber, isComplete func() bool) {
 	loglineChannelIsEmpty := false
 	lineno := 1
+
+	// Closed when the server starts shutting down. Without this case the
+	// handler would sit in the select below for a full LOGLINE_WAIT_DURATION
+	// on an idle log, and net/http's Shutdown -- which never force-closes an
+	// active connection -- would wait for it. See server/lifecycle.go.
+	shutdown := s.shutdownChan()
+
 	c.Stream(func(w io.Writer) bool {
 		// This function returns a boolean indicating whether the stream should stay open
 		// Every time this is called, also checks if client has left
 		timer := time.NewTimer(time.Second * time.Duration(s.TimeMultiplier*LOGLINE_WAIT_DURATION))
 
 		select {
+		case <-shutdown:
+			timer.Stop()
+			c.Writer.Header()["Content-Type"] = []string{"text/event-stream"}
+			writeServerRestarting(w)
+			return false
 		case logline := <-sub.NewLines:
 			timer.Stop()
 			c.Writer.Header()["Content-Type"] = []string{"text/event-stream"}

@@ -10,6 +10,9 @@
     <!-- Closes SSE streams on pagehide / reopens on a bfcache restore. See
          server/ui/static/sse-lifecycle.js and issue #103. -->
     <script src="/ui/static/sse-lifecycle.js"></script>
+    <!-- Shows #server-restart-banner on a `server-restarting` SSE event.
+         See server/ui/static/sse-restart-banner.js and issue #23. -->
+    <script src="/ui/static/sse-restart-banner.js"></script>
 </head>
 <body>
     <nav class="topbar">
@@ -22,6 +25,11 @@
         <span class="spacer"></span>
         <span class="muted">htmx scaffold</span>
     </nav>
+    <!-- Raised by sse-restart-banner.js when a stream reports the server
+         is draining for a shutdown/restart; hidden again on reconnect. -->
+    <div id="server-restart-banner" class="flash-area" hidden>
+        <div class="flash flash-restarting">The blanket server is restarting — live updates are paused and will resume automatically.</div>
+    </div>
     <div id="flash-area" class="flash-area"
          hx-trigger="task-type-warnings from:body"
          hx-get="/ui/partials/task-type-warnings"
