@@ -268,7 +268,7 @@ jq -se '.[-1].stdout | contains("stream stdout line") and contains("stream done"
 follow_out="$WORKDIR/follow.out"
 follow_err="$WORKDIR/follow.err"
 set +e
-"$REPO_ROOT/$BINARY" --config "$WORKDIR/config.json" submit \
+"$BINARY" --config "$CONFIG" submit \
     -t sync_follow_task --follow --wait-timeout 60s > "$follow_out" 2> "$follow_err"
 follow_status=$?
 set -e
