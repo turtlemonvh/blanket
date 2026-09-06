@@ -19,7 +19,7 @@
 //   - PUT /task/:id/progress (wrong state): TestUpdateProgress_WrongState
 //   - PUT /task/:id/finish: TestFinishTask_Valid, TestFinishTask_MissingTask,
 //     TestFinishTask_AlreadyTerminalIsNoop, TestFinishTask_InvalidState,
-//     TestFinishTask_FromClaimedIsBadRequest,
+//     TestFinishTask_FromClaimedIsAccepted,
 //     TestFinishTask_InvalidExitCode (serve_sync_test.go)
 //   - PUT /task/:id/run + /finish idempotency and the RunId fencing token
 //     (turtlemonvh/blanket#23 phase 1): TestRunTask_*, TestFinishTask_*RunId*,
@@ -725,7 +725,7 @@ func TestFinishTask_MissingTask(t *testing.T) {
 // report was already recorded. The first terminal state a task reaches
 // wins, and saying so with a 200 lets the worker finish cleanly.
 // A finish from a non-terminal but ineligible state (CLAIMED) still 400s;
-// see TestFinishTask_FromClaimedIsBadRequest.
+// see TestFinishTask_FromClaimedIsAccepted.
 func TestFinishTask_AlreadyTerminalIsNoop(t *testing.T) {
 	cleanup := setupTestTaskType(t)
 	defer cleanup()
@@ -1344,13 +1344,22 @@ func TestFinishTask_RepeatKeepsStoredExitCode(t *testing.T) {
 	}
 }
 
-// A CLAIMED task has not started yet, so a finish for it is a genuine
-// client error rather than a replay — it keeps the historical 400.
-func TestFinishTask_FromClaimedIsBadRequest(t *testing.T) {
-	_, r, taskId, cleanup := newClaimedTask(t)
+// A CLAIMED task can be finished as of turtlemonvh/blanket#23 phase 3.
+// This used to be a 400, on the reasoning that a task which never started
+// cannot have an outcome — but two real paths reach a terminal state from
+// CLAIMED: the worker reporting ERROR when cmd.Start() itself fails
+// (before the RUNNING transition ever happens), and the reaper failing a
+// task that has exhausted its requeues. Refusing them stranded the task in
+// CLAIMED forever, which is the failure #23 exists to fix.
+func TestFinishTask_FromClaimedIsAccepted(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
 	defer cleanup()
 
-	assert.Equal(t, http.StatusBadRequest, putTransition(r, taskId, "finish", "state=SUCCESS&runId=RUN1"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "finish", "state=ERROR&runId=RUN1"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "ERROR", got.State)
 }
 
 // TestUpdateProgress_RunIdMismatchIsConflict: progress carries the same

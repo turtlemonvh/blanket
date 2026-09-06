@@ -61,7 +61,9 @@ type BlanketDB interface {
 	// would make every staleness calculation in the reaper a measure of
 	// the worker's clock skew rather than its liveness.
 	HeartbeatWorker(workerId objectid.ObjectId) (worker.WorkerConf, error)
-	CleanupStalledWorkers() error
+	// CleanupStalledWorkers marks or stops workers that have stopped
+	// heartbeating; see ReapOptions for why it takes one.
+	CleanupStalledWorkers(opts *ReapOptions) (ReapReport, error)
 	// Task functions
 	GetTask(taskId objectid.ObjectId) (tasks.Task, error)
 	DeleteTask(taskId objectid.ObjectId) error
@@ -70,7 +72,9 @@ type BlanketDB interface {
 	RunTask(taskId objectid.ObjectId, fields *TaskRunConfig) error
 	FinishTask(taskId objectid.ObjectId, fields *TaskFinishConfig) error
 	UpdateTaskProgress(taskId objectid.ObjectId, progress int) error
-	CleanupStalledTasks() error
+	// CleanupStalledTasks recovers or requeues tasks whose worker went
+	// away; see ReapOptions.
+	CleanupStalledTasks(opts *ReapOptions) (ReapReport, error)
 }
 
 var (
