@@ -44,12 +44,11 @@ test:
 # the docker image (see Dockerfile), which is why `make docker-test-race` is
 # the supported way to run this.
 #
-# lib/tailed_file is deliberately not in this list: TestStreamLogSingleSub
-# reports a pre-existing race in TailedFileCollection that predates
-# turtlemonvh/blanket#23 and is out of scope for it. Add it here once that
-# is fixed.
+# lib/tailed_file is in the list now that the race it used to report (a log
+# statement reflecting over hpcloud/tail's internals) is fixed — see the
+# comment in StartTailedFile.
 test-race:
-	CGO_ENABLED=1 go test -race -count=1 ./worker/... ./server/... ./lib/bolt/... ./lib/httpx/... ./lib/timing/... ./tasks/...
+	CGO_ENABLED=1 go test -race -count=1 ./worker/... ./server/... ./lib/bolt/... ./lib/httpx/... ./lib/timing/... ./lib/tailed_file/... ./tasks/...
 
 # Integration tests spin up a real server + worker; skip with -short
 test-integration:
