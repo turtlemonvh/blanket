@@ -181,17 +181,22 @@ state.
 ```
 POST   /task/claim/:workerid    # claim a task matching the worker's tags
 PUT    /task/:id/run            # mark CLAIMED → RUNNING
+                                 # ?runId= &pid= &timeout= &typeDigest=
 PUT    /task/:id/progress       # update percent-complete (0-100)
+                                 # ?progress= [&runId=]
 PUT    /task/:id/finish         # mark RUNNING → SUCCESS / ERROR / TIMEDOUT
                                  # ?state=<terminal state> (required)
+                                 # ?runId= (optional) fencing token
                                  # ?exitCode=<int> (optional) records the
                                  # process exit status
 ```
 
 `PUT /task/:id/finish` takes its terminal `state` as a query parameter,
-plus an optional `exitCode` — the same way `run` passes `timeout`, `pid`,
-and `typeDigest`. It lands on the task record's `exitCode` field, which
-every task response carries:
+plus an optional `runId` and `exitCode` — the same way `run` passes
+`timeout`, `pid`, and `typeDigest`.
+
+`exitCode` lands on the task record's `exitCode` field, which every task
+response carries:
 
 * an integer once a process has run to completion (`0` for a clean exit,
   `3` for `exit 3`, ...)
@@ -202,10 +207,56 @@ every task response carries:
 
 A present-but-unparseable `exitCode` is a **400**. Task records written
 before this field existed decode with `exitCode: null`; no migration is
-needed.
+needed. An omitted `exitCode` leaves whatever is stored alone rather than
+clearing it, so a cancel — or a retry of a finish that already landed —
+can't erase a code the first report recorded.
+
+`runId` is the worker's **fencing token** for one execution attempt
+(turtlemonvh/blanket#23). The worker generates it immediately before it
+starts the child process and sends the same value on every transition for
+that run. Both endpoints are idempotent with respect to it, because the
+worker retries them:
+
+| Request | Task state | Stored `runId` | Sent `runId` | Response |
+| --- | --- | --- | --- | --- |
+| `run` | `CLAIMED` | — | `R1` | **200**, token stored |
+| `run` | `RUNNING` | `R1` | `R1` | **200**, no-op (a retry) |
+| `run` | `RUNNING` | `R1` | `R2` | **409** — two runners |
+| `run` | `RUNNING` | `R1` | *(empty)* | **200**, no-op (legacy) |
+| `run` | terminal | any | any | **409** — e.g. a user already stopped it |
+| `finish` | `RUNNING` | `R1` | `R1` | **200**, task becomes terminal |
+| `finish` | terminal | `R1` | `R1` | **200**, no-op — first terminal state wins |
+| `finish` | `RUNNING` | `R1` | `R2` | **409** — two runners |
+| `finish` | `RUNNING` | `R1` | *(empty)* | **200** (legacy) |
+| `finish` | `CLAIMED` | any | any | **400** — never started |
+
+Two rules are worth calling out:
+
+- **An empty `runId` is legacy-permissive.** A worker built before the
+  token existed sends none, and its task records carry none, so a
+  mixed-version install keeps working. Only two tokens that are both
+  present and different are a conflict. This leniency goes away with the
+  schema bump in phase 4 of #23.
+- **The first terminal state wins**, and a repeat is a 200 rather than an
+  error. In particular a user's `STOPPED` (via `PUT /task/:id/cancel`)
+  beats the `ERROR` the worker reports moments later when the killed child
+  exits. Rejecting that late report is what used to strand tasks: the
+  worker retried into the same rejection until its deadline and then gave
+  up having reported nothing.
+
+`PUT /task/:id/progress` takes the token too, and returns 409 on a
+mismatch so a stale runner can't paint over the live one's numbers — but
+it's optional there. A task script that wants to send it reads it from
+`BLANKET_APP_TASK_RUN_ID`, which the worker exports into the child's
+environment alongside the other `BLANKET_APP_*` variables.
+
+A 409 is never retried by the worker; 5xx and transport failures are,
+with full-jitter backoff (see `lib/httpx`).
 
 See [task_flow.md](task_flow.md) for the full state machine and
-which endpoint drives each transition.
+which endpoint drives each transition, and
+[task_flow.md](task_flow.md#outcome-journal) for the on-disk journal the
+worker keeps alongside these calls.
 
 Note that worker-facing routes are unauthenticated, like everything else
 blanket serves, so `exitCode` is spoofable by anything that can reach the
@@ -242,10 +293,14 @@ Lifecycle.
 ```
 POST   /worker/                 # launch a new worker (used by the UI)
 PUT    /worker/:id              # initial creation + status updates from worker
+                                 # field-level merge: the worker owns pid,
+                                 # logfile, startedTs, tags, checkInterval;
+                                 # the server owns stopped + lastHeardTs
 PUT    /worker/:id/stop         # stop after current task; sets Stopped=true
                                  # ?force=true also sends an immediate kill
                                  # signal to the worker process
 PUT    /worker/:id/restart      # re-start an existing stopped worker
+                                 # (clears Stopped server-side, then relaunches)
 DELETE /worker/:id              # remove from DB; only valid if stopped
 ```
 

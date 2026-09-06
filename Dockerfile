@@ -18,9 +18,11 @@ ARG GO_VERSION=1.25.9
 ARG TARGETARCH=amd64
 
 # Extra CLI tools: make for the Makefile, git for build ldflags, curl + jq
-# for scripts/smoke.sh.
+# for scripts/smoke.sh, gcc + libc6-dev for `go test -race` (the race
+# detector requires cgo, so without a C toolchain `make test-race` fails
+# with "-race requires cgo").
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends make git curl jq ca-certificates \
+    && apt-get install -y --no-install-recommends make git curl jq ca-certificates gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # The repo is bind-mounted at /src with host UIDs. Without this, git refuses

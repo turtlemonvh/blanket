@@ -273,6 +273,97 @@ kills the process — no direct server-to-worker RPC involved. Worst case, the
 subprocess keeps running for up to one `CheckInterval` after the cancel call
 before it's killed.
 
+### Idempotent transitions and the `runId` fencing token
+
+`PUT /task/:id/run` and `PUT /task/:id/finish` are retried by the worker
+(turtlemonvh/blanket#23 phase 1), so both are idempotent. Each execution
+attempt carries a **fencing token**, `runId`, that the worker generates
+immediately before starting the child process and repeats on every
+transition for that run:
+
+- A repeat carrying the **same** token is a 200 no-op — the worker asked
+  for something already done and simply never heard the answer.
+- A **different** token is a 409: two runners believe they own this task.
+  The worker never retries a 409.
+- An **empty** token is legacy-permissive, so workers built before the
+  token keep working until the schema bump in phase 4 of #23.
+
+The first terminal state a task reaches is the one that sticks. A user's
+`STOPPED` therefore beats the `ERROR` the worker reports a moment later
+when the killed child exits — and the worker is told 200, not an error, so
+it stops retrying and cleans up. The full table is in
+[api.md](api.md#tasks).
+
+### Outcome journal
+
+While a task is running, its worker keeps a small journal next to the
+task's logs:
+
+```
+<resultDir>/blanket.outcome.json
+```
+
+It exists so the real outcome of a run survives the worker process. If a
+worker is killed — an upgrade, an OOM, a power cut — between the child
+exiting and the server acknowledging the finish, the task record still says
+`RUNNING` and the outcome would otherwise be gone. Guessing at it is not
+acceptable: misclassifying a finished three-hour render as `ERROR` is
+exactly the failure [design.md](design.md) says not to have.
+
+The worker **never reads the journal back**. Its consumer is the reaper
+added in phase 3 of #23, which makes the two fully decoupled: nothing on
+the running path depends on the journal being readable, so every write to
+it fails open (logged at warn, task unaffected).
+
+Writes are atomic — temp file in the same directory, `fsync`, `rename`,
+then `fsync` of the directory — so a reader after a crash sees either the
+previous contents or the new ones, never a mix.
+
+Lifecycle:
+
+| When | `state` | Meaning if found later |
+| --- | --- | --- |
+| `cmd.Start()` succeeded | `running` | The worker died with the task in flight. Check whether `pid` is still alive before doing anything. |
+| child exited | `exited` | The outcome is known (`exitCode`, `exitedTs`) and was never reported. This is the case worth recovering. |
+| server acknowledged the finish | `reported` | The worker died between the ack and the unlink. Nothing to recover; the file can just be removed. |
+| — | *(file deleted)* | Normal completion. |
+
+Schema (`worker.OutcomeJournal`, `worker/journal.go`):
+
+```json
+{
+  "version": 1,
+  "state": "exited",
+  "runId": "6a9c504d0372dcda2a889777",
+  "taskId": "6a9c504d0372dcda2a889776",
+  "workerId": "6a9c504d0372dcda2a889775",
+  "pid": 48213,
+  "pidStartTs": 0,
+  "startedTs": 1757088000,
+  "exitedTs": 1757088012,
+  "exitCode": 0
+}
+```
+
+- `version` — bumped only on an incompatible schema change.
+- `runId` — the same fencing token sent on the run/finish transitions, so a
+  reader can tell whether the journal describes the run the task record is
+  currently about or a stale earlier attempt.
+- `pid` / `pidStartTs` — the **child** process, not the worker.
+  `pidStartTs` guards against pid reuse; it stays `0` ("unknown") until
+  phase 3 adds the per-platform liveness package that can read it, and a
+  reader must treat a zero value as inconclusive rather than assuming the
+  pid is this process.
+- `exitCode` — `0` for success, the process's code for a non-zero exit,
+  `-1` when it was killed by a signal (a timeout kill or a user cancel).
+  It is the *same* status read the worker reports on
+  `PUT /task/:id/finish?exitCode=` (turtlemonvh/blanket#27), taken once
+  after `cmd.Wait()`, so the journal and the task record can never
+  disagree. Only the encoding of "killed by a signal" differs: the
+  journal writes `-1`, the task record writes `null`, because a task's
+  `exitCode` field has to keep "unknown" distinguishable from a genuine
+  exit 0.
+
 ## Worker state machine
 
 Workers have a simpler model: a single `Stopped` boolean on the
@@ -280,6 +371,15 @@ Workers have a simpler model: a single `Stopped` boolean on the
 on its `CheckInterval`; setting `Stopped = true` (via
 `PUT /worker/:id/stop` or the worker process exiting) takes it out
 of the claim loop. Workers can only be deleted once stopped.
+
+`Stopped` is **server-owned**. `PUT /worker/:id` merges at the field level
+rather than overwriting the record (turtlemonvh/blanket#23 phase 1): the
+worker owns `pid`, `logfile`, `startedTs`, `tags` and `checkInterval`, and
+the server owns `stopped` and `lastHeardTs`. Without that split, a worker
+re-registering — which it always does with `stopped: false` — silently
+undid a stop that had just landed, and carried on claiming tasks. It also
+means restarting a worker has to clear the flag server-side, which is what
+`PUT /worker/:id/restart` now does before relaunching the process.
 
 ```mermaid
 stateDiagram-v2
@@ -310,6 +410,19 @@ error is not fatal — the loop sleeps `CheckInterval` and retries. No
 sleep happens after successfully processing a task, so the worker
 drains a backlog without waiting out the interval between each one.
 
+Every sleep in the loop is jittered (turtlemonvh/blanket#23 phase 1). An
+ordinary poll waits a full `CheckInterval` plus up to a quarter of one; a
+failed iteration waits a **full-jitter** backoff instead —
+`rand(0, min(CheckInterval << n, 30s))` — which also spreads out the first
+poll after a reconnect. The failure this defends against is a server
+restart, which every worker on the machine sees at the same instant:
+without jitter they reconnect in lockstep and stay that way.
+
+A `SIGTERM` sets a local stop flag as well as asking the server to mark the
+worker stopped, so the loop exits even when the server is permanently
+unreachable — the shutdown path is bounded rather than dependent on a
+round trip.
+
 ```mermaid
 sequenceDiagram
     participant W as Worker (ProcessTasks)
@@ -317,6 +430,7 @@ sequenceDiagram
     participant Q as Queue (lib/queue)
     participant DB as BoltDB
     participant P as Task subprocess
+    participant J as Outcome journal (disk)
 
     loop until Stopped
         W->>S: GET /worker/:id (Refetch)
@@ -333,15 +447,20 @@ sequenceDiagram
                 W->>W: sleep(CheckInterval)
             else task claimed
                 W->>P: start task command (exec.Cmd)
-                W->>S: PUT /task/:id/run
-                S->>DB: RunTask (state -> RUNNING)
+                W->>J: write journal (state=running, runId, pid)
+                W->>S: PUT /task/:id/run?runId=...
+                S->>DB: RunTask (state -> RUNNING, stores runId)
                 loop while process runs
                     W->>S: GET /task/:id (Refresh, check for cancel)
-                    W->>P: poll ProcessState / kill on cancel or timeout
+                    Note over W,S: refresh error -> keep running (fail open)
+                    W->>P: kill on cancel or timeout
                 end
                 P-->>W: process exits
-                W->>S: PUT /task/:id/finish?state=SUCCESS|ERROR|TIMEDOUT
+                W->>J: write journal (state=exited, exitCode)
+                W->>S: PUT /task/:id/finish?state=SUCCESS|ERROR|TIMEDOUT&runId=...
+                Note over W,S: retried with full jitter; 409/404/400 are not retried
                 S->>DB: FinishTask
+                W->>J: write journal (state=reported), then delete it
             end
         end
     end

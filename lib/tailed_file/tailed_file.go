@@ -222,8 +222,13 @@ func (tfc *TailedFileCollection) StartTailedFile(p string) (*TailedFile, error) 
 
 	// Shuts down when channel closes
 	go func() {
+		// Log the path, never the *tail.Tail itself: logrus' TextFormatter
+		// fmt.Sprint()s field values, which reflects over every field of the
+		// struct — including the file handle, reader and tomb counters that
+		// hpcloud/tail's own goroutine mutates concurrently. That read is a
+		// data race we cannot synchronize from out here.
 		log.WithFields(log.Fields{
-			"tailer": tailer,
+			"file": p,
 		}).Info("In tailedfile goroutine, starting loop over lines")
 
 		for nline := range tailer.Lines {

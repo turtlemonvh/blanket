@@ -16,6 +16,7 @@ local Go or Node install needed:
 
 ```bash
 make docker-test           # Go unit tests in the container
+make docker-test-race      # Go unit tests under the race detector
 make docker-test-browser   # Playwright suite
 make docker-test-smoke     # binary smoke test
 make docker-shell          # interactive shell, source mounted at /src
@@ -29,6 +30,7 @@ See `Dockerfile` for what the image carries.
 
 ```
 make docker-test           # Go unit tests
+make docker-test-race      # Go unit tests under -race (worker/server/bolt/…)
 make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh
                            #   + scripts/restart.sh)
 make docker-test-browser   # Playwright suite
@@ -44,6 +46,7 @@ make linux                 # build for Linux
 make darwin                # build for macOS
 make windows               # build for Windows
 make test                  # run Go unit tests
+make test-race             # run Go unit tests under -race (needs cgo + gcc)
 make test-smoke            # run smoke tests
 make test-restart          # run shutdown/restart tests (signals, SIGUSR2)
 make test-browser          # run Playwright tests

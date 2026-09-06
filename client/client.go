@@ -1,12 +1,11 @@
 package client
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/turtlemonvh/blanket/lib/httpx"
 	"github.com/turtlemonvh/blanket/tasks"
-	"io/ioutil"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -14,6 +13,13 @@ import (
 
 /*
 The client package provides utilities for working with a running blanket server over HTTP
+
+Every call goes through lib/httpx's shared client, so the CLI inherits the
+same dial and response-header timeouts the worker uses
+(turtlemonvh/blanket#23 phase 1) instead of hanging indefinitely against a
+wedged server. These are interactive one-shot calls, so they don't retry: a
+person is waiting, and the right response to a server that is down is to
+say so.
 */
 
 type GetTasksConf struct {
@@ -49,16 +55,13 @@ func GetTasks(c *GetTasksConf, port int) ([]map[string]interface{}, error) {
 	if paramsString != "" {
 		reqURL += "?" + paramsString
 	}
-	res, err := http.Get(reqURL)
+	res, err := httpx.DoOnce(context.Background(), "GET", reqURL, nil, httpx.DefaultRequestTimeout)
 	if err != nil {
 		return tasks, err
 	}
 
-	defer res.Body.Close()
-
 	// FIXME: Encode as task objects instead
-	dec := json.NewDecoder(res.Body)
-	dec.Decode(&tasks)
+	json.Unmarshal(res.Body, &tasks)
 
 	return tasks, nil
 }
@@ -69,17 +72,16 @@ func GetTasks(c *GetTasksConf, port int) ([]map[string]interface{}, error) {
 // worker could claim a given task type.
 func GetActiveWorkerTagSets(port int) ([][]string, error) {
 	reqURL := fmt.Sprintf("http://localhost:%d/worker/", port)
-	res, err := http.Get(reqURL)
+	res, err := httpx.DoOnce(context.Background(), "GET", reqURL, nil, httpx.DefaultRequestTimeout)
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
 
 	var workers []struct {
 		Tags    []string `json:"tags"`
 		Stopped bool     `json:"stopped"`
 	}
-	if err := json.NewDecoder(res.Body).Decode(&workers); err != nil {
+	if err := json.Unmarshal(res.Body, &workers); err != nil {
 		return nil, err
 	}
 
@@ -130,18 +132,14 @@ func SubmitTaskWithOptions(taskType string, env map[string]interface{}, port int
 	}
 
 	reqURL := fmt.Sprintf("http://localhost:%d/task/", port)
-	res, err := http.Post(reqURL, "encoding/json", bytes.NewBuffer(bts))
-	if err != nil {
-		return t, err
-	}
-	defer res.Body.Close()
-
-	rbts, err := ioutil.ReadAll(res.Body)
+	// A non-2xx now comes back as an error carrying the server's message,
+	// which replaces the old "unmarshal whatever came back and hope"
+	// handling flagged by the FIXME that used to live here.
+	res, err := httpx.DoOnce(context.Background(), "POST", reqURL, bts, httpx.DefaultRequestTimeout)
 	if err != nil {
 		return t, err
 	}
 
-	// FIXME: Handle non-200s with more obvious error
-	err = json.Unmarshal(rbts, &t)
+	err = json.Unmarshal(res.Body, &t)
 	return t, err
 }
