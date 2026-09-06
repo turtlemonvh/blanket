@@ -311,10 +311,17 @@ grep -q 'blanket completion bash' "$INSTALL_HOME/.bashrc" \
 # (turtlemonvh/blanket#23 phase 1). A leftover blanket.outcome.json after a
 # clean run means the worker never got its finish acknowledged — the exact
 # condition the phase 3 reaper will act on — so it must not happen here.
-"$REPO_ROOT/$BINARY" --config "$WORKDIR/config.json" worker \
+#
+# Started the same way as the worker above: cd into WORKDIR rather than
+# wrapping in a `( cd … ; cmd & )` subshell, so WORKER_PID stays a direct
+# child and the `wait` at the end of the section works.
+prev_dir="$PWD"
+cd "$WORKDIR"
+"$BINARY" --config "$CONFIG" worker \
     --tags "exec:bash,os:unix" --checkinterval 0.5 \
     > "$WORKDIR/worker.out" 2>&1 &
 WORKER_PID=$!
+cd "$prev_dir"
 
 worker_task_resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
     -d '{"type":"echo_task"}' "$BASE/task/")"
