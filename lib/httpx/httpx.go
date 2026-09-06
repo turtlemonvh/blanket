@@ -299,7 +299,14 @@ func Do(ctx context.Context, method, url string, body []byte, p Policy) (*Result
 		if err == nil {
 			return res, nil
 		}
-		lastErr = err
+		// Keep the last *informative* failure. Once the retry budget is
+		// spent, ctx is done, so an attempt still in flight fails with a
+		// context-cancelled transport error that says nothing about the
+		// server — recording it would throw away the 500 (or whatever the
+		// server actually last said) that the caller wants to inspect.
+		if ctx.Err() == nil || lastErr == nil {
+			lastErr = err
+		}
 		if !IsRetryable(err) {
 			return nil, err
 		}
