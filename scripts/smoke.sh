@@ -17,26 +17,20 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-BINARY="${1:-}"
-if [[ -z "$BINARY" ]]; then
-    # Prefer a host-native binary if one is present.
-    for candidate in "./blanket-linux-amd64" "./blanket-darwin-amd64" "./blanket-windows-amd64.exe"; do
-        if [[ -x "$candidate" ]]; then
-            BINARY="$candidate"
-            break
-        fi
-    done
-fi
+# Port selection, workdir, config generation, readiness polling and trap
+# cleanup all live in the shared subprocess harness -- scripts/restart.sh
+# needs the same scaffolding. See scripts/lib/harness.sh.
+# shellcheck source=scripts/lib/harness.sh
+source "$REPO_ROOT/scripts/lib/harness.sh"
 
-if [[ -z "$BINARY" || ! -x "$BINARY" ]]; then
-    echo "smoke: no blanket binary found; build one with 'make linux' (or darwin/windows) first" >&2
-    exit 1
-fi
+harness_find_binary "${1:-}"
+harness_init blanket-smoke
 
-PORT=18773
-BASE="http://localhost:${PORT}"
-WORKDIR="$(mktemp -d -t blanket-smoke-XXXXXX)"
-SERVER_PID=""
+# Not part of the shared harness: only smoke.sh runs a live worker
+# alongside the server (turtlemonvh/blanket#27's ?wait checks need one to
+# actually claim and run tasks; scripts/restart.sh has no equivalent
+# need), so it's stopped locally in this script's own cleanup rather than
+# folded into scripts/lib/harness.sh.
 WORKER_PID=""
 
 cleanup() {
@@ -45,11 +39,7 @@ cleanup() {
         kill "$WORKER_PID" 2>/dev/null || true
         wait "$WORKER_PID" 2>/dev/null || true
     fi
-    if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-        kill "$SERVER_PID" 2>/dev/null || true
-        wait "$SERVER_PID" 2>/dev/null || true
-    fi
-    rm -rf "$WORKDIR"
+    harness_cleanup || true
     if [[ $status -eq 0 ]]; then
         echo "smoke: OK"
     else
@@ -59,54 +49,13 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p "$WORKDIR/types" "$WORKDIR/results"
-cp "$REPO_ROOT/testdata/types/echo_task.toml" "$WORKDIR/types/echo_task.toml"
-
-cat > "$WORKDIR/config.json" <<EOF
-{
-  "port": ${PORT},
-  "database": "$WORKDIR/blanket.db",
-  "tasks": {
-    "typesPaths": ["$WORKDIR/types"],
-    "resultsPath": "$WORKDIR/results"
-  },
-  "logLevel": "warn"
-}
-EOF
-
-# Run the server from the workdir so relative paths resolve predictably.
-(
-    cd "$WORKDIR"
-    "$REPO_ROOT/$BINARY" --config "$WORKDIR/config.json" > "$WORKDIR/server.log" 2>&1 &
-    echo $! > "$WORKDIR/server.pid"
-) || true
-SERVER_PID="$(cat "$WORKDIR/server.pid")"
-
-# Poll /version until the server is listening, or give up.
-ready=0
-for _ in $(seq 1 50); do
-    if curl -fsS "$BASE/version" > /dev/null 2>&1; then
-        ready=1
-        break
-    fi
-    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-        echo "smoke: server exited before becoming ready; log follows:" >&2
-        cat "$WORKDIR/server.log" >&2
-        exit 1
-    fi
-    sleep 0.1
-done
-
-if [[ "$ready" -ne 1 ]]; then
-    echo "smoke: server did not respond on $BASE within 5s; log follows:" >&2
-    cat "$WORKDIR/server.log" >&2
-    exit 1
-fi
+harness_start_server
+harness_wait_ready || exit 1
 
 fail() {
     echo "smoke: FAIL — $*" >&2
     echo "--- server.log ---" >&2
-    cat "$WORKDIR/server.log" >&2
+    cat "$SERVER_LOG" >&2
     exit 1
 }
 
@@ -192,16 +141,18 @@ command = "echo 'failing on purpose' >&2; exit 3"
 executor = "bash"
 EOF
 
-(
-    cd "$WORKDIR"
-    "$REPO_ROOT/$BINARY" --config "$WORKDIR/config.json" worker \
-        --tags "exec:bash,os:unix" \
-        --checkinterval 0.5 \
-        --logfile "$WORKDIR/worker.log" \
-        > "$WORKDIR/worker.stdout.log" 2>&1 &
-    echo $! > "$WORKDIR/worker.pid"
-) || true
-WORKER_PID="$(cat "$WORKDIR/worker.pid")"
+# Deliberately NOT wrapped in a `( cd … ; cmd & )` subshell -- same reason
+# as harness_start_server: that makes the worker a grandchild, and `kill`
+# + `wait` below need WORKER_PID to be a direct child of this shell.
+prev_dir="$PWD"
+cd "$WORKDIR"
+"$BINARY" --config "$CONFIG" worker \
+    --tags "exec:bash,os:unix" \
+    --checkinterval 0.5 \
+    --logfile "$WORKDIR/worker.log" \
+    > "$WORKDIR/worker.stdout.log" 2>&1 &
+WORKER_PID=$!
+cd "$prev_dir"
 
 worker_ready=0
 for _ in $(seq 1 50); do
@@ -272,7 +223,7 @@ WORKER_PID=""
 # array (the fixture is intentionally minimal, so warnings are expected —
 # this only checks the command runs and emits well-formed JSON, not that
 # the fixture is warning-free).
-validate_json="$("$REPO_ROOT/$BINARY" --config "$WORKDIR/config.json" task-validate --json)" \
+validate_json="$("$BINARY" --config "$CONFIG" task-validate --json)" \
     || fail "task-validate --json exited non-zero unexpectedly: $validate_json"
 echo "$validate_json" | jq -e 'type == "array"' > /dev/null \
     || fail "task-validate --json did not produce a JSON array: $validate_json"
@@ -338,7 +289,7 @@ INSTALL_TEST_DIR="$INSTALL_HOME/.local/bin"
 run_installer() {
     HOME="$INSTALL_HOME" \
     SHELL="/bin/bash" \
-    BINARY_PATH="$REPO_ROOT/$BINARY" \
+    BINARY_PATH="$BINARY" \
     INSTALL_DIR="$INSTALL_TEST_DIR" \
     INSTALL_SKILLS=0 \
     INSTALL_AUTOSTART=0 \

@@ -26,7 +26,6 @@ require (
 	go.etcd.io/bbolt v1.4.3
 	go.mongodb.org/mongo-driver/v2 v2.5.0
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7
-	gopkg.in/tylerb/graceful.v1 v1.2.15
 )
 
 require (

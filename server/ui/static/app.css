@@ -265,3 +265,16 @@ tr:hover td { background: #fafbfc; }
   border-color: #b2d8bf;
   color: var(--ok);
 }
+
+/* Server-restart banner (issue #23 phase 2).
+   Shown when an SSE stream delivers a `server-restarting` event, i.e. the
+   server is draining for a shutdown or a self-restart. Hidden again as
+   soon as any stream reconnects, so a page never sits stale-looking after
+   the server is back. Styled as a sibling of .flash-warning rather than a
+   new visual language -- see server/ui/static/sse-restart-banner.js. */
+#server-restart-banner[hidden] { display: none; }
+#server-restart-banner .flash-restarting {
+  background: #fff6e0;
+  border-color: #ead59a;
+  color: var(--warn);
+}
