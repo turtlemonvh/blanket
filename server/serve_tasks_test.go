@@ -18,8 +18,13 @@
 //   - PUT /task/:id/progress (missing task): TestUpdateProgress_MissingTask
 //   - PUT /task/:id/progress (wrong state): TestUpdateProgress_WrongState
 //   - PUT /task/:id/finish: TestFinishTask_Valid, TestFinishTask_MissingTask,
-//     TestFinishTask_WrongState, TestFinishTask_InvalidState,
+//     TestFinishTask_AlreadyTerminalIsNoop, TestFinishTask_InvalidState,
+//     TestFinishTask_FromClaimedIsBadRequest,
 //     TestFinishTask_InvalidExitCode (serve_sync_test.go)
+//   - PUT /task/:id/run + /finish idempotency and the RunId fencing token
+//     (turtlemonvh/blanket#23 phase 1): TestRunTask_*, TestFinishTask_*RunId*,
+//     TestFinishTask_LateErrorAfterUserStopKeepsStopped,
+//     TestFinishTask_RepeatKeepsStoredExitCode
 //   - POST /task/?wait (synchronous submission): server/serve_sync_test.go
 //   - POST /task/claim/:workerid edges: TestClaim_MissingWorker,
 //     TestClaim_NoMatchingTask, TestClaim_DeletedTaskDoesNotPanic
@@ -709,7 +714,19 @@ func TestFinishTask_MissingTask(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestFinishTask_WrongState(t *testing.T) {
+// TestFinishTask_AlreadyTerminalIsNoop covers what used to be
+// TestFinishTask_WrongState, whose expectation changed with
+// turtlemonvh/blanket#23 phase 1: finishing an already-terminal task is now
+// a 200 no-op rather than a 400.
+//
+// Rejecting it is what stranded tasks. The worker retries this call, so a
+// rejection meant it retried into the same rejection until its deadline and
+// then gave up having reported nothing — while the state it was trying to
+// report was already recorded. The first terminal state a task reaches
+// wins, and saying so with a 200 lets the worker finish cleanly.
+// A finish from a non-terminal but ineligible state (CLAIMED) still 400s;
+// see TestFinishTask_FromClaimedIsBadRequest.
+func TestFinishTask_AlreadyTerminalIsNoop(t *testing.T) {
 	cleanup := setupTestTaskType(t)
 	defer cleanup()
 
@@ -727,12 +744,16 @@ func TestFinishTask_WrongState(t *testing.T) {
 	r.ServeHTTP(cancelW, req)
 	assert.Equal(t, http.StatusOK, cancelW.Code)
 
-	// Now try to finish a STOPPED task — should be rejected.
+	// Now finish a STOPPED task — accepted, but the STOPPED sticks.
 	url := fmt.Sprintf("/task/%s/finish?state=SUCCESS", createdTask.Id.Hex())
 	req, _ = http.NewRequest("PUT", url, nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	got, err := s.DB.GetTask(createdTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", got.State)
 }
 
 func TestFinishTask_InvalidState(t *testing.T) {
@@ -1093,4 +1114,260 @@ func TestPostTask_MultipartUpload(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(created.ResultDir, "payload.txt"))
 	assert.NoError(t, err)
 	assert.Equal(t, "hello attachment", string(got))
+}
+
+// --- PUT /task/:id/run + /finish idempotency (turtlemonvh/blanket#23 phase 1) ---
+//
+// The table these tests encode:
+//
+//	transition | task state | stored runId | caller runId | result
+//	-----------+------------+--------------+--------------+--------------------
+//	run        | CLAIMED    | ""           | R1           | 200, stored = R1
+//	run        | RUNNING    | R1           | R1           | 200 no-op
+//	run        | RUNNING    | R1           | R2           | 409
+//	run        | RUNNING    | R1           | ""           | 200 no-op (legacy)
+//	run        | STOPPED    | R1           | R1           | 409
+//	finish     | RUNNING    | R1           | R1           | 200, terminal
+//	finish     | SUCCESS    | R1           | R1           | 200 no-op
+//	finish     | RUNNING    | R1           | R2           | 409
+//	finish     | RUNNING    | R1           | ""           | 200 (legacy)
+//	finish     | STOPPED    | R1           | R1           | 200 no-op, STOPPED wins
+
+// claimTaskFor registers a worker matching echo_task's tags and claims the
+// oldest matching task for it, leaving that task CLAIMED.
+func claimTaskFor(t *testing.T, s *ServerConfig, r *gin.Engine) objectid.ObjectId {
+	t.Helper()
+
+	wconf := worker.WorkerConf{
+		Id:      objectid.NewObjectId(),
+		Tags:    []string{"bash", "unix"},
+		Stopped: false,
+	}
+	assert.NoError(t, s.DB.UpdateWorker(&wconf))
+
+	claimReq, _ := http.NewRequest("POST", fmt.Sprintf("/task/claim/%s", wconf.Id.Hex()), nil)
+	claimW := httptest.NewRecorder()
+	r.ServeHTTP(claimW, claimReq)
+	assert.Equal(t, http.StatusOK, claimW.Code)
+
+	var claimed tasks.Task
+	assert.NoError(t, json.Unmarshal(claimW.Body.Bytes(), &claimed))
+	return claimed.Id
+}
+
+// putTransition issues PUT /task/:id/<verb> with the given query string and
+// returns the response code.
+func putTransition(r *gin.Engine, taskId objectid.ObjectId, verb, query string) int {
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("/task/%s/%s?%s", taskId.Hex(), verb, query), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w.Code
+}
+
+// newClaimedTask sets up a task type, a task, and a worker that has claimed
+// it — the starting point for every row of the table above.
+func newClaimedTask(t *testing.T) (*ServerConfig, *gin.Engine, objectid.ObjectId, func()) {
+	t.Helper()
+
+	cleanupType := setupTestTaskType(t)
+	s, scleanup := NewTestServer()
+	r := s.GetRouter()
+
+	postTask(r, "echo_task")
+	taskId := claimTaskFor(t, s, r)
+
+	return s, r, taskId, func() {
+		scleanup()
+		cleanupType()
+	}
+}
+
+func TestRunTask_RepeatWithSameRunIdIsNoop(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=4242&timeout=10"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "RUNNING", got.State)
+	assert.Equal(t, "RUN1", got.RunId)
+	assert.Equal(t, 4242, got.Pid)
+
+	// The worker never heard the first response and retried.
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=4242&timeout=10"))
+
+	got, err = s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "RUNNING", got.State)
+	assert.Equal(t, "RUN1", got.RunId)
+}
+
+func TestRunTask_DifferentRunIdIsConflict(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+	assert.Equal(t, http.StatusConflict, putTransition(r, taskId, "run", "runId=RUN2&pid=2&timeout=10"))
+
+	// The first run still owns the task.
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "RUN1", got.RunId)
+	assert.Equal(t, 1, got.Pid)
+}
+
+// A worker built before the fencing token existed sends no runId at all.
+// Until the phase 4 schema bump those calls must keep working.
+func TestRunTask_EmptyRunIdIsLegacyPermissive(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "pid=1&timeout=10"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "RUNNING", got.State)
+	assert.Equal(t, "RUN1", got.RunId)
+}
+
+// A user's stop beats a worker that gets around to starting the task
+// afterwards; the worker is told 409 so it doesn't retry into it forever.
+func TestRunTask_AfterUserStopIsConflict(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "cancel", "force=true"))
+
+	assert.Equal(t, http.StatusConflict, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", got.State)
+}
+
+func TestFinishTask_RepeatWithSameRunIdIsNoop(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "finish", "state=SUCCESS&runId=RUN1"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "finish", "state=SUCCESS&runId=RUN1"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "SUCCESS", got.State)
+	assert.Equal(t, 100, got.Progress)
+}
+
+func TestFinishTask_DifferentRunIdIsConflict(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+	assert.Equal(t, http.StatusConflict, putTransition(r, taskId, "finish", "state=SUCCESS&runId=RUN2"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "RUNNING", got.State)
+}
+
+func TestFinishTask_EmptyRunIdIsLegacyPermissive(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "finish", "state=SUCCESS"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "SUCCESS", got.State)
+}
+
+// The row that matters most: a user cancels a RUNNING task, the worker
+// kills the child, and the child's exit is then reported as ERROR. The
+// task must stay STOPPED — and the worker must not be told it failed, or
+// it will retry the ERROR until its deadline and then leave the outcome
+// journal behind as if the state had been lost.
+func TestFinishTask_LateErrorAfterUserStopKeepsStopped(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "cancel", "force=true"))
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "finish", "state=ERROR&runId=RUN1"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "STOPPED", got.State)
+}
+
+// TestFinishTask_RepeatKeepsStoredExitCode is the seam between the two
+// features that landed on this handler at once: the idempotent finish
+// (turtlemonvh/blanket#23 phase 1) and the recorded exit code
+// (turtlemonvh/blanket#27). A retried finish is a 200 no-op, and a no-op
+// must leave the exit code the first report stored exactly as it is —
+// whether the retry carries no code, a different code, or no runId at all.
+// Downgrading a recorded exit status back to "unknown" would be a silent
+// data loss for any caller waiting on POST /task/?wait.
+func TestFinishTask_RepeatKeepsStoredExitCode(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "finish", "state=ERROR&runId=RUN1&exitCode=3"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "ERROR", got.State)
+	if assert.NotNil(t, got.ExitCode) {
+		assert.Equal(t, 3, *got.ExitCode)
+	}
+
+	// The retries a worker actually makes after a lost response.
+	for _, params := range []string{
+		"state=ERROR&runId=RUN1",            // same run, no code this time
+		"state=ERROR&runId=RUN1&exitCode=9", // same run, contradicting code
+		"state=ERROR",                       // legacy worker, no token at all
+		"state=SUCCESS&runId=RUN1",          // a late, different terminal state
+	} {
+		assert.Equal(t, http.StatusOK, putTransition(r, taskId, "finish", params), params)
+		got, err = s.DB.GetTask(taskId)
+		assert.NoError(t, err)
+		assert.Equal(t, "ERROR", got.State, params)
+		if assert.NotNil(t, got.ExitCode, params) {
+			assert.Equal(t, 3, *got.ExitCode, params)
+		}
+	}
+}
+
+// A CLAIMED task has not started yet, so a finish for it is a genuine
+// client error rather than a replay — it keeps the historical 400.
+func TestFinishTask_FromClaimedIsBadRequest(t *testing.T) {
+	_, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusBadRequest, putTransition(r, taskId, "finish", "state=SUCCESS&runId=RUN1"))
+}
+
+// TestUpdateProgress_RunIdMismatchIsConflict: progress carries the same
+// fencing token as the other transitions, so a stale runner can't paint
+// over the live one's numbers. An absent token stays permitted — task
+// scripts reporting their own progress have no way to know it.
+func TestUpdateProgress_RunIdFencing(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
+	defer cleanup()
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "run", "runId=RUN1&pid=1&timeout=10"))
+
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "progress", "progress=25&runId=RUN1"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "progress", "progress=50"))
+	assert.Equal(t, http.StatusConflict, putTransition(r, taskId, "progress", "progress=99&runId=RUN2"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, 50, got.Progress)
 }
