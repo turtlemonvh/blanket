@@ -7,7 +7,12 @@
     <td>{{fmtTs $w.StartedTs}}</td>
     <td class="muted">{{$w.Logfile}}</td>
     <td>{{$w.CheckInterval}}s</td>
-    <td>{{if $w.Stopped}}yes{{else}}no{{end}}</td>
+    {{/* One state column rather than a yes/no "Stopped" one: a worker can
+         be LOST (heartbeat stale, per the reaper) without being stopped,
+         and that is the case worth seeing at a glance. */}}
+    <td>{{if $w.Stopped}}<span class="badge state-STOPPED">stopped</span>
+        {{else if $w.Lost}}<span class="badge state-LOST" title="No heartbeat; see the worker's detail page">lost</span>
+        {{else}}<span class="badge state-ACTIVE">active</span>{{end}}</td>
     <td class="row-actions">
         {{if $w.Stopped}}
         <a hx-put="/worker/{{hex $w.Id}}/restart" hx-swap="none"

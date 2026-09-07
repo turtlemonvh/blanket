@@ -4,5 +4,11 @@
     "typesPaths": ["./testdata/types", "./tests/e2e/types"],
     "resultsPath": "/tmp/blanket-test-results"
   },
+  "reaper": {
+    "enabled": true,
+    "workerStaleAfter": "60m",
+    "workerDeadAfter": "60m",
+    "taskStaleAfter": "60m"
+  },
   "logLevel": "error"
 }

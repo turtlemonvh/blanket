@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -99,40 +100,72 @@ var uiFuncs = template.FuncMap{
 
 // uiTemplates is populated lazily per page so the partial templates
 // (tasks-rows, workers-rows, …) can be included alongside their parent.
-var uiTemplates = map[string]*template.Template{}
+//
+// Guarded by uiTemplatesMu: every entry here is written from an HTTP
+// handler, and handlers run concurrently. Without the lock, two requests
+// that both miss the cache are a concurrent map write, which is a *fatal*
+// runtime error — not a recoverable panic, so gin's Recovery middleware
+// cannot catch it and the whole server dies. That is not hypothetical: an
+// SSE-driven refresh (`workers-changed`, `tasks-changed`) fans out to
+// every open browser tab at once, so two handlers reaching an uncached
+// partial in the same instant is the ordinary case rather than a rare one.
+// It surfaced in CI as soon as turtlemonvh/blanket#23 phase 3's reaper
+// started emitting worker events of its own.
+//
+// The map is written once per template and read forever after, so a plain
+// mutex costs nothing measurable next to executing the template.
+var (
+	uiTemplatesMu sync.Mutex
+	uiTemplates   = map[string]*template.Template{}
+)
+
+// cachedTemplate returns the cached template for key, or parses and stores
+// one via parse. The lock is held across the parse, which is deliberate:
+// parsing twice concurrently would be harmless but pointless, and holding
+// it keeps the read and the write indivisible.
+func cachedTemplate(key string, parse func() (*template.Template, error)) *template.Template {
+	uiTemplatesMu.Lock()
+	defer uiTemplatesMu.Unlock()
+
+	if t, ok := uiTemplates[key]; ok {
+		return t
+	}
+	t, err := parse()
+	if err != nil {
+		// Templates are embedded, so any parse failure is a build-time bug.
+		panic(err)
+	}
+	uiTemplates[key] = t
+	return t
+}
 
 // mustParseUIPage parses layout + the named page (+ optional partial files)
 // and caches the result. Panics on error — templates are embedded, so any
 // parse failure is a build-time bug.
 func mustParseUIPage(name string, files ...string) *template.Template {
-	if t, ok := uiTemplates[name]; ok {
-		return t
-	}
-	paths := append([]string{"ui/templates/_layout.html"}, files...)
-	t, err := template.New(name).Funcs(uiFuncs).ParseFS(uiFS, paths...)
-	if err != nil {
-		panic(fmt.Errorf("ui: parse %s: %w", name, err))
-	}
-	uiTemplates[name] = t
-	return t
+	return cachedTemplate(name, func() (*template.Template, error) {
+		paths := append([]string{"ui/templates/_layout.html"}, files...)
+		t, err := template.New(name).Funcs(uiFuncs).ParseFS(uiFS, paths...)
+		if err != nil {
+			return nil, fmt.Errorf("ui: parse %s: %w", name, err)
+		}
+		return t, nil
+	})
 }
 
 // mustParsePartial parses standalone partial template(s) without the layout.
 func mustParsePartial(name string, files ...string) *template.Template {
-	key := "partial:" + name
-	if t, ok := uiTemplates[key]; ok {
-		return t
-	}
-	paths := make([]string, 0, len(files))
-	for _, f := range files {
-		paths = append(paths, "ui/templates/"+f)
-	}
-	t, err := template.New(name).Funcs(uiFuncs).ParseFS(uiFS, paths...)
-	if err != nil {
-		panic(fmt.Errorf("ui: parse partial %s: %w", name, err))
-	}
-	uiTemplates[key] = t
-	return t
+	return cachedTemplate("partial:"+name, func() (*template.Template, error) {
+		paths := make([]string, 0, len(files))
+		for _, f := range files {
+			paths = append(paths, "ui/templates/"+f)
+		}
+		t, err := template.New(name).Funcs(uiFuncs).ParseFS(uiFS, paths...)
+		if err != nil {
+			return nil, fmt.Errorf("ui: parse partial %s: %w", name, err)
+		}
+		return t, nil
+	})
 }
 
 // TaskTypeView is the render-friendly projection of tasks.TaskType.

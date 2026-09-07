@@ -106,7 +106,7 @@ independent:
 | b | `http.Server.Shutdown(ctx)` | Stop accepting connections; drain what's in flight. 5 s deadline. |
 | c | `http.Server.Close()` | Only if (b) hit its deadline: cut whatever is still open. |
 | d | `tailed_file.StopAll()` | Only now is this safe. No handler can still be reading from a tailer. Doing it *first* was a real bug in the `graceful.v1` setup this replaces: its `BeforeShutdown` hook ran before the listener closed, leaving in-flight log-stream handlers blocked on a torn-down tailer. |
-| e | Cancel the background loops | The scheduler today (`server/scheduler.go`); the reaper joins it there in a later phase. |
+| e | Cancel the background loops | The scheduler (`server/scheduler.go`) and the reaper (`server/reaper.go`), both started by `startBackgroundLoops`. Here rather than earlier because both touch storage, and here rather than later because storage closes in the next step — the stop function does not return until every loop has exited. |
 | f | Close the BoltDB handle | Last, because everything above may still touch storage — and because closing it is what releases the flock, which the next step needs. |
 
 Signals:

@@ -74,20 +74,18 @@ executor="bash"
 // import cycle ("import cycle not allowed in test"). Keep the two in sync
 // if their shape ever needs to change.
 func NewTestServer() (*ServerConfig, func()) {
-	DB, DBCloser := bolt.NewTestDB()
-	Q, QCloser := bolt.NewTestQueue()
+	// One bolt file holding both the database and queue buckets, as in
+	// production -- see bolt.NewTestDBAndQueue.
+	DB, Q, closer := bolt.NewTestDBAndQueue()
 
 	return &ServerConfig{
-			DB:           DB,
-			Q:            Q,
-			ResultsPath:  "/tmp/x", // FIMXE: Replace with temp dir and cleanup
-			Version:      "blanket (test)",
-			TaskEvents:   NewEventHub(),
-			WorkerEvents: NewEventHub(),
-		}, func() {
-			defer DBCloser()
-			defer QCloser()
-		}
+		DB:           DB,
+		Q:            Q,
+		ResultsPath:  "/tmp/x", // FIMXE: Replace with temp dir and cleanup
+		Version:      "blanket (test)",
+		TaskEvents:   NewEventHub(),
+		WorkerEvents: NewEventHub(),
+	}, closer
 }
 
 // Assert that the request object passed generated an empty list json response

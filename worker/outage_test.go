@@ -279,6 +279,15 @@ func TestProcessOne_JournalLifecycle(t *testing.T) {
 	assert.NotZero(t, mid.StartedTs)
 	assert.Zero(t, mid.ExitedTs)
 
+	// Wait for the *server* to see RUNNING before cancelling. The journal
+	// asserted above is written at cmd.Start(), which is before the
+	// MarkAsRunning round trip lands, so "the journal exists" does not imply
+	// "the task is cancelable": a cancel that arrives while the task is
+	// still CLAIMED is refused (server.cancelTaskById takes WAITING, RUNNING
+	// and the scheduled family, not CLAIMED), the run then finishes normally,
+	// and the assertion below sees SUCCESS instead of STOPPED. That is what
+	// failed on the slow Windows CI runner — turtlemonvh/blanket#116.
+	h.waitForState(submitted.Id, "RUNNING", 10*time.Second)
 	h.cancel(submitted.Id)
 	select {
 	case <-done:

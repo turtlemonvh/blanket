@@ -88,6 +88,40 @@ func InitializeConfig() {
 	// doc comment explains why the same number serves both purposes).
 	viper.SetDefault("scheduler.maxScheduled", 10000)
 
+	// The reaper (turtlemonvh/blanket#23 phase 3): the background loop
+	// that reconciles what a crash leaves behind -- workers that stopped
+	// heartbeating, tasks whose worker died mid-run, queue entries whose
+	// claim was never acked.
+	//
+	// It ships enabled. The switch exists because the failure this code
+	// guards against (destroyed task state) is also the failure it could
+	// itself cause, and an operator debugging a suspected false positive
+	// should be able to stop it in one config line rather than by
+	// downgrading.
+	//
+	// Every duration accepts anything time.ParseDuration understands, and
+	// is scaled by timeMultiplier at use. The thresholds are deliberately
+	// generous next to a worker's 2s check interval: waiting costs a stale
+	// row in the UI, acting early costs real work. See docs/task_flow.md
+	// ("The reaper") for the decision table these feed.
+	viper.SetDefault("reaper.enabled", true)
+	viper.SetDefault("reaper.interval", "30s")
+	// When a silent worker is marked LOST in the UI. Nothing is stopped or
+	// rewritten at this threshold.
+	viper.SetDefault("reaper.workerStaleAfter", "2m")
+	// The only threshold that can stop a worker on heartbeat silence alone
+	// -- i.e. when pid liveness could not answer (an unsupported platform,
+	// a record with no pidStartTs). Much longer, because that is much
+	// weaker evidence than a conclusively dead process.
+	viper.SetDefault("reaper.workerDeadAfter", "10m")
+	// How long a CLAIMED/RUNNING task may go without an update before the
+	// reaper looks at it. Looking is not acting: what happens next depends
+	// on the task's outcome journal.
+	viper.SetDefault("reaper.taskStaleAfter", "5m")
+	// Poison-task guard: how many times one task may be requeued after the
+	// worker that claimed it died before starting it.
+	viper.SetDefault("reaper.maxRequeues", 3)
+
 	// Time multiplier can be used in tests to speed up tests
 	viper.SetDefault("timeMultiplier", "1.0")
 
