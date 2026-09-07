@@ -592,20 +592,36 @@ func TestProcessOne_RecordsCombinedLog(t *testing.T) {
 	}
 	// The trailing printf never emits a newline; it is flushed when the
 	// recorder closes rather than dropped.
-	assert.Equal(t, []string{
+	want := []string{
 		"stdout:out-one",
 		"stderr:err-one",
 		"stdout:out-two",
 		"stderr:err-two",
 		"stdout:no-newline",
-	}, got, "records should be in the order the task produced them")
+	}
+	if runtime.GOOS == "windows" {
+		// Windows tails by polling (see tail_watch_windows.go), so two
+		// lines written within one poll interval of each other on
+		// different streams come out grouped by file -- the documented
+		// limitation. The record is still complete, still per-stream
+		// ordered, and still ends with the flushed partial line.
+		assert.ElementsMatch(t, want, got, "every record is present exactly once")
+		assert.Equal(t, "stdout:no-newline", got[len(got)-1], "the unterminated final line is flushed last")
+		perStream := map[string]int{}
+		for _, r := range recs {
+			perStream[r.Stream]++
+			assert.Equal(t, perStream[r.Stream], r.Seq, "seq counts within a stream, from 1, in file order")
+		}
+	} else {
+		assert.Equal(t, want, got, "records should be in the order the task produced them")
+		// seq counts within a stream, from 1.
+		assert.Equal(t, []int{1, 1, 2, 2, 3},
+			[]int{recs[0].Seq, recs[1].Seq, recs[2].Seq, recs[3].Seq, recs[4].Seq})
+	}
 
 	for _, r := range recs {
 		assert.Greater(t, r.Ts, int64(0), "every record is timestamped")
 	}
-	// seq counts within a stream, from 1.
-	assert.Equal(t, []int{1, 1, 2, 2, 3},
-		[]int{recs[0].Seq, recs[1].Seq, recs[2].Seq, recs[3].Seq, recs[4].Seq})
 
 	// The per-stream files are untouched by any of this: same bytes the
 	// task wrote, in the same shape as before the recorder existed.
