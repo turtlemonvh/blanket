@@ -9,7 +9,7 @@ task types. Both can be pointed at local files instead.
 
 ## The easy way: the release bundle
 
-Every release from v0.4.0 onward attaches
+Every release from v0.3.0 onward attaches
 `blanket-bundle-<version>.tar.gz`, which contains **everything below in
 one file**: the binaries for all three platforms, a `SHA256SUMS` that
 covers them, the example task types, the `blanket-task-type` skill, the
@@ -44,7 +44,7 @@ not only from a published release.
 ## The manual way
 
 This is what the bundle packages up; it is still here because a checklist
-you can read is worth having, and because releases before v0.4.0 have no
+you can read is worth having, and because releases before v0.3.0 have no
 bundle to download.
 
 ### 1. On a machine with internet access

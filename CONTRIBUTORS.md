@@ -144,12 +144,35 @@ built binary over real HTTP, Playwright drives the UI.
 ## Release Process
 
 1. Merge changes to `master` and ensure CI passes.
-2. Tag the commit: `git tag v0.2.0 && git push origin v0.2.0`
-3. The `.github/workflows/release.yml` workflow triggers on `v*` tags:
+2. Update `CHANGELOG.md`: add a `## v<tag>` section (or confirm one
+   already exists) with what changed for users, a **Breaking / behaviour
+   changes** list, and an **Upgrading** note. `release.yml` extracts this
+   section verbatim into the GitHub Release body — a tag whose section is
+   missing or stale ships a release page that says so.
+3. Run the pre-release checklist locally, in the same toolchain image CI
+   uses:
+   - `make docker-check-fmt && make docker-test && make docker-test-smoke`
+     — `docker-test` includes the pre-0.3.0 database compatibility check
+     (`lib/bolt/compat_test.go`'s `TestOpensAPre030Database` and
+     `server/serve_compat_test.go`'s `TestAPIServesAPre030Database`):
+     it opens a database written by a pre-0.3.0 binary (via
+     `bolt.WriteLegacyFixtureDatabase`), confirms the `meta` bucket is
+     created on first open with no migration and no backup, and that the
+     existing `tasks`/`workers` records decode unchanged and list
+     correctly through both the storage layer and the `/task/` and
+     `/worker/` API/UI routes.
+   - `make docker-release VERSION=<tag>` — produces the exact artifacts
+     CI will attach (binaries, `SHA256SUMS`, the bundle) so they can be
+     checked before tagging; `git status` should stay clean afterward
+     (the outputs are gitignored — delete them once checked).
+4. Tag the commit: `git tag v0.3.0 && git push origin v0.3.0`
+5. The `.github/workflows/release.yml` workflow triggers on `v*` tags:
    - Builds the Docker toolchain image
    - Cross-compiles, checksums and bundles via
      `make docker-release VERSION=<tag>`
-   - Creates a GitHub Release with auto-generated notes
+   - Creates a GitHub Release: body is the matching `## v<tag>` section of
+     `CHANGELOG.md`, with `generate_release_notes: true` appending the
+     auto-generated PR list below it
    - Attaches binaries: `blanket-linux-amd64`, `blanket-darwin-amd64`,
      `blanket-windows-amd64.exe`
    - Attaches `SHA256SUMS` over those three
@@ -159,6 +182,11 @@ built binary over real HTTP, Playwright drives the UI.
 (`scripts/bundle.sh`), so a maintainer can produce byte-identical
 artifacts locally before tagging — a release artifact only CI can build is
 one nobody can check.
+
+**Releasing 0.3.0:** once the PR carrying this section merges, the only
+remaining step is `git tag v0.3.0 && git push origin v0.3.0` — everything
+else (changelog body, checksums, bundle, compat check) is already in
+place on `master`.
 
 **`SHA256SUMS` is load-bearing, and only from this release onward.**
 `blanket upgrade` verifies every download against it and has no
@@ -179,7 +207,7 @@ identical verification. See
 
 The `VERSION` make variable is passed through as an ldflags `-X` value,
 along with `BUILD_DATE` (local time at minute precision). Tagged builds
-produce version output like `blanket v0.2.0 (built 2026-05-01 11:14 PM EDT)`.
+produce version output like `blanket v0.3.0 (built 2026-09-07 11:14 PM EDT)`.
 
 Install scripts (`scripts/install.sh`, `scripts/install.ps1`) fetch the
 latest release from the GitHub API by default. They also accept
