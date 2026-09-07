@@ -66,7 +66,7 @@ func DefaultConfigDir() (string, error) {
 // (%LOCALAPPDATA%\blanket\bin). Like DefaultConfigDir, this is only used
 // for informational display (blanket uninstall's "here's what's left"
 // message) — the actual running binary's path comes from
-// osext.Executable(), not this guess.
+// os.Executable(), not this guess.
 func DefaultInstallDir() (string, error) {
 	if runtime.GOOS == "windows" {
 		dataDir, err := DefaultDataDir()

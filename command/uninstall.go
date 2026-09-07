@@ -2,8 +2,8 @@ package command
 
 import (
 	"fmt"
+	"os"
 
-	"github.com/kardianos/osext"
 	"github.com/spf13/cobra"
 	"github.com/turtlemonvh/blanket/lib/service"
 )
@@ -44,7 +44,7 @@ func printWhatWasLeft() {
 	fmt.Println()
 	fmt.Println("blanket itself was left in place. Remove these manually for a full uninstall:")
 
-	if execPath, err := osext.Executable(); err == nil {
+	if execPath, err := os.Executable(); err == nil {
 		fmt.Printf("  binary:  %s\n", execPath)
 	} else if installDir, dirErr := service.DefaultInstallDir(); dirErr == nil {
 		fmt.Printf("  binary:  (could not resolve the running binary's path; the installer's default is %s)\n", installDir)

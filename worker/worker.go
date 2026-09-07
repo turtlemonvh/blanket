@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/kardianos/osext"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
@@ -234,7 +233,7 @@ func (c *WorkerConf) Run() error {
 	}
 
 	if c.Daemon {
-		path, err := osext.Executable()
+		path, err := os.Executable()
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err": err.Error(),
