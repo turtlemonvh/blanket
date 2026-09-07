@@ -95,7 +95,8 @@ flowchart LR
 
     claimloop -- "HTTP: POST /task/claim/:workerId,<br/>PUT /task/:id/run|progress|finish" --> router
     claimloop -- "starts, monitors" --> subcmd
-    subcmd -- "writes (copied through the worker,<br/>which records the interleaving)" --> logs
+    subcmd -- "writes stdout/stderr directly" --> logs
+    claimloop -- "tails both, records the interleaving" --> logs
 ```
 
 ### Shutdown sequence

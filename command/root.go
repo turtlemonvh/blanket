@@ -70,13 +70,12 @@ func SetConfigDefaults() {
 	// combined log view show a finished task's output in the order it
 	// was produced rather than grouped by stream.
 	//
-	// Turning it off restores the pre-#104 execution shape exactly --
-	// the child writes straight into blanket.stdout.log /
-	// blanket.stderr.log with no pipe and no worker in between. The
-	// reason to want that: with a pipe, a task that backgrounds a
-	// process and exits has its output closed a couple of seconds later
-	// (worker.childWaitDelay), where before the orphan could keep
-	// writing into the log file indefinitely.
+	// The child writes straight into blanket.stdout.log /
+	// blanket.stderr.log either way -- the worker builds the record by
+	// tailing those two files, not by standing between the child and
+	// them -- so turning this off costs nothing but the file itself and
+	// the tailer per running task. See docs/task_flow.md's "Task output
+	// files" for why it is built that way.
 	viper.SetDefault("workers.combinedLog", true)
 	viper.SetDefault("mcp.enabled", true)
 	viper.SetDefault("mcp.mode", "all")

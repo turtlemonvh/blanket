@@ -310,7 +310,8 @@ it stops retrying and cleans up. The full table is in
 
 ### Task output files
 
-A task's result dir holds three files written by the worker while it runs:
+A task's result dir holds three output files while it runs — two the
+child process writes itself, and one the worker writes about them:
 
 ```
 <resultDir>/blanket.stdout.log        # raw bytes the task wrote to stdout
@@ -330,9 +331,8 @@ combined log view used to replay history grouped while showing live lines
 interleaved: the same output looked different depending on whether you
 were watching when it happened.
 
-So the worker routes both streams through itself
-(`io.MultiWriter` → `lib/combined_log`) and appends one JSON object per
-completed line, in arrival order:
+So the worker **tails** the two files as they are written and appends one
+JSON object per completed line, in the order it saw them land:
 
 ```
 {"ts":1756900001123,"stream":"stdout","seq":1,"line":"starting"}
@@ -347,30 +347,67 @@ can't drift apart. Partial lines are buffered until their newline
 arrives, and whatever is left unterminated when the task ends is flushed
 as a final record.
 
-"Arrival order" is the honest description and the limit of what this can
-be: it is the order the *worker* read the two pipes — the same basis the
-live log view shows lines on — not a kernel-level total order. A task
-that writes everything at once and exits leaves both pipe buffers full,
-and which is drained first is up to the scheduler. What the file
-guarantees is that a task's replayed history and its live output are
-ordered the same way.
+#### Why tail the files instead of copying the streams
 
-Two consequences of routing output through the worker:
+The obvious implementation is to put the worker between the child and the
+files — `cmd.Stdout = io.MultiWriter(logFile, recorder)` — and it was the
+first one tried. It is wrong, because it changes what the child's stdout
+*is*: an `*os.File` that os/exec hands straight to the child becomes a
+pipe the worker owns.
 
-- **`workers.combinedLog`** (default `true`) turns it off. With it off
-  the child writes straight into the two files, exactly as before, and no
-  combined record is produced. Readers fall back automatically — an old
-  task and a knob-off task look the same to the UI.
-- **A backgrounded grandchild no longer keeps writing forever.** The
-  child's stdout is now a pipe, and `cmd.Wait()` blocks until every
-  descendant that inherited it closes it. The worker bounds that with
-  `cmd.WaitDelay` (~2s, `timeMultiplier`-scaled): past it, os/exec closes
-  the pipes and reports `exec.ErrWaitDelay`, which the worker treats as a
-  normal exit — the task's own status is already in `ProcessState`.
-  A task whose job is to launch a daemon and exit therefore loses that
-  daemon's output a couple of seconds after it exits (and, since its
-  stdout is a closed pipe, may take an `EPIPE`). That case wants
-  `workers.combinedLog = false`.
+A pipe has an owner that goes away. A task that starts a process and
+exits (a daemon launcher, `nohup … &`, anything under `setsid`) leaves
+that process holding the pipe's write end, and `cmd.Wait()` then blocks
+until it closes — which may be never. Bounding that with `cmd.WaitDelay`
+trades the hang for something worse: a couple of seconds after the task
+exits, os/exec closes the pipe under the orphan, its output is gone, and
+the next write can kill it with `SIGPIPE`. Writing into a file has no
+owner: the orphan goes on appending to `blanket.stdout.log` for as long
+as it lives, which is what blanket did before any of this existed and
+what it still does. **Missing logs are worse than missing ordering** —
+especially with worker restarts about to become routine
+(turtlemonvh/blanket#23).
+
+So the child gets the two files, exactly as before, and the worker opens
+a tailer per stream (`hpcloud/tail`; inotify on unix, polling on Windows)
+right after the process starts.
+
+#### The grace window, and the one thing it costs
+
+When `cmd.Wait()` returns, the worker keeps tailing until both files have
+been quiet for **400ms**, bounded at **3s** (both `timeMultiplier`-scaled;
+they mirror `logDrainGrace`/`logDrainMax` in `server/serve_stream.go`).
+The last lines of a task routinely land a moment after the process is
+gone. It then Sync()s the files, stops the tailers, reads whatever bytes
+they had not reached yet straight off the end of each file, and closes the
+record — so nothing written up to that point is missing from it, in order.
+
+That happens **before** the worker writes the `exited` outcome journal
+entry or calls `PUT /task/:id/finish`. A task the UI shows as FINISHED
+therefore always has a complete combined log; the `both` pane can never
+show a truncated history that quietly fills in afterwards.
+
+The limitation, and it is the only one: **a process that outlives the
+grace window is not in the combined record.** Its output keeps landing in
+`blanket.stdout.log` / `blanket.stderr.log`, so the per-stream log views,
+`GET /task/:id/log`, the completion payload and
+`GET /results/:taskId/...` all show it in full — but the `both` view's
+ordering record stopped at the moment the task finished.
+
+"The order the worker saw them land" is the honest description of that
+ordering, and the limit of what it can be: it is the same basis the live
+log view shows lines on, not a kernel-level total order. A task that
+writes to both streams at once and exits leaves the two tailers to be
+scheduled in whatever order the runtime picks. What the file guarantees is
+that a task's replayed history and its live output are ordered the same
+way, which is the thing that was actually wrong.
+
+`workers.combinedLog` (default `true`) turns the recording off. Nothing
+else changes when it does — the child's stdout and stderr are the two log
+files either way, so a task runs, finishes and logs identically; there is
+just no third file, and no tailer per running task. Readers fall back
+automatically, so a task run by a knob-off worker and a task run before
+the record existed look the same to the UI.
 
 ### Outcome journal
 

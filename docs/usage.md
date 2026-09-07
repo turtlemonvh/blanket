@@ -286,8 +286,11 @@ result artifact, and its log.
   combined record (`blanket.combined.ndjson`, linked from the metadata
   table); a task without one — run before blanket recorded it, or by a
   worker with `workers.combinedLog = false` — shows its history grouped
-  by stream instead and says so above the pane. **Pin to bottom** keeps
-  the newest line in view.
+  by stream instead and says so above the pane. The one gap: that record
+  stops a fraction of a second after the task itself exits, so if the
+  task left something running behind it, that process's later output
+  shows up under `stdout` / `stderr` but not under `both`. **Pin to
+  bottom** keeps the newest line in view.
 
 ### Upcoming
 
@@ -414,18 +417,20 @@ workers.combinedLog          true                       # record stream interlea
 ```
 
 `workers.combinedLog` is what lets a task's log views show its two streams
-in the order they were produced: the worker copies the child's output
-through itself and writes `blanket.combined.ndjson` alongside the two
-per-stream logs (see
-[Task output files](task_flow.md#task-output-files)). The per-stream logs
-are unchanged either way.
+in the order they were produced: the worker tails `blanket.stdout.log` and
+`blanket.stderr.log` as the task writes them and records each line, tagged
+and in order, into `blanket.combined.ndjson` alongside them (see
+[Task output files](task_flow.md#task-output-files)).
 
-Turn it off if a task type deliberately backgrounds a process that
-outlives it and you need that process's output to keep landing in
-`blanket.stdout.log`. With the recording on, the task's output goes
-through a pipe, and blanket stops capturing an orphan's output a couple
-of seconds after the task itself exits rather than waiting for a process
-that may never end.
+The task's own two log files are written by the task itself, exactly as
+they always have been, whether the knob is on or off — nothing is piped
+through the worker, so a process a task leaves running behind it goes on
+appending to `blanket.stdout.log` for as long as it lives. The one thing
+the recording does not cover is that late output: the worker stops tailing
+a fraction of a second after the task exits, so an orphan's later lines
+are in the per-stream views and the raw result files but not in the `both`
+view. Turning the knob off just means no third file and no tailer per
+running task.
 
 ## Writing task types
 

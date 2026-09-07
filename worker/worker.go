@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/kardianos/osext"
 	log "github.com/sirupsen/logrus"
@@ -17,7 +16,6 @@ import (
 	"github.com/turtlemonvh/blanket/lib/proclive"
 	"github.com/turtlemonvh/blanket/lib/timing"
 	"github.com/turtlemonvh/blanket/tasks"
-	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -647,6 +645,13 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		return err
 	}
 
+	// The child is running and its two log files are already growing, so
+	// start recording how they interleave. Tailing the files (rather than
+	// standing between the child and them) is what keeps a process the
+	// task leaves behind writing into blanket.stdout.log for as long as
+	// it lives -- see ExecOutput.
+	out.StartTailing(taskId.Hex())
+
 	// The child exists now, so from here on there is something worth
 	// recovering if this worker dies. Write the journal before telling the
 	// server anything: a crash between Start and the RUNNING transition is
@@ -797,25 +802,19 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	}()
 
 	waitErr := cmd.Wait()
-	if errors.Is(waitErr, exec.ErrWaitDelay) {
-		// The child exited cleanly, but something it left behind still
-		// held the output pipe open past WaitDelay, so os/exec closed the
-		// pipes for us. That is a fact about the task's descendants, not
-		// about the task: its own exit status is in ProcessState and is
-		// what gets reported. (Without the bound, cmd.Wait() would block
-		// for as long as the orphan lives -- forever, for a task whose
-		// job is to start a daemon.) See childWaitDelay.
-		log.WithFields(log.Fields{
-			"taskId":    taskId,
-			"waitDelay": timing.Scale(childWaitDelay).String(),
-		}).Warn("task exited while a descendant still held its output open; stopped capturing that descendant's output")
-		waitErr = nil
-	}
 
 	// The child is gone; stop the monitor and wait for it to finish before
 	// reporting, so it can't race a TIMEDOUT in on top of the real outcome.
 	stopMonitor()
 	<-monitorDone
+
+	// Close the combined record before reporting anything: a task the UI
+	// shows as finished must not have a combined log that is still being
+	// written, or the `both` pane would show a truncated history that
+	// silently filled in later. Finish keeps tailing for a short grace
+	// window first, since the last lines of a task routinely land just
+	// after the process itself is gone.
+	out.Finish()
 
 	// One read of the child's exit status, shared by the journal and the
 	// finish report so the two can never disagree. processExitCode reports
@@ -907,99 +906,6 @@ func processExitCode(cmd *exec.Cmd) *int {
 	return &code
 }
 
-// ExecOutput is where one task run's output goes: the two per-stream log
-// files the child writes, and (when enabled) the combined record of how
-// the two interleaved.
-//
-// It exists because the monitoring goroutine has to Sync() those files
-// on its poll interval and can no longer find them on the exec.Cmd. When
-// cmd.Stdout was the *os.File itself, a type assertion recovered it; it
-// is now an io.MultiWriter, and the assertion silently failed -- which
-// would have stopped the periodic flush that makes a running task's log
-// visible to a tailing reader at all.
-type ExecOutput struct {
-	stdout   *os.File
-	stderr   *os.File
-	combined *combined_log.Writer
-}
-
-// Sync flushes everything this run writes, so a reader tailing any of
-// the three files sees the same moment in the task's output.
-func (o *ExecOutput) Sync() {
-	if o == nil {
-		return
-	}
-	if o.stdout != nil {
-		o.stdout.Sync()
-	}
-	if o.stderr != nil {
-		o.stderr.Sync()
-	}
-	o.combined.Sync()
-}
-
-// Close flushes and releases everything, and is safe on a partially
-// built ExecOutput (SetupExecutionDirectory returns one on failure so
-// the caller can defer this unconditionally).
-//
-// The combined recorder goes first: closing it writes out whatever each
-// stream had buffered without a final newline, which has to happen while
-// there is still a file to write it to.
-func (o *ExecOutput) Close() {
-	if o == nil {
-		return
-	}
-	if err := o.combined.Close(); err != nil {
-		log.WithField("err", err.Error()).Warn("failed to write the task's combined log; its interleaved history may be incomplete")
-	}
-	if o.stdout != nil {
-		o.stdout.Close()
-	}
-	if o.stderr != nil {
-		o.stderr.Close()
-	}
-}
-
-// combinedLogEnabled reports whether this worker records the interleaved
-// combined log alongside the two per-stream files (`workers.combinedLog`,
-// default true).
-//
-// An unset key means enabled: the default is registered in
-// command.InitializeConfig, and anything that runs a worker without
-// going through it (a test, an embedder) should get the current
-// behaviour rather than the legacy one. Turning it off restores exactly
-// what blanket did before turtlemonvh/blanket#104 -- the child writes
-// straight to the two files, with no pipe and no worker in between --
-// which is the escape hatch for a task that hands its stdout to a
-// process meant to outlive it (see the WaitDelay note below).
-func combinedLogEnabled() bool {
-	if !viper.IsSet("workers.combinedLog") {
-		return true
-	}
-	return viper.GetBool("workers.combinedLog")
-}
-
-// childWaitDelay bounds how long cmd.Wait() will wait for the child's
-// output pipes to close after the child itself has exited. Unscaled;
-// timeMultiplier is applied at use.
-//
-// It matters only when the combined log is on. Writing straight into a
-// file, a task that backgrounds something and exits is reaped
-// immediately -- the file descriptor the grandchild kept is nothing the
-// worker waits on. Copying through a pipe, cmd.Wait() blocks until every
-// descendant that inherited the write end closes it, which for a
-// deliberately orphaned process is never. WaitDelay is the bound on
-// that: past it, Wait closes the pipes and returns exec.ErrWaitDelay,
-// which ProcessOne treats as a normal exit (the exit status is the
-// child's own, already recorded in ProcessState).
-//
-// The cost is that a grandchild still writing at that point loses the
-// rest of its output -- and, since its stdout is now a closed pipe
-// rather than a file, may itself die of EPIPE. A task type that
-// deliberately spawns a long-lived child and expects its output to keep
-// landing in blanket.stdout.log wants `workers.combinedLog = false`.
-const childWaitDelay = 2 * time.Second
-
 // Create the execution directory for a task
 // Includes attaching log files to the cmd object
 func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) (*ExecOutput, error) {
@@ -1039,6 +945,8 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 	// https://golang.org/pkg/os/exec/#Cmd
 	stdoutPath := path.Join(t.ResultDir, "blanket.stdout.log")
 	stderrPath := path.Join(t.ResultDir, "blanket.stderr.log")
+	out.stdoutPath = stdoutPath
+	out.stderrPath = stderrPath
 	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -1058,20 +966,15 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 	}
 	out.stderr = stderrFile
 
-	if out.combined != nil {
-		// Each stream goes to its own file *and* to the recorder, which
-		// is what makes the two files byte-identical to what they always
-		// were while still capturing the order the lines arrived in.
-		// os/exec gives the child a pipe (rather than the file directly)
-		// as soon as cmd.Stdout isn't an *os.File, and copies it here --
-		// which is the whole point, and also the reason for WaitDelay.
-		cmd.Stdout = io.MultiWriter(stdoutFile, out.combined.Stream(combined_log.StreamStdout))
-		cmd.Stderr = io.MultiWriter(stderrFile, out.combined.Stream(combined_log.StreamStderr))
-		cmd.WaitDelay = timing.Scale(childWaitDelay)
-	} else {
-		cmd.Stdout = stdoutFile
-		cmd.Stderr = stderrFile
-	}
+	// The child gets the files themselves, never a pipe. os/exec passes
+	// an *os.File straight to the child as its fd 1/2, so nothing the
+	// task starts is writing into something the worker owns and can take
+	// away -- which is what lets a backgrounded process go on appending
+	// to blanket.stdout.log after the task that started it has finished.
+	// The combined record is built by tailing these two files instead;
+	// see ExecOutput.
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = stderrFile
 	cmd.Dir = t.ResultDir
 
 	// The copier should use the location of the task type as its starting point

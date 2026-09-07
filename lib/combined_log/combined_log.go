@@ -14,23 +14,40 @@
 // the same output looked different depending on whether you were
 // watching when it happened.
 //
-// So the worker now copies both streams through itself and appends one
-// NDJSON record per completed line, in arrival order, to a third file in
-// the result dir. That file is the ordering the two per-stream files
-// can't carry. The per-stream files are still written byte-for-byte as
-// before -- this is an addition, not a replacement, and every existing
-// reader of them is unaffected.
+// So the worker *tails* both files as the task writes them and appends
+// one NDJSON record per completed line, in the order it saw them land,
+// to a third file in the result dir. That file is the ordering the two
+// per-stream files can't carry. They themselves are untouched: the child
+// still gets them as its own fd 1 and 2, written byte-for-byte as
+// before, and every existing reader of them is unaffected.
 //
-// "Arrival order" is the honest description, and the limit of what this
-// can be: the recorded order is the order the worker read the two pipes,
-// which is exactly the basis the live log view already shows lines on.
-// It is not a kernel-level total order. Two lines written microseconds
-// apart on different streams -- or a task that writes everything at once
-// and exits, leaving both pipe buffers full for two goroutines to drain
-// in whatever order the scheduler picks -- can be recorded either way
-// round. What the file guarantees is that a task's replayed history and
-// its live output are ordered the same way, which is the thing that was
-// actually wrong.
+// Tailing rather than standing in the middle is the load-bearing choice
+// (turtlemonvh/blanket#104 review). Copying the streams through the
+// worker -- cmd.Stdout = io.MultiWriter(logFile, recorder) -- was tried
+// first, and it makes the child's stdout a pipe the worker owns. A pipe
+// has an owner that goes away: a task that starts a process and exits
+// leaves that process holding the write end, so cmd.Wait() blocks for
+// its whole life, and bounding that with cmd.WaitDelay closes the pipe
+// under it -- its output lost, and the process itself liable to die of
+// SIGPIPE. A file has no owner, so an orphan goes on appending to
+// blanket.stdout.log for as long as it lives. Missing logs are worse
+// than missing ordering.
+//
+// The cost of tailing is one bounded gap, and it is documented where a
+// user meets it (docs/task_flow.md): the worker stops tailing a short
+// grace window after the task exits, so output from a process that
+// outlives the task is in the per-stream files and every route that
+// reads them, but not in this record.
+//
+// "The order the worker saw them land" is the honest description of what
+// the file records, and the limit of what it can be: it is exactly the
+// basis the live log view already shows lines on, not a kernel-level
+// total order. Two lines written microseconds apart on different streams
+// -- or a task that writes everything at once and exits, leaving two
+// tailers to be scheduled in whatever order the runtime picks -- can be
+// recorded either way round. What the file guarantees is that a task's
+// replayed history and its live output are ordered the same way, which
+// is the thing that was actually wrong.
 //
 // The record's fields are deliberately the field names of
 // server.LogEvent (`ts`, `stream`, `seq`, `line`), so the on-disk record
@@ -152,15 +169,14 @@ func Create(p string) (*Writer, error) {
 }
 
 // Stream returns an io.Writer that records everything written to it as
-// lines of the named stream.
+// lines of the named stream. The worker feeds one per stream from a
+// tailer of that stream's log file.
 //
 // The returned writer never reports an error, and never a short write.
-// It is used as one half of an io.MultiWriter feeding a child process's
-// stdout: a MultiWriter stops at the first error, so a failure to record
-// the interleaving would abort the copy into blanket.stdout.log too --
-// i.e. a problem with this file would cost the task its actual output,
-// and os/exec would surface it as the task having failed. This file is a
-// supplementary record; it must never be able to do that. The error is
+// A failure to record the interleaving must not be able to interrupt
+// whatever is feeding it -- this file is a supplementary record of
+// ordering, and a task must never look like it failed, or lose output
+// from its other stream, because of a problem writing it. The error is
 // kept for Close to report and log instead.
 func (w *Writer) Stream(name string) io.Writer {
 	if w == nil {
@@ -237,8 +253,8 @@ func (w *Writer) noteErr(err error) {
 }
 
 // Sync flushes the file to disk. The worker calls it on the same poll
-// interval it Sync()s the two per-stream files, so a tailing reader sees
-// all three move together.
+// interval it Sync()s the two per-stream files, so a reader tailing any
+// of the three sees them move together.
 func (w *Writer) Sync() error {
 	if w == nil {
 		return nil

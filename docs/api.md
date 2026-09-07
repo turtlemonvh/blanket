@@ -302,12 +302,19 @@ log view has its own UI-only route for the same reason; see
 
 A third file sits next to those two: `blanket.combined.ndjson`, the
 worker's record of how the streams interleaved — one JSON object per line
-of output, in the order it was produced, tagged with the stream it came
-from. It is served like any other result-dir file
+of output, in the order the worker saw it land, tagged with the stream it
+came from. The worker builds it by *tailing* the two per-stream files, so
+they stay byte-for-byte what the task wrote and are unaffected by it. It
+is served like any other result-dir file
 (`GET /results/:taskId/blanket.combined.ndjson`) and is what the web UI's
 combined log view reads. `workers.combinedLog = false` turns the
-recording off, and tasks run before it existed don't have one. Its shape
-and the trade-offs behind it are in
+recording off, and tasks run before it existed don't have one.
+
+It covers a task's output up to a short grace window after the task
+exits, and no further: a process the task left running behind it keeps
+appending to `blanket.stdout.log` / `blanket.stderr.log`, and those late
+lines are in every route above but not in this record. Its shape and the
+trade-offs behind it are in
 [Task output files](task_flow.md#task-output-files).
 
 A `notBefore`-in-the-future or `cron` submission returns **429** with a
@@ -691,7 +698,10 @@ GET /ui/sse/tasks/:id/log       # the "both" view's stream: stdout and
                                 # record falls back to replaying the two
                                 # per-stream files grouped (all of stdout,
                                 # then all of stderr), which is all their
-                                # contents support. UI-only on purpose:
+                                # contents support; so does output written
+                                # by a process the task orphaned, which the
+                                # record stops covering shortly after the
+                                # task exits. UI-only on purpose:
                                 # GET /task/:id/log emits the bytes the
                                 # task wrote, and must not start emitting
                                 # markup. Clients wanting both streams as

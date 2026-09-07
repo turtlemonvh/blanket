@@ -432,7 +432,11 @@ func (u *uiLogSource) render(line string) (string, bool) {
 // A task with no combined record -- run before turtlemonvh/blanket#104,
 // or by a worker with `workers.combinedLog = false` -- falls back to
 // following the two per-stream files and replaying them grouped, which
-// is all their contents can honestly support. Which shape applies is
+// is all their contents can honestly support. So does anything a process
+// the task orphaned writes after the task finished: the worker's record
+// stops a grace window after the child exits, deliberately, so that the
+// orphan can go on writing into the per-stream files at all (it holds
+// those files, not a pipe the worker could close under it). Which shape applies is
 // decided once, on the first attach that finds a file: the worker
 // creates the combined record before the two per-stream ones, so "the
 // files exist but the combined one doesn't" means it is never coming.

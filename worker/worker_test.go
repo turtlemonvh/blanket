@@ -536,12 +536,12 @@ func TestRun_RejectsLowCheckInterval(t *testing.T) {
 // recording that merely concatenated the files would come out in a
 // different order than the task produced.
 //
-// The sleeps are load-bearing. What the worker records is the order the
-// two streams *arrive* in, which is the order the live log view shows
-// too -- but a task that writes everything and exits leaves both pipes
-// full at once, and which of the two copying goroutines drains first is
-// then up to the scheduler. Spacing the writes out makes the arrival
-// order the task's own order, which is what this test is about.
+// The sleeps are load-bearing. What the worker records is the order its
+// two tailers saw the lines land, which is the same basis the live log
+// view shows lines on -- but a task that writes everything at once and
+// exits leaves both files to be read in whatever order the two tailers
+// are scheduled in. Spacing the writes out makes the observed order the
+// task's own order, which is what this test is about.
 const interleavedTaskTypeToml = `
 tags = ["exec:bash", "os:unix"]
 timeout = 10
@@ -642,24 +642,33 @@ func TestProcessOne_CombinedLogDisabled(t *testing.T) {
 	assert.Equal(t, "out-one\nout-two\nno-newline", string(stdout))
 }
 
-// orphanTaskTypeToml backgrounds a process that outlives the task. The
-// orphan inherits the task's stdout, which is now a pipe -- so cmd.Wait()
-// would block on it for the orphan's whole life without a WaitDelay.
+// orphanTaskTypeToml backgrounds a process that goes on writing after
+// the task itself has exited. Its stdout is the task's stdout, which is
+// blanket.stdout.log itself -- not a pipe the worker could close under
+// it.
 const orphanTaskTypeToml = `
 tags = ["exec:bash", "os:unix"]
 timeout = 60
-command = "echo before; sleep 30 & echo after"
+command = "echo before; (sleep 2; echo late) & echo after"
 executor = "bash"
 `
 
-// A task that leaves something running behind it must still finish when
-// it exits, with its own exit status and its own output -- not hang until
-// the orphan gives up. Reaping is bounded by worker.childWaitDelay, and
-// the exec.ErrWaitDelay that bound produces is a fact about the orphan,
-// not a task failure.
-func TestProcessOne_BackgroundedGrandchildDoesNotBlockWait(t *testing.T) {
+// The reason the combined log is built by tailing the two files rather
+// than by copying the child's output through the worker
+// (turtlemonvh/blanket#104 review): a task that leaves something running
+// behind it must finish as soon as *it* exits, and the thing it left
+// behind must keep writing into the task's log file. A pipe can do
+// neither -- cmd.Wait() blocks on it for the orphan's whole life, and
+// bounding that with WaitDelay closes the orphan's stdout under it, so
+// its output is lost and it may die of SIGPIPE.
+//
+// The cost, asserted here too, is that the combined record stops at the
+// grace window: the orphan's late output is in blanket.stdout.log, where
+// the per-stream views and the raw result routes show it, but not in the
+// `both` view's ordering record.
+func TestProcessOne_OrphanKeepsWritingAfterTaskFinishes(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("bash task type; the WaitDelay bound itself is platform-independent")
+		t.Skip("bash task type")
 	}
 	h := newWorkerHarness(t)
 	defer h.cleanup()
@@ -673,26 +682,86 @@ func TestProcessOne_BackgroundedGrandchildDoesNotBlockWait(t *testing.T) {
 	require.NoError(t, h.work.ProcessOne(&claimed))
 	elapsed := time.Since(start)
 
-	// The orphan sleeps 30s; the bound is 2s. Anything under 15s proves
-	// the wait was bounded rather than tied to the orphan's lifetime.
-	assert.Less(t, elapsed, 15*time.Second,
-		"cmd.Wait must not wait for a process the task deliberately orphaned")
+	// The orphan writes at ~2s; the drain after the child exits is a
+	// 400ms quiet window. Finishing well inside 2s is what proves the
+	// worker never waited on the orphan.
+	assert.Less(t, elapsed, 1500*time.Millisecond,
+		"the task must finish when it exits, not when the process it orphaned does")
 
 	final := h.fetch(claimed.Id)
 	assert.Equal(t, "SUCCESS", final.State, "the task itself exited 0")
 	require.NotNil(t, final.ExitCode)
 	assert.Equal(t, 0, *final.ExitCode)
 
-	stdout, err := os.ReadFile(filepath.Join(final.ResultDir, "blanket.stdout.log"))
+	stdoutPath := filepath.Join(final.ResultDir, "blanket.stdout.log")
+	stdout, err := os.ReadFile(stdoutPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(stdout), "before")
 	assert.Contains(t, string(stdout), "after")
+	assert.NotContains(t, string(stdout), "late", "the orphan has not written yet")
 
+	// The combined record is closed before the task is reported finished,
+	// so it is complete as of that moment -- and stops there.
 	var lines []string
 	for _, r := range readCombinedLog(t, final.ResultDir) {
 		lines = append(lines, r.Line)
 	}
 	assert.Equal(t, []string{"before", "after"}, lines)
+
+	// And now the point: the orphan is still writing into the task's
+	// stdout file, long after the task is FINISHED. Poll rather than
+	// sleep the full duration.
+	deadline := time.Now().Add(10 * time.Second)
+	var late string
+	for time.Now().Before(deadline) {
+		b, rerr := os.ReadFile(stdoutPath)
+		if rerr == nil && strings.Contains(string(b), "late") {
+			late = string(b)
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	assert.Contains(t, late, "late",
+		"a process the task left behind must go on appending to blanket.stdout.log")
+}
+
+// graceTaskTypeToml exits immediately but leaves a child that writes one
+// line a fraction of a second later -- inside the drain's quiet window.
+const graceTaskTypeToml = `
+tags = ["exec:bash", "os:unix"]
+timeout = 60
+command = "echo first; (sleep 0.1; echo inside-grace) &"
+executor = "bash"
+`
+
+// The last lines of a task routinely land on disk just after the process
+// itself is gone. The worker therefore keeps tailing until both files
+// have been quiet for combinedTailGrace (400ms, timeMultiplier-scaled)
+// before it closes the combined record -- and only then reports the task
+// finished, so what the `both` pane shows for a FINISHED task is what it
+// will always show.
+func TestProcessOne_CombinedLogCoversGraceWindow(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash task type")
+	}
+	h := newWorkerHarness(t)
+	defer h.cleanup()
+
+	h.writeTaskType("grace", graceTaskTypeToml)
+
+	h.submit("grace")
+	claimed := h.claim()
+	require.NoError(t, h.work.ProcessOne(&claimed))
+
+	final := h.fetch(claimed.Id)
+	require.Equal(t, "SUCCESS", final.State)
+
+	var lines []string
+	for _, r := range readCombinedLog(t, final.ResultDir) {
+		lines = append(lines, r.Line)
+	}
+	assert.Equal(t, []string{"first", "inside-grace"}, lines,
+		"a line written within the grace window after exit belongs in the combined log")
 }
 
 // TestProcessOne_ProducesLogs asserts both the task stdout log and the

@@ -157,6 +157,11 @@ const (
 	// when it is there and falls back to grouping the two files when it
 	// isn't (a task run by a worker older than turtlemonvh/blanket#104,
 	// or one with `workers.combinedLog = false`).
+	//
+	// It is built by tailing the two files, and the worker stops tailing
+	// shortly after the task exits, so it covers everything the task
+	// itself wrote and not output from a process the task left running
+	// behind it. The two files above always have all of it.
 	TaskCombinedLogFile = combined_log.FileName
 )
 
