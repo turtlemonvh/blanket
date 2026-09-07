@@ -29,7 +29,7 @@ func TestStopWorkerById(t *testing.T) {
 	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}}
 	assert.NoError(t, s.DB.UpdateWorker(&w))
 
-	err := s.stopWorkerById(context.Background(), w.Id, false)
+	err := s.stopWorkerById(context.Background(), w.Id, "", false)
 	assert.NoError(t, err)
 
 	updated, err := s.DB.GetWorker(w.Id)
@@ -48,7 +48,7 @@ func TestStopWorkerById_UpdatesLastHeardTs(t *testing.T) {
 	assert.NoError(t, s.DB.UpdateWorker(&w))
 	assert.Zero(t, w.LastHeardTs)
 
-	assert.NoError(t, s.stopWorkerById(context.Background(), w.Id, false))
+	assert.NoError(t, s.stopWorkerById(context.Background(), w.Id, "", false))
 
 	updated, err := s.DB.GetWorker(w.Id)
 	assert.NoError(t, err)
@@ -65,7 +65,7 @@ func TestStopWorkerById_ForceWithNoPid(t *testing.T) {
 	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}}
 	assert.NoError(t, s.DB.UpdateWorker(&w))
 
-	err := s.stopWorkerById(context.Background(), w.Id, true)
+	err := s.stopWorkerById(context.Background(), w.Id, "", true)
 	assert.NoError(t, err)
 
 	updated, err := s.DB.GetWorker(w.Id)
@@ -87,7 +87,7 @@ func TestStopWorkerById_ForceSignalFailureDoesNotFailCall(t *testing.T) {
 	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}, Pid: 2147483647}
 	assert.NoError(t, s.DB.UpdateWorker(&w))
 
-	err := s.stopWorkerById(context.Background(), w.Id, true)
+	err := s.stopWorkerById(context.Background(), w.Id, "", true)
 	assert.NoError(t, err)
 
 	updated, err := s.DB.GetWorker(w.Id)

@@ -114,7 +114,7 @@ independent:
 | e | Cancel the background loops | The scheduler (`server/scheduler.go`) and the reaper (`server/reaper.go`), both started by `startBackgroundLoops`. Here rather than earlier because both touch storage, and here rather than later because storage closes in the next step — the stop function does not return until every loop has exited. |
 | f | Close the BoltDB handle | Last, because everything above may still touch storage — and because closing it is what releases the flock, which the next step needs. |
 
-Signals:
+Three things run that sequence: two signals, and one HTTP call.
 
 * **SIGINT / SIGTERM** — drain and exit 0, leaving nothing that would
   bring the server or its workers back. A plain `systemctl stop` must not
@@ -128,6 +128,24 @@ Signals:
   grandchild escapes a service's job object and would hold the bolt lock
   invisibly, which is the worst failure mode in the system.
 
+* **`POST /ops/restart/exec`** (turtlemonvh/blanket#23 phase 5) — the same
+  teardown, reached from the restart state machine rather than from a
+  signal. The 202 is flushed *before* the teardown starts, since the
+  request making it is one of the ones the drain waits for. What happens
+  after step (f) is then `--exec-mode`'s decision: re-exec in place as
+  above, or exit **75** (`EX_TEMPFAIL`) so a `Restart=on-failure`
+  supervisor starts the replacement. Exiting 0 there would be exactly
+  wrong — the unit blanket installs restarts on failure only.
+
+Two steps of the teardown are also where a restart's bookkeeping lands.
+Nothing new happens in (a)–(f); what changed in phase 5 is the **boot**
+side, which is the mirror of it: before the listener opens, the server
+adopts whatever restart record the previous process left in `meta` and
+clears it (a boot is proof that process is gone), and once the listener is
+up it brings back the workers a drain had stopped. The record is the plan
+and does not survive; the respawn intents on the worker records are the
+debt and do. See [upgrade.md](upgrade.md#the-restart-state-machine).
+
 Timeouts on the `http.Server`: `ReadHeaderTimeout` 10 s and `IdleTimeout`
 120 s. `WriteTimeout` and `ReadTimeout` are deliberately left at zero —
 `WriteTimeout` is an absolute deadline on the whole response, so any
@@ -138,8 +156,11 @@ would cap the whole request read including multipart uploads to
 Testing this needs a real process — signal delivery, exit codes, the
 BoltDB flock and `os.Executable()` are all cross-process properties — so
 `scripts/restart.sh` drives the built binary through the shared subprocess
-harness (`scripts/lib/harness.sh`). The in-process half, including a test
-that holds all four streaming routes open across a shutdown, is in
-`server/lifecycle_test.go`.
+harness (`scripts/lib/harness.sh`), and `scripts/restart_machine.sh` does
+the same for the restart state machine, killing the server at each of its
+states in turn (`BLANKET_TEST_CRASH_AT`) and asserting the documented
+recovery. The in-process half, including a test that holds all four
+streaming routes open across a shutdown, is in `server/lifecycle_test.go`,
+`server/serve_restart_test.go` and `lib/bolt/restart_test.go`.
 
 See the [docs index](./README.md) for more detailed information, including the [task flow and state machines](./task_flow.md).

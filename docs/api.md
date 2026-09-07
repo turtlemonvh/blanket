@@ -516,14 +516,35 @@ operator deletes a worker whose process is still winding down, not a
 server error. The call also clears the worker's `lost` flag: a worker that
 checks in is by definition not lost.
 
-Worker records carry four fields beyond the obvious ones:
-`pidStartTs` (the worker process's start time, which is what makes its pid
-usable as a liveness signal despite pid reuse), `lastHeardTs`, `lost`
-(the reaper believes this worker is gone; a badge in the UI and nothing
-else), and `stoppedReason` (set when the reaper stopped it, empty for an
-operator stop). See
-[task_flow.md](task_flow.md#the-reaper) for the decision table these feed,
-the thresholds, and the `reaper.*` config keys.
+Worker records carry these fields beyond the obvious ones: `pidStartTs`
+(the worker process's start time, which is what makes its pid usable as a
+liveness signal despite pid reuse), `lastHeardTs`, `lost` (the reaper
+believes this worker is gone; a badge in the UI and nothing else),
+`stoppedReason`, and — while a restart is in flight —`respawnIntent`,
+`respawnAttempts` and `lastRespawnTs`. See
+[task_flow.md](task_flow.md#the-reaper) for the decision table the first
+few feed, the thresholds, and the `reaper.*` config keys, and
+[task_flow.md](task_flow.md#respawn-intent-and-stop-reasons) for the
+respawn bookkeeping.
+
+### `PUT /worker/:id/stop`
+
+```
+PUT /worker/:id/stop?force=true&reason=<who and why>
+```
+
+`force=true` sends the process an immediate kill signal instead of waiting
+for its poll loop to notice.
+
+`reason` attributes the stop, and decides the fate of any pending respawn
+intent (turtlemonvh/blanket#23 phase 5). A worker's own shutdown handler
+sends `reason=worker-shutdown`, which **preserves** the intent — a drained
+worker exiting is the drain working. Every other stop, including the
+unattributed one an operator or the UI sends, **clears** it: a deliberate
+decision to take a worker down mid-restart outranks the restart's plan to
+bring it back. Without the reason on the wire the two calls would be
+identical, and a drained worker would cancel its own respawn on the way
+out.
 
 ## Server
 
@@ -533,6 +554,13 @@ GET  /version                   # build info as JSON
 GET  /config/                   # processed server config
 GET  /ops/status/               # runtime metrics (goroutines, memory, etc.)
 POST /ops/backup                # take a database backup — see "Ops endpoints"
+GET  /ops/restart/status        # the restart state machine — see "Ops endpoints"
+POST /ops/restart/begin
+POST /ops/restart/pause
+POST /ops/restart/swapped
+POST /ops/restart/drain
+POST /ops/restart/exec
+POST /ops/restart/abort
 ```
 
 `GET /config/` returns every resolved config key, plus three values that
@@ -546,12 +574,20 @@ a client tells a restart from a slow request.
 ## Ops endpoints
 
 A small group of **privileged, local-only** endpoints for operating the
-install rather than for using it (turtlemonvh/blanket#23). Today that is
-`POST /ops/backup`; phase 5's `/ops/restart*` will join it.
+install rather than for using it (turtlemonvh/blanket#23): taking a backup,
+and driving a restart.
 
 ```
 POST /ops/backup                # write a consistent database backup now
                                  # ?dir=<path> overrides the destination
+
+GET  /ops/restart/status        # what the restart machine is doing
+POST /ops/restart/begin         # IDLE      -> STAGED
+POST /ops/restart/pause         #           -> PAUSED   (worker spawn -> 409)
+POST /ops/restart/swapped       #           -> SWAPPED
+POST /ops/restart/drain         #           -> DRAINING (stops workers)
+POST /ops/restart/exec          #           -> EXECING  (server goes away)
+POST /ops/restart/abort         # anything  -> IDLE
 ```
 
 Every mutating `/ops/` endpoint requires **both**:
@@ -601,6 +637,152 @@ Backups land in `<database dir>/backups/` unless `?dir=` or the
 `storage.backupDir` config key says otherwise, and the newest 3 are kept.
 See [**upgrade.md**](upgrade.md) for naming, retention, the precheck
 thresholds, and the `blanket backup` / `blanket migrate` CLI.
+
+While a restart is in flight, this call also advances its record from
+`STAGED` to `BACKED_UP` and stores the path it wrote. There is deliberately
+no `POST /ops/restart/backed-up`: the server took the backup, so the record
+can state a fact it observed instead of repeating a claim the caller made.
+
+### The restart endpoints (turtlemonvh/blanket#23 phase 5)
+
+One route per transition. The states, what each one means, and what happens
+when a process dies in each of them are in
+[**upgrade.md**](upgrade.md#the-restart-state-machine), along with the
+manual `curl` recipe for a full restart; this section is the request and
+response shapes.
+
+Transitions are **forward-only**. Skipping ahead is normal — a routine
+restart takes no backup, swaps no binary and drains nothing — but going
+back, or repeating a state, is **409** with the current state in the body.
+So is `begin` while a restart is already in flight, and so is any
+transition when none is.
+
+#### `GET /ops/restart/status`
+
+```
+$ curl -H 'X-Blanket-Restart: 1' localhost:8773/ops/restart/status
+{
+  "restart": {"state": "IDLE"},
+  "active": false,
+  "spawnPaused": false,
+  "execMode": "auto",
+  "resolvedExecMode": "exec",
+  "drainMode": "auto",
+  "drainTimeoutMs": 60000,
+  "supervised": false,
+  "instanceId": "6a9e2bab860f1bb515a3a6fe",
+  "pid": 4213,
+  "version": "blanket v0.3.0 (built …)"
+}
+```
+
+`resolvedExecMode` is what `exec` will actually do, with `auto` already
+decided — the question you cannot answer from the record alone on a server
+whose flags you cannot see. It is behind the ops guard like the mutating
+routes, unlike `GET /ops/status/`: the pid, the exec mode and the
+supervision guess together are a map of how to interfere with this server.
+
+#### `POST /ops/restart/begin`
+
+```
+$ curl -X POST -H 'X-Blanket-Restart: 1' -H 'Content-Type: application/json' \
+    -d '{"reason": "upgrade to 0.4.0"}' localhost:8773/ops/restart/begin
+{"restart":{"state":"STAGED","id":"6a9e…","reason":"upgrade to 0.4.0", …}}
+```
+
+The body is optional; `?reason=` and `?execMode=` do the same job for a
+caller that would rather not send one. Fields:
+
+| Field | Meaning |
+| ----- | ------- |
+| `reason` | Free text, echoed in the status and logged by the process that finds the record on boot. |
+| `execMode` | `auto` \| `exec` \| `exit`, overriding the server's `--exec-mode` for this restart. Resolved and pinned now, so one attempt cannot answer the question two ways. |
+| `deadlineSeconds` | How long the watchdog gives you between calls before aborting. Default `restart.deadline` (5m). Refreshed by every transition. |
+
+Staging pauses nothing and stops nothing. It exists so that a crash from
+here on is attributable, and so the reaper stands down (every worker is
+about to look stale at once).
+
+#### `POST /ops/restart/pause`
+
+```
+{"restart":{"state":"PAUSED", …},"spawnPaused":true}
+```
+
+From here on `POST /worker/` and `PUT /worker/:id/restart` answer **409**:
+
+```
+{"error":"a server restart is in flight; worker spawn is paused until it completes or is aborted",
+ "restart":{"id":"6a9e…","state":"PAUSED"}}
+```
+
+409 rather than 503 because the request is not wrong and the server is not
+broken — the resource is in a state that does not accept it, and that state
+clears on its own. This is the window the pause exists for: a worker is
+forked from `os.Executable()`, so between the binary swap and the server's
+own replacement, spawning one would pair a new worker binary with an old
+server.
+
+#### `POST /ops/restart/swapped`
+
+Records that the binary on disk is now the new one. The only state that is
+purely the caller's word — the server has no way to tell that the file
+behind `os.Executable()` is a different build, and guessing wrong in the
+comfortable direction is exactly how a stale binary would get declared
+swapped.
+
+#### `POST /ops/restart/drain`
+
+```
+$ curl -X POST -H 'X-Blanket-Restart: 1' 'localhost:8773/ops/restart/drain'
+{"restart":{"state":"DRAINING","drainedWorkers":2, …},
+ "stopped":["6a9e…","6a9f…"],
+ "stillRunning":[],
+ "drained":true,
+ "waitedMs":1043}
+```
+
+Stops every running worker and records a **respawn intent** on each, in one
+database transaction with the state change. Workers that were already
+stopped are left alone: one stopped before the restart began was stopped by
+somebody else, for a reason this restart knows nothing about.
+
+`?wait=false` returns as soon as that transaction commits. The default
+waits up to `restart.drainTimeout` for the stopped processes to actually
+exit, and either way answers **200** — a drain that timed out with
+stragglers is information, not a failure. `drained` says whether everything
+went, `stillRunning` names what did not.
+
+Refused with **409** when `--drain-mode=never`.
+
+#### `POST /ops/restart/exec`
+
+```
+{"restart":{"state":"EXECING", …},"execMode":"exec","exitCode":0,"pid":4213}
+```
+
+**202**, written and flushed *before* the shutdown starts, so the caller
+can tell "the restart began" from "the connection broke". Then the server
+runs the ordered teardown ([design.md](design.md#shutdown-sequence)) and
+either re-execs in place (`exec` — same pid, starts answering again) or
+exits with **75** (`exit` — `EX_TEMPFAIL`, so a `Restart=on-failure`
+supervisor brings it back; exiting 0 is exactly what would leave it down).
+
+**503** if this server has no running listener to restart, which only
+happens to a router built without one.
+
+#### `POST /ops/restart/abort`
+
+```
+{"aborted":{"state":"DRAINING", …},"respawned":true}
+```
+
+Clears the record from any state and lifts the pause. If the restart had
+already drained, the workers it stopped are **brought back** — otherwise
+aborting would leave the box worse off than the restart it is rescuing.
+This is the same code path the deadline watchdog runs, which is the point:
+the recovery a human triggers is the one every watchdog timeout has
+exercised.
 
 ## Streaming endpoints (SSE)
 

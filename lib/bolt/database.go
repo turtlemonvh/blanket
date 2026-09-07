@@ -111,8 +111,8 @@ func (DB *BlanketBoltDB) GetWorker(workerId objectid.ObjectId) (worker.WorkerCon
 //     Logfile, StartedTs, Tags, CheckInterval, Daemon. It sends these on
 //     registration and whenever they change.
 //   - The **server** owns lifecycle facts the worker must not contradict:
-//     Stopped and LastHeardTs today; StoppedReason and the respawn fields
-//     join them in phase 3/5.
+//     Stopped, LastHeardTs, StoppedReason, and the respawn bookkeeping
+//     (RespawnIntent, RespawnAttempts, LastRespawnTs).
 //
 // Before this merge existed, UpdateWorker wrote the caller's whole struct,
 // so a worker re-registering (WorkerConf.MustRegister always sends
@@ -141,6 +141,16 @@ func (DB *BlanketBoltDB) UpdateWorker(w *worker.WorkerConf) error {
 			merged.Stopped = current.Stopped
 			merged.LastHeardTs = current.LastHeardTs
 			merged.StoppedReason = current.StoppedReason
+			// The respawn bookkeeping is server-owned for the same reason
+			// Stopped is (turtlemonvh/blanket#23 phase 5), and with an
+			// extra edge: a respawned worker registers *while* its intent
+			// is still set — the intent is cleared only once the spawn is
+			// confirmed — so a merge that dropped these would erase the
+			// server's own in-flight bookkeeping on the very call that
+			// proves the spawn worked.
+			merged.RespawnIntent = current.RespawnIntent
+			merged.RespawnAttempts = current.RespawnAttempts
+			merged.LastRespawnTs = current.LastRespawnTs
 			// Lost is server-owned too, but a re-registering worker is
 			// itself evidence of life, so this is the one server-owned
 			// field an update clears rather than preserves. Leaving it set
@@ -209,13 +219,31 @@ func (DB *BlanketBoltDB) HeartbeatWorker(workerId objectid.ObjectId) (worker.Wor
 // race a separate GetWorker/UpdateWorker pair would have (e.g. a
 // concurrent self-registration from the worker overwriting the stop with
 // stale data, or vice versa).
-func (DB *BlanketBoltDB) StopWorker(workerId objectid.ObjectId) (worker.WorkerConf, error) {
+//
+// The reason decides what happens to a pending respawn intent
+// (turtlemonvh/blanket#23 phase 5), and the two callers it distinguishes
+// are otherwise identical on the wire:
+//
+//   - worker.StopReasonSelf — the worker's own SIGTERM handler, reporting
+//     that it is going away. The intent is *preserved*: a drained worker
+//     exiting is the drain succeeding, and cancelling the respawn here
+//     would mean an upgrade silently ended with fewer workers than it
+//     started with.
+//   - anything else, including the empty reason an operator's
+//     `PUT /worker/:id/stop` sends — a deliberate act by somebody who can
+//     see the restart in flight. It clears the intent, so an explicit stop
+//     mid-restart outranks the restart's plan to bring the worker back.
+func (DB *BlanketBoltDB) StopWorker(workerId objectid.ObjectId, reason string) (worker.WorkerConf, error) {
 	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
 		w.Stopped = true
 		// An explicit stop is its own explanation, and it overrides
 		// whatever the reaper may have written earlier.
-		w.StoppedReason = ""
+		w.StoppedReason = reason
 		w.LastHeardTs = time.Now().Unix()
+		if reason != worker.StopReasonSelf {
+			w.RespawnIntent = false
+			w.RespawnAttempts = 0
+		}
 		return nil
 	})
 }

@@ -149,7 +149,7 @@ func TestUpdateWorker_KeepsServerOwnedFields(t *testing.T) {
 	// server's own atomic transitions rather than by writing a struct:
 	// UpdateWorker deliberately refuses to take server-owned fields from
 	// its caller, which is the property under test.
-	stopped, err := s.DB.StopWorker(id)
+	stopped, err := s.DB.StopWorker(id, "")
 	require.NoError(t, err)
 	require.True(t, stopped.Stopped)
 	require.NotZero(t, stopped.LastHeardTs)

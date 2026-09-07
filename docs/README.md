@@ -27,8 +27,10 @@ here go deeper.
   Task Scheduler entry), opting in at install time, and
   `blanket uninstall`.
 - [**Upgrading**](upgrade.md) — database schema versions, backups and
-  retention, `blanket backup` / `blanket migrate`, and what to do when a
-  migration dies half-way.
+  retention, `blanket backup` / `blanket migrate`, the restart state
+  machine and the `curl` recipe that drives it, `--exec-mode` /
+  `--drain-mode`, and what to do when a migration or a restart dies
+  half-way.
 
 ## For maintainers
 

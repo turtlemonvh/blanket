@@ -38,6 +38,15 @@ func init() {
 	RootCmd.PersistentFlags().Int32P("port", "p", 8773, "Port the server will run on")
 	RootCmd.PersistentFlags().StringVar(&LogLevel, "logLevel", "info", "the logging level to use")
 	RootCmd.PersistentFlags().StringVarP(&CfgFile, "config", "c", "", "config file (default is config.json|yaml|toml in the blanket config dir)")
+	// The restart machine's two mode knobs get flags as well as config
+	// keys (turtlemonvh/blanket#23 phase 5): both are things an operator
+	// decides about a particular *invocation* -- "this one is running
+	// under systemd", "this box must never drop its workers" -- as often
+	// as about the install, and a flag is what a unit file's ExecStart can
+	// carry without a second file to edit.
+	RootCmd.PersistentFlags().String("exec-mode", "auto", "how a requested restart replaces the process: auto|exec|exit")
+	RootCmd.PersistentFlags().String("drain-mode", "auto", "whether a restart stops its workers: auto|always|never")
+	RootCmd.PersistentFlags().Duration("drain-timeout", 0, "how long a restart drain waits for workers to exit (0 uses restart.drainTimeout)")
 	RootCmd.AddCommand(versionCmd)
 	RootCmd.AddCommand(taskValidateCmd)
 	blanketCmdV = RootCmd
@@ -170,6 +179,35 @@ func SetConfigDefaults() {
 	// free-space warning instead of a hard budget (brief decision row 9).
 	viper.SetDefault("storage.backupRetention", 3)
 
+	// The restart state machine (turtlemonvh/blanket#23 phase 5). See
+	// docs/upgrade.md for the operator's version of all four.
+	//
+	// `restart.*` and not `server.restart.*` for the same reason the
+	// storage keys are `storage.*`: viper stores defaults in a nested map,
+	// so a subtree can never share a name with a scalar key. Nothing is
+	// called `restart` today and nothing should be.
+	//
+	// execMode is brief decision row 2 -- under a supervisor, exit and let
+	// it start the replacement; unsupervised, re-exec in place. `auto`
+	// decides by looking at the environment (server.Supervised), which is
+	// a heuristic; `exec` and `exit` are how you say what you mean.
+	viper.SetDefault("restart.execMode", "auto")
+	// drainMode is row 3. Routine restarts don't stop workers -- a worker
+	// rides out a server restart by design (phase 1) -- so `auto` drains
+	// only when the caller asks, which is what an upgrade that changes
+	// worker code does and what a config reload does not. `never` is the
+	// opt-out; `always` is for an install that would rather be certain
+	// than quick.
+	viper.SetDefault("restart.drainMode", "auto")
+	// How long a drain waits for the workers it stopped to actually exit
+	// before reporting the stragglers. A bound on the wait, never on the
+	// task: a worker finishes what it is running first.
+	viper.SetDefault("restart.drainTimeout", "60s")
+	// How long the watchdog gives the restart's driver between
+	// transitions before deciding it is gone and aborting. Generous: the
+	// steps it spans include a human swapping a binary by hand.
+	viper.SetDefault("restart.deadline", "5m")
+
 	// Time multiplier can be used in tests to speed up tests
 	viper.SetDefault("timeMultiplier", "1.0")
 }
@@ -210,6 +248,14 @@ func InitializeConfig() {
 
 	viper.BindPFlag("port", blanketCmdV.PersistentFlags().Lookup("port"))
 	viper.BindPFlag("logLevel", blanketCmdV.PersistentFlags().Lookup("logLevel"))
+	viper.BindPFlag("restart.execMode", blanketCmdV.PersistentFlags().Lookup("exec-mode"))
+	viper.BindPFlag("restart.drainMode", blanketCmdV.PersistentFlags().Lookup("drain-mode"))
+	// Not bound unconditionally: a Duration flag's zero value would
+	// override the config key with 0 on every run that doesn't pass it,
+	// and 0 there means "no wait at all" rather than "unset".
+	if blanketCmdV.PersistentFlags().Changed("drain-timeout") {
+		viper.BindPFlag("restart.drainTimeout", blanketCmdV.PersistentFlags().Lookup("drain-timeout"))
+	}
 }
 
 func InitializeLogging() {

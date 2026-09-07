@@ -16,6 +16,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/proclive"
 	"github.com/turtlemonvh/blanket/lib/timing"
 	"github.com/turtlemonvh/blanket/tasks"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -107,10 +108,46 @@ type WorkerConf struct {
 	Lost bool `json:"lost"`
 
 	// StoppedReason records who stopped the worker and why, when it wasn't
-	// a plain operator stop: today only the reaper sets it, to
-	// "reaper: <...>". Server-owned. Phase 5 uses the same field to keep a
-	// worker's own shutdown call from erasing a restart's intent.
+	// a plain operator stop: the reaper sets it to "reaper: <...>", a
+	// restart drain to StopReasonRestart, and a worker shutting itself
+	// down to StopReasonSelf. Server-owned.
+	//
+	// The reason is what keeps a worker's own shutdown call from erasing a
+	// restart's intent (turtlemonvh/blanket#23 phase 5). A drained worker
+	// stops by *asking the server to mark it stopped*, which is the same
+	// call an operator makes — so without a reason on the wire the two are
+	// indistinguishable, and the worker would cancel the very respawn the
+	// drain just scheduled. With one, a self-report preserves the intent
+	// and an unattributed stop (an operator, mid-restart, deciding this
+	// worker should stay down) clears it.
 	StoppedReason string `json:"stoppedReason"`
+
+	// RespawnIntent marks a worker the server stopped as part of a restart
+	// and undertook to bring back afterwards (turtlemonvh/blanket#23 phase
+	// 5). Server-owned, and written in the *same transaction* as the stop
+	// that created it: a crash between the two would either strand a
+	// worker nobody will restart, or promise to restart one that is still
+	// running.
+	//
+	// It is cleared after a successful spawn rather than before, which
+	// makes respawn at-least-once instead of at-most-once. Losing a worker
+	// on an upgrade is a silent, lasting failure; spawning one twice is
+	// loud and self-correcting, and the pid-liveness check on the next
+	// pass catches the duplicate before it happens.
+	RespawnIntent bool `json:"respawnIntent,omitempty"`
+
+	// RespawnAttempts counts how many times the server has tried to bring
+	// this worker back without the worker ever registering. It is the
+	// generation cap: past MaxRespawnAttempts the intent is dropped and
+	// the worker left stopped with a reason, so a worker that cannot start
+	// cannot turn a crash-looping server into a fork bomb.
+	RespawnAttempts int `json:"respawnAttempts,omitempty"`
+
+	// LastRespawnTs is when the last respawn was attempted, in unix
+	// seconds — the minimum-interval guard. Two boots in quick succession
+	// (a supervisor restarting a server that keeps dying) do not each get
+	// to spawn this worker.
+	LastRespawnTs int64 `json:"lastRespawnTs,omitempty"`
 
 	// stopping is a purely local shutdown flag, set by the SIGTERM/SIGINT
 	// handler (turtlemonvh/blanket#23 phase 1). The claim loop's exit
@@ -246,7 +283,12 @@ func (c *WorkerConf) Run() error {
 			<-shutdownChan
 			log.Warn("Received shutdown signal; attempting to set worker to 'stopped'")
 
-			if serr := StopWorkerById(workerId); serr != nil {
+			// StopReasonSelf, not a bare stop: this call is
+			// indistinguishable from an operator's without it, and would
+			// cancel a restart drain's respawn intent for the worker the
+			// drain had just asked to come back
+			// (turtlemonvh/blanket#23 phase 5).
+			if serr := StopWorkerById(workerId, StopReasonSelf); serr != nil {
 				// Worker exits anyway, via the local flag below. Leaving a
 				// record that says "running" is a problem for the server's
 				// reaper to notice, not a reason to stay alive.
@@ -357,20 +399,42 @@ func workerURL(workerId objectid.ObjectId, suffix string) string {
 	return fmt.Sprintf("http://localhost:%d/worker/%s%s", viper.GetInt("port"), workerId.Hex(), suffix)
 }
 
+// Stop reasons carried on PUT /worker/:id/stop?reason=...
+// (turtlemonvh/blanket#23 phase 5). See WorkerConf.StoppedReason.
+const (
+	// StopReasonSelf is what a worker sends when it is shutting itself
+	// down after a signal. It preserves any respawn intent on the record:
+	// a drained worker exiting is the drain *working*, not a decision to
+	// keep it down.
+	StopReasonSelf = "worker-shutdown"
+
+	// StopReasonRestart is what a restart's drain records on each worker
+	// it stops.
+	StopReasonRestart = "restart-drain"
+)
+
 // StopWorkerById asks the server to mark a worker stopped, retrying
 // transient failures with full-jitter backoff until ShutdownRetryDeadline.
 //
 // Takes an id rather than a *WorkerConf because its caller is the signal
 // handler, which must not read a struct the claim loop is concurrently
 // overwriting.
-func StopWorkerById(workerId objectid.ObjectId) error {
-	_, err := httpx.Do(context.Background(), "PUT", workerURL(workerId, "/stop"), nil,
+//
+// reason is passed through as the ?reason= query parameter; an empty one
+// means "an operator stopped this worker", which is the only kind of stop
+// that clears a pending respawn intent.
+func StopWorkerById(workerId objectid.ObjectId, reason string) error {
+	suffix := "/stop"
+	if reason != "" {
+		suffix += "?reason=" + url.QueryEscape(reason)
+	}
+	_, err := httpx.Do(context.Background(), "PUT", workerURL(workerId, suffix), nil,
 		httpx.Policy{Deadline: ShutdownRetryDeadline})
 	return err
 }
 
 func (c *WorkerConf) Stop() error {
-	return StopWorkerById(c.Id)
+	return StopWorkerById(c.Id, StopReasonSelf)
 }
 
 func (c *WorkerConf) UpdateInDatabase() error {

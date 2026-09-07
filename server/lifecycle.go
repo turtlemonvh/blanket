@@ -46,9 +46,20 @@ Signals (BlanketServer.ListenAndServe):
 	                  Windows has no SIGUSR2 and never self-restarts; see
 	                  restart_windows.go.
 
-Phase 5 adds --exec-mode=auto (exit under a supervisor, re-exec when
-unsupervised) on top of this; SIGUSR2 here is unconditionally the
-unsupervised re-exec-in-place behaviour.
+Phase 5 adds a third way in, alongside the two signals:
+POST /ops/restart/exec, which runs the same teardown and then does
+whatever --exec-mode resolved to -- re-exec in place, or exit with
+RestartExitCode for a supervisor to notice. SIGUSR2 stays unconditionally
+the re-exec-in-place behaviour: it is what an operator sends when there is
+no supervisor, and reinterpreting it would take away the only way to ask
+for that specifically.
+
+The other half of phase 5 in this file is the boot sequence. Serve adopts
+whatever restart record the previous process left in the `meta` bucket
+(server/restart.go), and once the listener is up, brings back the workers
+that record's drain stopped -- after the listener, because a worker
+registers itself over HTTP and there is nothing to register with before
+then.
 
 */
 
@@ -65,6 +76,7 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 )
 
@@ -105,6 +117,13 @@ type BlanketServer struct {
 	// before Close() force-closes what's left.
 	shutdownTimeout time.Duration
 
+	// restartCh carries a resolved exec mode from POST /ops/restart/exec
+	// to the goroutine holding the listener. Buffered, and written
+	// non-blockingly, so a second exec request while the first is already
+	// in flight is dropped rather than queued -- there is only one
+	// shutdown to perform.
+	restartCh chan string
+
 	// Teardown steps (d), (e) and (f), as fields so tests can substitute
 	// fakes and assert the order they run in. stopLoops is set by Serve
 	// from startBackgroundLoops; closeStorage from ServerConfig.Cleanup.
@@ -127,6 +146,13 @@ func (s *ServerConfig) Serve() *BlanketServer {
 	// can observe the server as up (turtlemonvh/blanket#23 phase 4).
 	s.persistInstance()
 
+	// Reconcile a restart record the previous process left behind, before
+	// the listener opens: an operator who reaches GET /ops/restart/status
+	// should never see a state this process has already decided is over.
+	// turtlemonvh/blanket#23 phase 5.
+	warnIfCrashInjectionArmed()
+	s.adoptRestartRecordOnBoot()
+
 	// Background loops: currently just the task scheduler (SCHEDULED /
 	// RECURRING tasks; see server/scheduler.go). Also the place a future
 	// reaper loop for cleaning the queue/db/workers (turtlemonvh/blanket#23
@@ -140,7 +166,7 @@ func (s *ServerConfig) Serve() *BlanketServer {
 		timeout = DefaultShutdownTimeout
 	}
 
-	return &BlanketServer{
+	bs := &BlanketServer{
 		cfg: s,
 		http: &http.Server{
 			Addr:              fmt.Sprintf(":%d", s.Port),
@@ -153,7 +179,16 @@ func (s *ServerConfig) Serve() *BlanketServer {
 		stopTailers:     tailed_file.StopAll,
 		stopLoops:       stopBackgroundLoops,
 		closeStorage:    s.Cleanup,
+		restartCh:       make(chan string, 1),
 	}
+
+	// POST /ops/restart/exec needs a way to reach the goroutine that owns
+	// the listener. A channel rather than calling Shutdown from the
+	// handler: the handler *is* one of the requests the shutdown drains,
+	// so it has to hand the work over and return.
+	s.restartExecFn = bs.requestRestart
+
+	return bs
 }
 
 // Addr reports the address the server is configured to listen on.
@@ -193,6 +228,11 @@ func (bs *BlanketServer) serveListener(ln net.Listener) error {
 		serveErr <- err
 	}()
 
+	// Bring back whatever the previous process's drain stopped. In a
+	// goroutine because a respawned worker registers itself over HTTP
+	// against the listener this function is about to start serving on.
+	go bs.cfg.respawnWorkers("boot")
+
 	select {
 	case err := <-serveErr:
 		// The listener died without anyone asking it to. Still run the
@@ -201,7 +241,65 @@ func (bs *BlanketServer) serveListener(ln net.Listener) error {
 		return err
 	case sig := <-sigCh:
 		return bs.handleSignal(sig)
+	case mode := <-bs.restartCh:
+		return bs.handleRestart(mode)
 	}
+}
+
+// requestRestart asks the serving goroutine to tear down and restart in
+// `mode` (an already-resolved database.ExecMode* value). Returns
+// immediately; the caller is a request handler that the shutdown it just
+// asked for is about to drain.
+func (bs *BlanketServer) requestRestart(mode string) {
+	select {
+	case bs.restartCh <- mode:
+	default:
+		log.WithField("execMode", mode).Warn("a restart is already in flight; ignoring the duplicate request")
+	}
+}
+
+// handleRestart runs the teardown and then does what mode says.
+//
+// ExecModeExit returns an ExitCodeError rather than exiting here, so the
+// exit stays in main's hands: a package that calls os.Exit from inside a
+// library function is a package that cannot be tested and cannot be reused
+// by a caller with its own cleanup to do.
+func (bs *BlanketServer) handleRestart(mode string) error {
+	log.WithField("execMode", mode).Warn("shutting down for a requested restart")
+
+	ctx, cancel := context.WithTimeout(context.Background(), bs.shutdownTimeout)
+	defer cancel()
+	bs.Shutdown(ctx)
+
+	if mode == database.ExecModeExec {
+		// Storage is closed and the bolt lock released, so the new image
+		// can take it. Does not return on success.
+		if err := reexecSelf(); err != nil {
+			// Windows always lands here (reexecSelf refuses), and so does
+			// a unix box whose binary has been deleted out from under it.
+			// Falling through to the exit path is the right answer for
+			// both: a supervisor gets its chance, and an unsupervised
+			// operator gets a clear exit code instead of a server that
+			// silently kept running an image it was told to replace.
+			log.WithField("err", err).Warn("could not re-exec in place; exiting for a supervisor or the upgrade CLI instead")
+		}
+	}
+
+	return &ExitCodeError{
+		Code: RestartExitCode,
+		Msg:  "exiting so a supervisor (or the upgrade CLI) can start the replacement",
+	}
+}
+
+// ExitCodeError asks main for a specific process exit code. See
+// RestartExitCode for why a restart's exit must not be 0.
+type ExitCodeError struct {
+	Code int
+	Msg  string
+}
+
+func (e *ExitCodeError) Error() string {
+	return fmt.Sprintf("%s (exit %d)", e.Msg, e.Code)
 }
 
 // handleSignal runs the teardown for sig and then either returns (exit) or

@@ -46,7 +46,15 @@ type BlanketDB interface {
 	// the read, mutate, and write happen inside a single transaction —
 	// unlike UpdateWorker, which requires the caller to already hold the
 	// full desired state and simply overwrites the record.
-	StopWorker(workerId objectid.ObjectId) (worker.WorkerConf, error)
+	//
+	// reason is recorded as StoppedReason and decides what happens to a
+	// pending respawn intent (turtlemonvh/blanket#23 phase 5):
+	// worker.StopReasonSelf preserves it, because a drained worker exiting
+	// is the drain working; anything else — an operator's stop, which
+	// sends no reason at all — clears it, because an explicit decision to
+	// take a worker down mid-restart has to outrank the restart's plan to
+	// bring it back.
+	StopWorker(workerId objectid.ObjectId, reason string) (worker.WorkerConf, error)
 	// StartWorker is StopWorker's counterpart: it clears Stopped and bumps
 	// LastHeardTs atomically. Needed because UpdateWorker no longer lets a
 	// worker clear its own Stopped flag by re-registering; see the
@@ -100,10 +108,35 @@ type BlanketDB interface {
 	// MigrationMarker returns the in-flight migration marker, or nil when
 	// none is set.
 	MigrationMarker() (*MigrationMarker, error)
-	// RestartRecord / SetRestartRecord are phase 5's storage, defined now
-	// so phase 4 owns the whole bucket layout.
+	// RestartRecord reads the restart state machine's server-owned record;
+	// an absent one decodes to the zero value, which reads as IDLE.
 	RestartRecord() (RestartRecord, error)
+	// SetRestartRecord overwrites the record wholesale. Only boot-time
+	// reconciliation and tests use it — a *transition* goes through
+	// UpdateRestartRecord, which reads and writes in one transaction.
 	SetRestartRecord(RestartRecord) error
+	// UpdateRestartRecord applies fn to the stored record and writes the
+	// result back in a single transaction. fn returning an error aborts
+	// the write, so a rejected transition leaves the record untouched.
+	// Setting the state to IDLE deletes the record.
+	UpdateRestartRecord(fn func(*RestartRecord) error) (RestartRecord, error)
+	// StopWorkersForRestart is the transaction the restart machine's
+	// central invariant is about (turtlemonvh/blanket#23 phase 5): it
+	// applies fn to the restart record *and* stops every running worker
+	// with a respawn intent, in one commit. Returns the updated record and
+	// the workers it stopped, so the caller can signal those processes
+	// afterwards — outside the transaction, since no database write can be
+	// made to agree with a signal.
+	StopWorkersForRestart(reason string, fn func(*RestartRecord) error) (RestartRecord, []worker.WorkerConf, error)
+	// ClaimWorkerRespawn clears one worker's Stopped flag, counts the
+	// attempt and stamps the clock, in one transaction immediately before
+	// the server spawns it. Counting before the fork rather than after is
+	// what makes the generation cap survive a spawn that kills the server.
+	ClaimWorkerRespawn(workerId objectid.ObjectId) (worker.WorkerConf, error)
+	// ClearWorkerRespawn drops a respawn intent. An empty reason means the
+	// spawn succeeded; a non-empty one records why the server gave up and
+	// leaves the worker stopped.
+	ClearWorkerRespawn(workerId objectid.ObjectId, reason string) (worker.WorkerConf, error)
 
 	// Backup writes a consistent copy of the database into dir and
 	// returns the path written, after a free-space precheck and before

@@ -495,7 +495,8 @@ of the claim loop. Workers can only be deleted once stopped.
 rather than overwriting the record (turtlemonvh/blanket#23 phase 1): the
 worker owns `pid`, `pidStartTs`, `logfile`, `startedTs`, `tags` and
 `checkInterval`, and the server owns `stopped`, `stoppedReason`,
-`lastHeardTs`, and `lost`. Without that split, a worker re-registering —
+`lastHeardTs`, `lost`, and the respawn bookkeeping (`respawnIntent`,
+`respawnAttempts`, `lastRespawnTs`). Without that split, a worker re-registering —
 which it always does with `stopped: false` — silently undid a stop that
 had just landed, and carried on claiming tasks. It also means restarting a
 worker has to clear the flag server-side, which is what
@@ -510,6 +511,10 @@ stateDiagram-v2
     RUNNING --> STOPPED: PUT /worker/:id/stop
     RUNNING --> STOPPED: process exits (SIGTERM, crash)
     RUNNING --> STOPPED: reaper, pid conclusively gone
+    RUNNING --> STOPPED_PENDING_RESPAWN: POST /ops/restart/drain
+    STOPPED_PENDING_RESPAWN --> RUNNING: the next server's boot, or an abort
+    STOPPED_PENDING_RESPAWN --> STOPPED: PUT /worker/:id/stop (an operator)
+    STOPPED_PENDING_RESPAWN --> STOPPED: 3 failed respawns
     STOPPED --> RUNNING: PUT /worker/:id/restart
     STOPPED --> [*]: DELETE /worker/:id
 ```
@@ -521,6 +526,40 @@ its own diagram in the next section.)
 carries `lost: true` while `stopped` stays whatever it was. It shows in
 the UI as a badge and changes nothing else — see [The reaper](#the-reaper)
 below for why a lost-but-live worker is deliberately left running.
+`respawnIntent` is a flag in the same sense — `STOPPED_PENDING_RESPAWN`
+above is `stopped: true, respawnIntent: true`, drawn as a state only
+because it behaves like one.
+
+### Respawn intent and stop reasons
+
+A restart's drain (`POST /ops/restart/drain`, see
+[upgrade.md](upgrade.md#the-restart-state-machine)) stops every running
+worker and records **`respawnIntent: true`** on each — in one database
+transaction with the restart's own state change, because a crash between
+the two would leave either workers nothing intends to restart, or an
+intent to restart workers that were never stopped.
+
+The intent is cleared **after** a successful spawn, never before. That
+makes respawn at-least-once, which is the right direction to be wrong in:
+losing a worker on an upgrade is silent and permanent, while spawning one
+twice is loud and self-correcting — and the pid-liveness check on the next
+pass catches the duplicate before it happens. Two more guards bound it: a
+cap of 3 attempts (counted *before* each fork, so it converges even if the
+fork is what kills the server) and a 30s minimum interval between
+attempts, so a server crash-looping under a supervisor cannot fork the
+fleet on every boot.
+
+Which brings in **`stoppedReason`**. A drained worker stops by calling
+`PUT /worker/:id/stop` — the same call an operator makes. Without something
+on the wire to tell them apart, a worker exiting cleanly would cancel the
+very respawn the drain had just scheduled:
+
+| `reason` on the stop | Sent by | Effect on `respawnIntent` |
+| -------------------- | ------- | ------------------------- |
+| `worker-shutdown` | the worker's own SIGTERM handler | **Preserved.** A drained worker exiting is the drain working. |
+| `restart-drain` | the drain itself, on the record it writes | Set. |
+| `reaper: …` | the reaper | Untouched (the reaper is suppressed during a restart anyway). |
+| *(absent)* | an operator, the UI, the MCP tool | **Cleared.** A deliberate stop mid-restart outranks the restart's plan. |
 
 ### Heartbeat
 
@@ -537,9 +576,11 @@ The response carries three things (see [api.md](api.md#workers)):
   waiting on some other poll. This is what makes draining workers viable
   during an upgrade.
 - `serverInstanceId` — identifies the server *process*. A worker that sees
-  it change knows the server restarted underneath it, and logs that.
-  (Acting on it is phase 5's business; phase 1's premise is that a worker
-  rides out a server outage without needing to be told.)
+  it change knows the server restarted underneath it, and logs that. It
+  still does not *act* on it: phase 1's premise is that a worker rides out
+  a server outage without needing to be told, and phase 5 kept it that way
+  — a restart that wants workers gone stops them explicitly through the
+  drain rather than hoping each of them notices.
 - `serverStartedTs` — when that process started serving.
 
 The same instance id and start time are on `GET /config/`, so "did the
