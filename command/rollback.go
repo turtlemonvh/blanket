@@ -32,6 +32,7 @@ taking the lock itself, which is the only real check there is.
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -43,6 +44,7 @@ import (
 	boltlib "github.com/turtlemonvh/blanket/lib/bolt"
 	"github.com/turtlemonvh/blanket/lib/httpx"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/lib/timing"
 	"github.com/turtlemonvh/blanket/lib/upgrade"
 )
 
@@ -157,7 +159,21 @@ func runRollback() int {
 	}
 
 	port := viper.GetInt("port")
-	serverUp := serverAnswers(port)
+
+	// One status fetch with a short retry, rather than serverAnswers()
+	// followed by a second call that has to agree with it. A server
+	// re-execing in place is not listening for a moment, and reading that
+	// instant as "no server is running" rolls the binary back and stops --
+	// leaving the server that comes back a second later on the version
+	// this was asked to undo, and nothing watching for it.
+	fromStatus, statusErr := awaitRestartStatus(port, timing.Scale(statusProbeBudget))
+	serverUp := statusErr == nil
+	if statusErr != nil && !errors.Is(statusErr, errServerDown) {
+		// The server answered and said no -- a 403 from the ops guard, a
+		// 500. Rolling the binary back under a server we could not then
+		// restart is the one outcome worse than not rolling back.
+		return res.fail(ExitRestartRefused, statusErr)
+	}
 
 	if rollbackConf.RestoreDB && serverUp {
 		return res.fail(ExitUsage, fmt.Errorf(
@@ -181,10 +197,7 @@ func runRollback() int {
 	// worker from a half-swapped path.
 	// -------------------------------------------------------------------
 	if serverUp {
-		st, err := fetchRestartStatus(port)
-		if err != nil {
-			return res.fail(ExitRestartRefused, err)
-		}
+		st := fromStatus
 		if st.Restart.State != "" && st.Restart.State != "IDLE" {
 			return res.fail(ExitRestartRefused, fmt.Errorf(
 				"a restart is already in flight (%s). Finish or abort it first", st.Restart.State))

@@ -363,9 +363,13 @@ func finishUpgrade(res *upgradeResult, j *upgrade.Journal, stagedPath string) in
 	// -------------------------------------------------------------------
 	// Is there a server to restart at all?
 	// -------------------------------------------------------------------
+	// Retried rather than asked once: a server re-execing in place is not
+	// listening for a moment, and reading that instant as "no server is
+	// running" would swap the binary and stop, leaving an install whose
+	// server is still on the version it was upgraded away from.
 	var st *restartStatus
 	serverUp := false
-	if s, err := fetchRestartStatus(port); err == nil {
+	if s, err := awaitRestartStatus(port, timing.Scale(statusProbeBudget)); err == nil {
 		st, serverUp = s, true
 	} else if !errors.Is(err, errServerDown) {
 		// The server answered and said no -- a 403 from the ops guard, or
@@ -594,30 +598,64 @@ func verifyRestart(res *upgradeResult, j *upgrade.Journal, port int, execMode st
 	// detached replacement escapes a service's job object and then holds
 	// the database lock somewhere `sc stop` cannot reach).
 	if execMode == "exit" && !j.Supervised {
-		if !waitForServerGone(port, timing.Scale(30*time.Second)) {
-			res.Warnings = append(res.Warnings, "the old server was still answering when the CLI tried to start its replacement")
-		}
-		if runtime.GOOS == "windows" && isWindowsService() {
+		// The port has to be quiet, and *stay* quiet, before the CLI adds
+		// a process of its own. A server re-execing in place stops
+		// answering for a moment, and the first refused connection looks
+		// exactly like one that has exited for good -- but starting a
+		// second server against the former leaves it parked on the
+		// database lock, from where it wins the port at the next restart
+		// and answers as the version that was supposed to have gone. That
+		// is turtlemonvh/blanket#87's intermittent
+		// "a server came back but reports <old version>".
+		gone := waitForServerGone(port, timing.Scale(30*time.Second)) &&
+			portStaysQuiet(port, timing.Scale(quietWindow))
+		if !gone {
+			// Something is serving this port. Whatever it is, a second
+			// server is not the answer; the verification below decides
+			// whether it is the replacement.
+			res.Warnings = append(res.Warnings,
+				fmt.Sprintf("a server was still answering on port %d, so the CLI did not start another one", port))
+		} else if runtime.GOOS == "windows" && isWindowsService() {
 			res.ExitCode = ExitStagedOnly
 			res.State = j.State
 			res.Message = fmt.Sprintf("Installed %s at %s and stopped the old server.\nStart it again with:\n\n    sc start blanket\n",
 				j.ToVersion, j.BinaryPath)
 			return res.emit()
+		} else {
+			pid, logPath, err := startServerDetached(j.BinaryPath)
+			if err != nil {
+				j.Error = err.Error()
+				j.Advance(upgrade.JournalFailed, err.Error())
+				save()
+				res.State = j.State
+				return res.fail(ExitRestartRefused, fmt.Errorf(
+					"the new binary is installed but the server could not be started: %w (start it yourself with `%s`)", err, j.BinaryPath))
+			}
+			res.Warnings = append(res.Warnings, fmt.Sprintf("started the replacement server (pid %d); its output is in %s", pid, logPath))
 		}
-		pid, logPath, err := startServerDetached(j.BinaryPath)
-		if err != nil {
-			j.Error = err.Error()
-			j.Advance(upgrade.JournalFailed, err.Error())
-			save()
-			res.State = j.State
-			return res.fail(ExitRestartRefused, fmt.Errorf(
-				"the new binary is installed but the server could not be started: %w (start it yourself with `%s`)", err, j.BinaryPath))
-		}
-		res.Warnings = append(res.Warnings, fmt.Sprintf("started the replacement server (pid %d); its output is in %s", pid, logPath))
 	}
 
-	st, err := waitForNewServer(port, j.FromInstanceId, budget)
+	// A verification with nothing to compare against is not one. If the
+	// server was between processes when this attempt read its status,
+	// FromInstanceId is empty and "a different process answered" cannot be
+	// checked -- say so, so the operator knows the version is the only
+	// evidence there is.
+	if j.FromInstanceId == "" {
+		res.Warnings = append(res.Warnings,
+			"the instance id of the server being replaced was never read, so this checks the version that answered but not that it is a different process")
+	}
+
+	st, err := waitForNewServer(port, j.FromInstanceId, j.ToVersion, budget)
 	if err != nil {
+		// A server on the wrong version is a different story from a port
+		// nothing answered on, and gets the version-mismatch wording:
+		// what is running is not what was installed, which is a question
+		// about PATH and stray processes, not about a server that never
+		// came up.
+		var wrong *wrongVersionError
+		if errors.As(err, &wrong) {
+			return failVerification(res, j, save, wrong.Got)
+		}
 		j.Error = err.Error()
 		j.Advance(upgrade.JournalFailed, err.Error())
 		save()
@@ -630,16 +668,17 @@ func verifyRestart(res *upgradeResult, j *upgrade.Journal, port int, execMode st
 	res.InstanceId = st.InstanceId
 	j.ToInstanceId = st.InstanceId
 
+	// waitForNewServer already refused anything on the wrong version, so
+	// this is belt and braces rather than the check itself -- kept because
+	// it is the one place j.ToVersion and the banner are compared for the
+	// record, and because a future caller passing no wanted version would
+	// otherwise have no check at all.
+	//
 	// The server reports a banner ("blanket v0.5.0 (built ...)"), so the
 	// check is on the tag inside it rather than on string equality.
 	got := upgrade.VersionFromBanner(st.Version)
 	if got != "" && !upgrade.SameVersion(got, j.ToVersion) {
-		j.Error = fmt.Sprintf("expected %s, the server reports %s", j.ToVersion, got)
-		j.Advance(upgrade.JournalFailed, j.Error)
-		save()
-		res.State = j.State
-		return res.fail(ExitVerificationFailed, fmt.Errorf(
-			"a server came back but reports %s, not %s. Check what is on PATH; `blanket rollback --yes` puts the previous binary back", got, j.ToVersion))
+		return failVerification(res, j, save, got)
 	}
 
 	j.Advance(upgrade.JournalVerified, "instanceId="+st.InstanceId)
@@ -653,6 +692,19 @@ func verifyRestart(res *upgradeResult, j *upgrade.Journal, port int, execMode st
 	res.Message = fmt.Sprintf("%s %s.\n  binary:     %s\n  previous:   %s\n  backup:     %s\n  instanceId: %s (was %s)",
 		verb, displayVersionOr(j.ToVersion), j.BinaryPath, orDash(j.SlotPath), orDash(j.BackupPath), st.InstanceId, orDash(j.FromInstanceId))
 	return res.emit()
+}
+
+// failVerification records "a server answered, on the wrong version" and
+// returns the exit code for it. Shared by the two places that reach that
+// conclusion -- the wait giving up with only an impostor answering, and
+// the final check on the server it did accept.
+func failVerification(res *upgradeResult, j *upgrade.Journal, save func(), got string) int {
+	j.Error = fmt.Sprintf("expected %s, the server reports %s", j.ToVersion, got)
+	j.Advance(upgrade.JournalFailed, j.Error)
+	save()
+	res.State = j.State
+	return res.fail(ExitVerificationFailed, fmt.Errorf(
+		"a server came back but reports %s, not %s. Check what is on PATH; `blanket rollback --yes` puts the previous binary back", got, j.ToVersion))
 }
 
 // isWindowsService reports whether this process looks like it is running
@@ -731,9 +783,24 @@ func runUpgradeResume(res *upgradeResult, installed string) int {
 		if port == 0 {
 			port = viper.GetInt("port")
 		}
-		if st, err := fetchRestartStatus(port); err == nil && st.Restart.State != "" && st.Restart.State != "IDLE" {
-			return execAndVerify(res, j, port)
+		// The exec mode matters here and the journal does not record it,
+		// so ask the server that is coming back. Assuming `exit` -- as
+		// this did -- means the CLI starts a replacement of its own
+		// against a server that re-execs in place, and that second
+		// process then sits on the database lock waiting for a port it
+		// must never get (see verifyRestart).
+		st, err := awaitRestartStatus(port, timing.Scale(statusProbeBudget))
+		if err == nil {
+			if st.Restart.State != "" && st.Restart.State != "IDLE" {
+				return execAndVerify(res, j, port)
+			}
+			if j.FromInstanceId == "" {
+				j.FromInstanceId = st.InstanceId
+			}
+			return verifyRestart(res, j, port, st.ResolvedExecMode)
 		}
+		// Nothing answered for the whole probe: the server really is
+		// down, and `exit` is the mode that says the CLI starts it.
 		return verifyRestart(res, j, port, "exit")
 	}
 	return res.fail(ExitUsage, fmt.Errorf("cannot resume from state %q", j.State))
