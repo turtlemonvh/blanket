@@ -280,6 +280,11 @@ func (s *ServerConfig) uiTaskDetailPage(c *gin.Context) {
 		// declares no result_file and the page shows no result block.
 		"Log":    buildTaskLogView(task, LogStreamStdout),
 		"Result": buildTaskResultView(task),
+		// Whether to link the combined record in the metadata table.
+		// Tasks run before turtlemonvh/blanket#104 (or by a worker with
+		// `workers.combinedLog = false`) have no such file, and a link
+		// that 404s is worse than no link.
+		"HasCombinedLog": hasCombinedLog(task),
 	})
 }
 

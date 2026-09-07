@@ -137,7 +137,7 @@ The completion payload:
 | ----- | ------- |
 | `task` | The existing task JSON, verbatim — same fields `GET /task/:id` returns, including the new `exitCode`. |
 | `waitOutcome` | `"completed"`. (`"wait_timeout"` is the other value; it exists for the streaming variant, which cannot change its HTTP status once the body has started.) |
-| `stdout` / `stderr` | The last `tasks.sync.maxLogLines` lines of each stream, read from `blanket.stdout.log` / `blanket.stderr.log` under the task's result dir. Empty if the task wrote nothing. |
+| `stdout` / `stderr` | The last `tasks.sync.maxLogLines` lines of each stream, read from `blanket.stdout.log` / `blanket.stderr.log` under the task's result dir. Empty if the task wrote nothing. Two separate tails: how the streams interleaved is recorded in `blanket.combined.ndjson` (see [Task output files](task_flow.md#task-output-files)), which this payload does not read. |
 | `stdoutTruncated` / `stderrTruncated` | True when earlier lines were dropped from that tail. |
 | `result` | The parsed contents of the task type's declared [`result_file`](task_type_definitions.md#result_file), or `null` — a type that declares none, or a task that failed before writing it, both yield `null` without an error. |
 | `resultError` | Why `result` is `null` despite a declared `result_file` (unparseable, oversized, unreadable), so a malformed result never looks like an absent one. `null` when there was nothing wrong. |
@@ -232,9 +232,13 @@ Notes that matter in practice:
 * **`seq` is per stream, per connection.** `stdout` and `stderr` each
   count from 1. It is not a position in the file, and a reconnecting
   client sees it restart.
-* **Ordering between `stdout` and `stderr` is not the task's.** They are
-  two files tailed separately; blanket cannot reconstruct the
-  interleaving the task produced.
+* **Ordering between `stdout` and `stderr` is not the task's.** This
+  stream tails the two per-stream files separately, and nothing about
+  the order it emits their lines in is the order the task wrote them.
+  The interleaving *is* recorded, in `blanket.combined.ndjson` under the
+  task's result dir ([Task output files](task_flow.md#task-output-files)),
+  and the web UI's combined log view reads it — but these events do not
+  yet come from it (turtlemonvh/blanket#123).
 * Unknown event types should be skipped, not treated as errors — that's
   what lets a later blanket add one without breaking your client.
 
@@ -295,6 +299,16 @@ from. A caller that wants both at once uses the structured stream above,
 whose `log` events carry a `stream` discriminator. (The web UI's combined
 log view has its own UI-only route for the same reason; see
 [Web UI](#web-ui) below.)
+
+A third file sits next to those two: `blanket.combined.ndjson`, the
+worker's record of how the streams interleaved — one JSON object per line
+of output, in the order it was produced, tagged with the stream it came
+from. It is served like any other result-dir file
+(`GET /results/:taskId/blanket.combined.ndjson`) and is what the web UI's
+combined log view reads. `workers.combinedLog = false` turns the
+recording off, and tasks run before it existed don't have one. Its shape
+and the trade-offs behind it are in
+[Task output files](task_flow.md#task-output-files).
 
 A `notBefore`-in-the-future or `cron` submission returns **429** with a
 JSON error body if accepting it would bring the count of live
@@ -606,19 +620,23 @@ GET /ui/sse/tasks/:id/log       # the "both" view's stream: stdout and
                                 # each `message` event carrying one
                                 # HTML-escaped line wrapped in a span with
                                 # its stream badge. On connect it replays
-                                # the last 500 lines of each file — all of
-                                # stdout, then all of stderr, since the two
-                                # files carry no shared ordering once
-                                # written — and then follows both from the
-                                # byte offset the replay stopped at, so
+                                # the last 500 lines and then follows from
+                                # the byte offset the replay stopped at, so
                                 # nothing is dropped or repeated at the
-                                # seam. Lines arriving after that are
-                                # interleaved as they come. UI-only on
-                                # purpose: GET /task/:id/log emits the
-                                # bytes the task wrote, and must not start
-                                # emitting markup. Clients wanting both
-                                # streams as data use the structured
-                                # NDJSON stream instead.
+                                # seam. It reads blanket.combined.ndjson —
+                                # the worker's record of how the two
+                                # streams interleaved — so replayed history
+                                # is in the same time order as the lines
+                                # that arrive after it. A task with no such
+                                # record falls back to replaying the two
+                                # per-stream files grouped (all of stdout,
+                                # then all of stderr), which is all their
+                                # contents support. UI-only on purpose:
+                                # GET /task/:id/log emits the bytes the
+                                # task wrote, and must not start emitting
+                                # markup. Clients wanting both streams as
+                                # data use the structured NDJSON stream
+                                # instead.
 ```
 
 `POST /ui/tasks` (the create form's submit) accepts the same scheduling

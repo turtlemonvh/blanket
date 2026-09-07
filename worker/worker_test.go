@@ -42,6 +42,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/turtlemonvh/blanket/lib/combined_log"
 	"github.com/turtlemonvh/blanket/lib/httpx"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/testutil"
@@ -531,6 +532,169 @@ func TestRun_RejectsLowCheckInterval(t *testing.T) {
 	}
 }
 
+// interleavedTaskTypeToml alternates between the two streams, so a
+// recording that merely concatenated the files would come out in a
+// different order than the task produced.
+//
+// The sleeps are load-bearing. What the worker records is the order the
+// two streams *arrive* in, which is the order the live log view shows
+// too -- but a task that writes everything and exits leaves both pipes
+// full at once, and which of the two copying goroutines drains first is
+// then up to the scheduler. Spacing the writes out makes the arrival
+// order the task's own order, which is what this test is about.
+const interleavedTaskTypeToml = `
+tags = ["exec:bash", "os:unix"]
+timeout = 10
+command = "echo out-one; sleep 0.2; echo err-one 1>&2; sleep 0.2; echo out-two; sleep 0.2; echo err-two 1>&2; sleep 0.2; printf 'no-newline'"
+executor = "bash"
+`
+
+// readCombinedLog parses a finished task's combined record.
+func readCombinedLog(t *testing.T, resultDir string) []combined_log.Record {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(resultDir, combined_log.FileName))
+	require.NoError(t, err, "combined log should exist at %s", resultDir)
+	var recs []combined_log.Record
+	for _, line := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		rec, ok := combined_log.ParseRecord(line)
+		require.True(t, ok, "unparseable combined log record %q", line)
+		recs = append(recs, rec)
+	}
+	return recs
+}
+
+// The review finding behind turtlemonvh/blanket#104's second pass: the
+// order a task's two streams were produced in exists nowhere on disk if
+// the child writes straight into the two files. The worker now copies
+// both through itself and records each completed line, tagged and in
+// arrival order -- while leaving the two per-stream files exactly as they
+// were, since every other reader of a task's output still reads those.
+func TestProcessOne_RecordsCombinedLog(t *testing.T) {
+	h := newWorkerHarness(t)
+	defer h.cleanup()
+
+	h.writeTaskType("interleaved", interleavedTaskTypeToml)
+
+	h.submit("interleaved")
+	claimed := h.claim()
+	require.NoError(t, h.work.ProcessOne(&claimed))
+
+	final := h.fetch(claimed.Id)
+	require.Equal(t, "SUCCESS", final.State)
+
+	recs := readCombinedLog(t, final.ResultDir)
+	var got []string
+	for _, r := range recs {
+		got = append(got, r.Stream+":"+r.Line)
+	}
+	// The trailing printf never emits a newline; it is flushed when the
+	// recorder closes rather than dropped.
+	assert.Equal(t, []string{
+		"stdout:out-one",
+		"stderr:err-one",
+		"stdout:out-two",
+		"stderr:err-two",
+		"stdout:no-newline",
+	}, got, "records should be in the order the task produced them")
+
+	for _, r := range recs {
+		assert.Greater(t, r.Ts, int64(0), "every record is timestamped")
+	}
+	// seq counts within a stream, from 1.
+	assert.Equal(t, []int{1, 1, 2, 2, 3},
+		[]int{recs[0].Seq, recs[1].Seq, recs[2].Seq, recs[3].Seq, recs[4].Seq})
+
+	// The per-stream files are untouched by any of this: same bytes the
+	// task wrote, in the same shape as before the recorder existed.
+	stdout, err := os.ReadFile(filepath.Join(final.ResultDir, "blanket.stdout.log"))
+	require.NoError(t, err)
+	assert.Equal(t, "out-one\nout-two\nno-newline", string(stdout))
+	stderr, err := os.ReadFile(filepath.Join(final.ResultDir, "blanket.stderr.log"))
+	require.NoError(t, err)
+	assert.Equal(t, "err-one\nerr-two\n", string(stderr))
+}
+
+// The knob off restores the pre-#104 execution shape exactly: no combined
+// record, no pipe, the child writing straight into the two files.
+func TestProcessOne_CombinedLogDisabled(t *testing.T) {
+	h := newWorkerHarness(t)
+	defer h.cleanup()
+	viper.Set("workers.combinedLog", false)
+	defer viper.Set("workers.combinedLog", nil)
+
+	h.writeTaskType("interleaved", interleavedTaskTypeToml)
+
+	h.submit("interleaved")
+	claimed := h.claim()
+	require.NoError(t, h.work.ProcessOne(&claimed))
+
+	final := h.fetch(claimed.Id)
+	assert.Equal(t, "SUCCESS", final.State)
+
+	_, err := os.Stat(filepath.Join(final.ResultDir, combined_log.FileName))
+	assert.True(t, os.IsNotExist(err), "no combined log should be written when the knob is off")
+
+	stdout, err := os.ReadFile(filepath.Join(final.ResultDir, "blanket.stdout.log"))
+	require.NoError(t, err)
+	assert.Equal(t, "out-one\nout-two\nno-newline", string(stdout))
+}
+
+// orphanTaskTypeToml backgrounds a process that outlives the task. The
+// orphan inherits the task's stdout, which is now a pipe -- so cmd.Wait()
+// would block on it for the orphan's whole life without a WaitDelay.
+const orphanTaskTypeToml = `
+tags = ["exec:bash", "os:unix"]
+timeout = 60
+command = "echo before; sleep 30 & echo after"
+executor = "bash"
+`
+
+// A task that leaves something running behind it must still finish when
+// it exits, with its own exit status and its own output -- not hang until
+// the orphan gives up. Reaping is bounded by worker.childWaitDelay, and
+// the exec.ErrWaitDelay that bound produces is a fact about the orphan,
+// not a task failure.
+func TestProcessOne_BackgroundedGrandchildDoesNotBlockWait(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash task type; the WaitDelay bound itself is platform-independent")
+	}
+	h := newWorkerHarness(t)
+	defer h.cleanup()
+
+	h.writeTaskType("orphan", orphanTaskTypeToml)
+
+	h.submit("orphan")
+	claimed := h.claim()
+
+	start := time.Now()
+	require.NoError(t, h.work.ProcessOne(&claimed))
+	elapsed := time.Since(start)
+
+	// The orphan sleeps 30s; the bound is 2s. Anything under 15s proves
+	// the wait was bounded rather than tied to the orphan's lifetime.
+	assert.Less(t, elapsed, 15*time.Second,
+		"cmd.Wait must not wait for a process the task deliberately orphaned")
+
+	final := h.fetch(claimed.Id)
+	assert.Equal(t, "SUCCESS", final.State, "the task itself exited 0")
+	require.NotNil(t, final.ExitCode)
+	assert.Equal(t, 0, *final.ExitCode)
+
+	stdout, err := os.ReadFile(filepath.Join(final.ResultDir, "blanket.stdout.log"))
+	require.NoError(t, err)
+	assert.Contains(t, string(stdout), "before")
+	assert.Contains(t, string(stdout), "after")
+
+	var lines []string
+	for _, r := range readCombinedLog(t, final.ResultDir) {
+		lines = append(lines, r.Line)
+	}
+	assert.Equal(t, []string{"before", "after"}, lines)
+}
+
 // TestProcessOne_ProducesLogs asserts both the task stdout log and the
 // worker-level logfile exist and are non-empty after a successful run.
 // The worker-level log is only written when Run() executes; for a pure
@@ -546,7 +710,7 @@ func TestProcessOne_ProducesLogs(t *testing.T) {
 	assert.NoError(t, h.work.ProcessOne(&claimed))
 
 	final := h.fetch(claimed.Id)
-	for _, name := range []string{"blanket.stdout.log", "blanket.stderr.log"} {
+	for _, name := range []string{"blanket.stdout.log", "blanket.stderr.log", combined_log.FileName} {
 		p := filepath.Join(final.ResultDir, name)
 		info, err := os.Stat(p)
 		assert.NoError(t, err, "expected %s to exist", name)

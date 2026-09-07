@@ -308,6 +308,70 @@ when the killed child exits — and the worker is told 200, not an error, so
 it stops retrying and cleans up. The full table is in
 [api.md](api.md#tasks).
 
+### Task output files
+
+A task's result dir holds three files written by the worker while it runs:
+
+```
+<resultDir>/blanket.stdout.log        # raw bytes the task wrote to stdout
+<resultDir>/blanket.stderr.log        # raw bytes the task wrote to stderr
+<resultDir>/blanket.combined.ndjson   # how the two interleaved
+```
+
+The first two are exactly what they have always been — the task's own
+bytes, unmodified — and every API surface that reports a task's output
+reads them.
+
+The third exists because they can't answer one question:
+**what order did the task produce this in?** Two files written
+independently carry no shared ordering, so a reader merging them can only
+group — all of stdout, then all of stderr. That is why the web UI's
+combined log view used to replay history grouped while showing live lines
+interleaved: the same output looked different depending on whether you
+were watching when it happened.
+
+So the worker routes both streams through itself
+(`io.MultiWriter` → `lib/combined_log`) and appends one JSON object per
+completed line, in arrival order:
+
+```
+{"ts":1756900001123,"stream":"stdout","seq":1,"line":"starting"}
+{"ts":1756900001250,"stream":"stderr","seq":1,"line":"warning: no config"}
+{"ts":1756900001410,"stream":"stdout","seq":2,"line":"done"}
+```
+
+`ts` is unix **milliseconds** (the event envelope's is seconds; ordering
+is the point here), `seq` counts within one stream from 1, and the field
+names are `server.LogEvent`'s so the file and the structured `log` event
+can't drift apart. Partial lines are buffered until their newline
+arrives, and whatever is left unterminated when the task ends is flushed
+as a final record.
+
+"Arrival order" is the honest description and the limit of what this can
+be: it is the order the *worker* read the two pipes — the same basis the
+live log view shows lines on — not a kernel-level total order. A task
+that writes everything at once and exits leaves both pipe buffers full,
+and which is drained first is up to the scheduler. What the file
+guarantees is that a task's replayed history and its live output are
+ordered the same way.
+
+Two consequences of routing output through the worker:
+
+- **`workers.combinedLog`** (default `true`) turns it off. With it off
+  the child writes straight into the two files, exactly as before, and no
+  combined record is produced. Readers fall back automatically — an old
+  task and a knob-off task look the same to the UI.
+- **A backgrounded grandchild no longer keeps writing forever.** The
+  child's stdout is now a pipe, and `cmd.Wait()` blocks until every
+  descendant that inherited it closes it. The worker bounds that with
+  `cmd.WaitDelay` (~2s, `timeMultiplier`-scaled): past it, os/exec closes
+  the pipes and reports `exec.ErrWaitDelay`, which the worker treats as a
+  normal exit — the task's own status is already in `ProcessState`.
+  A task whose job is to launch a daemon and exit therefore loses that
+  daemon's output a couple of seconds after it exits (and, since its
+  stdout is a closed pipe, may take an `EPIPE`). That case wants
+  `workers.combinedLog = false`.
+
 ### Outcome journal
 
 While a task is running, its worker keeps a small journal next to the

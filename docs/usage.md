@@ -278,13 +278,16 @@ result artifact, and its log.
   is the same thing pointed at the other file; `both` mixes the two with
   a per-line badge saying which stream each line came from. Whichever
   view you pick, and whether the task is still running or finished, you
-  see the last 500 lines of each file it covers: the combined view of a
-  running task replays what both files already hold before it starts
-  following them, so switching views doesn't cost you the output from
-  before the switch. Replayed output is grouped — all of stdout, then all
-  of stderr — because the two files carry no shared ordering once
-  written; lines that arrive while you're watching are interleaved as
-  they come. **Pin to bottom** keeps the newest line in view.
+  see the last 500 lines of what it covers: the combined view of a
+  running task replays what the task has already written before it starts
+  following, so switching views doesn't cost you the output from before
+  the switch — and it replays it **in the order the task produced it**,
+  the same order live lines arrive in. That comes from the worker's
+  combined record (`blanket.combined.ndjson`, linked from the metadata
+  table); a task without one — run before blanket recorded it, or by a
+  worker with `workers.combinedLog = false` — shows its history grouped
+  by stream instead and says so above the pane. **Pin to bottom** keeps
+  the newest line in view.
 
 ### Upcoming
 
@@ -402,6 +405,27 @@ blanket task-validate
 
 You can also launch and manage workers from the web UI or via the
 `/worker/` REST endpoints.
+
+Worker config keys (defaults shown):
+
+```
+workers.logfileNameTemplate  "worker.{{.Id.Hex}}.log"   # worker's own log file
+workers.combinedLog          true                       # record stream interleaving
+```
+
+`workers.combinedLog` is what lets a task's log views show its two streams
+in the order they were produced: the worker copies the child's output
+through itself and writes `blanket.combined.ndjson` alongside the two
+per-stream logs (see
+[Task output files](task_flow.md#task-output-files)). The per-stream logs
+are unchanged either way.
+
+Turn it off if a task type deliberately backgrounds a process that
+outlives it and you need that process's output to keep landing in
+`blanket.stdout.log`. With the recording on, the task's output goes
+through a pipe, and blanket stops capturing an orphan's output a couple
+of seconds after the task itself exits rather than waiting for a process
+that may never end.
 
 ## Writing task types
 

@@ -13,10 +13,15 @@ package server
 //     into one pane only makes sense if each line says which stream it
 //     came from. That route (GET /ui/sse/tasks/:id/log) is UI-only and
 //     emits pre-rendered, escaped HTML fragments, which is why it isn't a
-//     second shape of the public log API. It replays what both files
-//     already hold before it starts following them, so switching views on
+//     second shape of the public log API. It replays what the task has
+//     already written before it starts following, so switching views on
 //     a running task shows its output from the start rather than from the
-//     moment you switched.
+//     moment you switched -- and it replays it in the order the task
+//     produced it, reading the worker's combined record
+//     (lib/combined_log) rather than merging the two per-stream files,
+//     which carry no shared ordering. A task with no combined record
+//     (an older worker, or `workers.combinedLog = false`) still gets the
+//     grouped stdout-then-stderr replay, labelled as such.
 //
 //   - the parsed `result_file` artifact and its resultError, read through
 //     the same reader POST /task/?wait uses (readTaskResult in
@@ -29,6 +34,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -37,6 +43,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/manucorporat/sse"
 	log "github.com/sirupsen/logrus"
+	"github.com/turtlemonvh/blanket/lib/combined_log"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/tasks"
 )
@@ -107,11 +114,14 @@ type TaskLogView struct {
 	// Badged means each line is prefixed with its stream name -- true only
 	// in the `both` view, where lines from the two files are mixed.
 	Badged bool
-	// Grouped means the `both` view groups by stream rather than showing a
-	// true interleaving. The two files carry no shared ordering once
-	// written, so history can only ever be grouped: a finished task's
-	// whole pane is, and a running one's replayed backlog is, after which
-	// new lines interleave by arrival.
+	// Grouped means the `both` view is falling back to grouping history
+	// by stream -- all of stdout, then all of stderr -- because the task
+	// has no combined record to interleave from. That is the case for a
+	// task run before turtlemonvh/blanket#104, or by a worker with
+	// `workers.combinedLog = false`: the two per-stream files carry no
+	// shared ordering, so grouping is the only honest rendering of them.
+	// With the record present this stays false and the pane shows real
+	// time order, the same one live lines arrive in.
 	Grouped bool
 }
 
@@ -166,16 +176,27 @@ func buildTaskLogView(task tasks.Task, rawStream string) TaskLogView {
 		switch stream {
 		case LogStreamBoth:
 			v.SseUrl = fmt.Sprintf("/ui/sse/tasks/%s/log", idHex)
-			// The stream replays each file's backlog before it starts
-			// following, and a backlog can only be grouped by stream --
-			// same reason, and same grouping, as a finished task's pane.
-			v.Grouped = true
+			// The stream replays the backlog before it starts following.
+			// Whether that backlog is in time order or grouped by stream
+			// depends on the same thing the stored pane's does: whether
+			// the worker recorded the interleaving.
+			v.Grouped = liveHistoryIsGrouped(task)
 		case LogStreamStderr:
 			v.SseUrl = fmt.Sprintf("/task/%s/log?stream=stderr", idHex)
 		default:
 			v.SseUrl = fmt.Sprintf("/task/%s/log", idHex)
 		}
 		return v
+	}
+
+	// The combined record is one file already in time order, so the
+	// stored pane is a straight read of its tail -- exactly what the live
+	// stream replays, through the same cap.
+	if stream == LogStreamBoth {
+		if lines, ok := storedCombinedLines(task); ok {
+			v.Lines = lines
+			return v
+		}
 	}
 
 	var stdoutLines, stderrLines []TaskLogLine
@@ -215,10 +236,77 @@ func storedLogLines(task tasks.Task, filename, stream string) []TaskLogLine {
 	return lines
 }
 
+// hasCombinedLog reports whether the worker recorded this task's stream
+// interleaving. A task claimed a moment ago may not have it yet -- the
+// worker creates it as it sets the execution directory up -- which is
+// why the live stream decides again on every attach rather than trusting
+// this one read.
+func hasCombinedLog(task tasks.Task) bool {
+	if task.ResultDir == "" {
+		return false
+	}
+	_, err := os.Stat(path.Join(task.ResultDir, TaskCombinedLogFile))
+	return err == nil
+}
+
+// liveHistoryIsGrouped decides whether a *running* task's pane should
+// carry the "stdout first, then stderr" note, using the same rule the
+// stream itself uses when it attaches: the combined record wins, and its
+// absence only means anything once the per-stream files exist (the
+// worker creates the combined one first). A task claimed a moment ago
+// has no files at all yet, and printing a note about grouping that stops
+// being true a second later is worse than printing none.
+func liveHistoryIsGrouped(task tasks.Task) bool {
+	if task.ResultDir == "" || hasCombinedLog(task) {
+		return false
+	}
+	_, err := os.Stat(path.Join(task.ResultDir, TaskStdoutLogFile))
+	return err == nil
+}
+
+// storedCombinedLines reads the tail of a finished task's combined
+// record: every line of its output, in the order it was produced, each
+// tagged with the stream it came from.
+//
+// ok is false when there is no such record to read, which is the signal
+// to fall back to the two per-stream files. An *empty* record is a
+// different thing -- a task that ran and printed nothing -- and comes
+// back ok with no lines, so the pane says "no output" rather than
+// silently re-reading files that are equally empty.
+func storedCombinedLines(task tasks.Task) ([]TaskLogLine, bool) {
+	if !hasCombinedLog(task) {
+		return nil, false
+	}
+	content, truncated, err := tailLinesTruncated(
+		path.Join(task.ResultDir, TaskCombinedLogFile), uiLogHistoryLines)
+	if err != nil {
+		return nil, false
+	}
+
+	var lines []TaskLogLine
+	if truncated {
+		lines = append(lines, TaskLogLine{Meta: logTruncationNote("")})
+	}
+	if content != "" {
+		for _, raw := range strings.Split(strings.TrimSuffix(content, "\n"), "\n") {
+			rec, ok := combined_log.ParseRecord(raw)
+			if !ok {
+				continue
+			}
+			lines = append(lines, TaskLogLine{Stream: rec.Stream, Text: rec.Line})
+		}
+	}
+	return lines, true
+}
+
 // logTruncationNote is the pane's marker for output older than the window
-// it prints. Worded per stream because the combined view prints two
-// windows, and only one of them may have been cut.
+// it prints. Worded per stream because the fallback view prints two
+// windows, one per file, and only one of them may have been cut; the
+// combined record is a single window and passes "" for the stream.
 func logTruncationNote(stream string) string {
+	if stream == "" {
+		return "… earlier lines omitted …"
+	}
 	return fmt.Sprintf("… earlier %s lines omitted …", stream)
 }
 
@@ -271,39 +359,60 @@ func renderLogMetaHTML(text string) string {
 // window of its output you can see.
 const uiLogHistoryLines = DEFAULT_LOG_TAIL_LINES
 
-// uiLogSource is one of the two files the combined stream follows.
+// uiLogSource is one file the combined stream follows: either the
+// worker's combined record (one tail, every line already tagged and in
+// order) or, falling back, one of the two per-stream files.
 //
 // `done` exists to keep a closed tailer from being re-opened: attach runs
 // on every wake, and re-attaching after the tailer went away would replay
 // the whole backlog a second time -- duplicating exactly the history this
 // route now exists to deliver once.
 type uiLogSource struct {
-	stream string
-	file   string
-	tail   *tailed_file.ReplayTail
-	done   bool
+	// stream is the badge every line from this file gets. Empty for the
+	// combined record, whose lines each carry their own.
+	stream   string
+	file     string
+	combined bool
+	tail     *tailed_file.ReplayTail
+	done     bool
 }
 
 // lines is the channel to select on, or nil when there is nothing to read
 // from. A nil channel blocks forever, which is what a select wants for an
-// absent case.
+// absent case -- including the second slot in combined mode, where there
+// is no second file.
 func (u *uiLogSource) lines() <-chan string {
-	if u.tail == nil || u.done {
+	if u == nil || u.tail == nil || u.done {
 		return nil
 	}
 	return u.tail.Lines
 }
 
 func (u *uiLogSource) stop() {
-	if u.tail != nil {
+	if u != nil && u.tail != nil {
 		u.tail.Stop()
 	}
 }
 
-// uiTaskLogStream answers GET /ui/sse/tasks/:id/log: both of a running
-// task's log files as `message` SSE frames carrying one pre-rendered line
-// each -- the output already on disk when the client connected, then
-// everything written after it, interleaved in arrival order.
+// render turns one line of this source into the fragment the pane
+// appends. ok is false for a combined record that couldn't be parsed --
+// skipped rather than shown raw, since the alternative is printing a
+// line of JSON into someone's log pane.
+func (u *uiLogSource) render(line string) (string, bool) {
+	if !u.combined {
+		return renderLogLineHTML(u.stream, line), true
+	}
+	rec, ok := combined_log.ParseRecord(line)
+	if !ok {
+		return "", false
+	}
+	return renderLogLineHTML(rec.Stream, rec.Line), true
+}
+
+// uiTaskLogStream answers GET /ui/sse/tasks/:id/log: a running task's
+// output as `message` SSE frames carrying one pre-rendered line each --
+// what was already on disk when the client connected, then everything
+// written after it, all of it in the order the task produced it.
 //
 // This is the UI's counterpart to the structured NDJSON stream (whose log
 // events carry the same stdout/stderr discriminator as a JSON field). The
@@ -311,12 +420,22 @@ func (u *uiLogSource) stop() {
 // point of this UI is that there isn't one -- so the discriminator is
 // rendered server-side into a badge instead.
 //
-// The backlog is replayed as a stdout block and then a stderr block. The
-// two files carry no shared ordering once written -- there is no recorded
-// interleaving to recover, only two independent byte streams -- so
-// grouping is the honest rendering, and it is the same grouping a finished
-// task's pane uses. Only lines that arrive while the client is connected
-// have an ordering worth showing, and those are interleaved as they come.
+// It follows *one* file when it can: the worker's combined record
+// (lib/combined_log), which already holds both streams interleaved in
+// arrival order, each line tagged. That is what makes replayed history
+// and live output look the same -- the review finding this route was
+// fixed for a second time. Before it existed there was nothing on disk
+// that recorded the interleaving, so the replay could only be a stdout
+// block followed by a stderr block while live lines arrived mixed, and
+// the same output read differently depending on when you looked.
+//
+// A task with no combined record -- run before turtlemonvh/blanket#104,
+// or by a worker with `workers.combinedLog = false` -- falls back to
+// following the two per-stream files and replaying them grouped, which
+// is all their contents can honestly support. Which shape applies is
+// decided once, on the first attach that finds a file: the worker
+// creates the combined record before the two per-stream ones, so "the
+// files exist but the combined one doesn't" means it is never coming.
 //
 // The replay comes from tailed_file.ReplayAndFollow, which reads the file
 // itself and starts its tailer at the byte offset the read stopped at, so
@@ -324,9 +443,9 @@ func (u *uiLogSource) stop() {
 // tailed_file.Follow: a TailedFile is shared between subscribers, and what
 // history a late subscriber gets is an accident of who else is already
 // watching (see the comment on ReplayAndFollow). That accident is the bug
-// this route had -- toggling stdout / stderr / both keeps both files warm,
-// so coming back to the combined view replayed a ring buffer's worth of
-// stderr, or none at all.
+// this route had first -- toggling stdout / stderr / both keeps both files
+// warm, so coming back to the combined view replayed a ring buffer's worth
+// of stderr, or none at all.
 //
 // Otherwise shaped like streamLog (serve_logs.go): same idle window, same
 // shutdown frame, same "stop once the task is terminal and the lines have
@@ -342,16 +461,21 @@ func (s *ServerConfig) uiTaskLogStream(c *gin.Context) {
 		return
 	}
 
-	// Ordered: stdout's backlog is replayed before stderr's.
-	sources := []*uiLogSource{
-		{stream: LogStreamStdout, file: TaskStdoutLogFile},
-		{stream: LogStreamStderr, file: TaskStderrLogFile},
-	}
+	combined := &uiLogSource{file: TaskCombinedLogFile, combined: true}
+	// The fallback pair, replayed stdout-block-then-stderr-block.
+	stdout := &uiLogSource{stream: LogStreamStdout, file: TaskStdoutLogFile}
+	stderr := &uiLogSource{stream: LogStreamStderr, file: TaskStderrLogFile}
 	defer func() {
-		for _, src := range sources {
+		for _, src := range []*uiLogSource{combined, stdout, stderr} {
 			src.stop()
 		}
 	}()
+
+	// The two slots the select below reads from. Which sources fill them
+	// is decided on the first attach that finds anything: `a` alone in
+	// combined mode, both in the fallback. Nil until then, and a nil
+	// source's channel is nil, which a select simply never picks.
+	var a, b *uiLogSource
 
 	shutdown := s.shutdownChan()
 	mult := s.timeMultiplier()
@@ -368,10 +492,11 @@ func (s *ServerConfig) uiTaskLogStream(c *gin.Context) {
 		})
 	}
 
-	// The worker creates both files in SetupExecutionDirectory, so a task
-	// that hasn't been claimed yet has neither: attaching is retried on
-	// every wake until it works, exactly as the structured stream does.
-	// A file's backlog goes out the moment that file attaches.
+	// The worker creates the log files in SetupExecutionDirectory, so a
+	// task that hasn't been claimed yet has none of them: attaching is
+	// retried on every wake until it works, exactly as the structured
+	// stream does. A file's backlog goes out the moment that file
+	// attaches.
 	attach := func() bool {
 		cur, err := s.DB.GetTask(taskId)
 		if err != nil {
@@ -379,14 +504,18 @@ func (s *ServerConfig) uiTaskLogStream(c *gin.Context) {
 		}
 		if tailAttachable(cur.State) {
 			replayed := false
-			for _, src := range sources {
+			// open attaches one source and replays its history, and
+			// reports whether it is now attached. Already-attached and
+			// finished sources are left alone: re-opening one would
+			// replay its whole backlog a second time.
+			open := func(src *uiLogSource) bool {
 				if src.tail != nil || src.done {
-					continue
+					return false
 				}
 				rt, terr := tailed_file.ReplayAndFollow(
 					path.Join(cur.ResultDir, src.file), uiLogHistoryLines)
 				if terr != nil {
-					continue
+					return false
 				}
 				src.tail = rt
 				if rt.Truncated {
@@ -394,10 +523,31 @@ func (s *ServerConfig) uiTaskLogStream(c *gin.Context) {
 					replayed = true
 				}
 				for _, line := range rt.History {
-					emit(renderLogLineHTML(src.stream, line))
-					replayed = true
+					if html, ok := src.render(line); ok {
+						emit(html)
+						replayed = true
+					}
 				}
+				return true
 			}
+
+			switch {
+			case a == nil:
+				// Undecided. The combined record wins when it is there,
+				// and it is created first, so its absence next to a
+				// present blanket.stdout.log is conclusive.
+				if open(combined) {
+					a = combined
+				} else if openedOut, openedErr := open(stdout), open(stderr); openedOut || openedErr {
+					a, b = stdout, stderr
+				}
+			case a == stdout:
+				// Fallback mode, and one of the pair may still be
+				// missing (a task that has only created one of them yet).
+				open(stdout)
+				open(stderr)
+			}
+
 			// Push the backlog out now. c.Stream only flushes once its
 			// step returns, and this step is about to block for a whole
 			// idle window waiting for a live line -- on a quiet task that
@@ -411,8 +561,6 @@ func (s *ServerConfig) uiTaskLogStream(c *gin.Context) {
 		return tasks.IsTerminalState(cur.State)
 	}
 
-	stdout, stderr := sources[0], sources[1]
-
 	c.Stream(func(w io.Writer) bool {
 		terminal := attach()
 
@@ -424,19 +572,23 @@ func (s *ServerConfig) uiTaskLogStream(c *gin.Context) {
 			c.Writer.Header()["Content-Type"] = []string{ContentTypeSSE}
 			writeServerRestarting(w)
 			return false
-		case line, ok := <-stdout.lines():
+		case line, ok := <-a.lines():
 			if !ok {
-				stdout.done = true
+				a.done = true
 				return true
 			}
-			emit(renderLogLineHTML(stdout.stream, line))
+			if html, rendered := a.render(line); rendered {
+				emit(html)
+			}
 			return true
-		case line, ok := <-stderr.lines():
+		case line, ok := <-b.lines():
 			if !ok {
-				stderr.done = true
+				b.done = true
 				return true
 			}
-			emit(renderLogLineHTML(stderr.stream, line))
+			if html, rendered := b.render(line); rendered {
+				emit(html)
+			}
 			return true
 		case <-timer.C:
 			// Nothing arrived for a full idle window. If the task is done

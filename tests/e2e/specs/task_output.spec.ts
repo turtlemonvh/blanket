@@ -23,6 +23,33 @@ const STDOUT = 'stdout line one\nstdout line two\n';
 const STDERR = 'stderr line one\n';
 const RESULT = '{"answer": 42, "label": "from the fixture"}';
 
+/**
+ * The worker's combined record of how a task's two streams interleaved
+ * (blanket.combined.ndjson, turtlemonvh/blanket#104): one JSON object per
+ * line of output, in the order it was produced. The `both` log view reads
+ * this when it is there, which is what lets history show real time order
+ * instead of a stdout block followed by a stderr block.
+ *
+ * Deliberately not the order a merge of the two files would produce --
+ * stderr's line sits *between* stdout's two, so grouping and interleaving
+ * are distinguishable in the assertions below.
+ */
+const COMBINED_ENTRIES: Array<[string, string]> = [
+  ['stdout', 'stdout line one'],
+  ['stderr', 'stderr line one'],
+  ['stdout', 'stdout line two'],
+];
+
+function combinedLog(entries: Array<[string, string]>): string {
+  const seq: Record<string, number> = { stdout: 0, stderr: 0 };
+  return entries
+    .map(([stream, line]) => {
+      seq[stream] += 1;
+      return JSON.stringify({ ts: Date.now(), stream, seq: seq[stream], line });
+    })
+    .join('\n') + '\n';
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -53,6 +80,7 @@ async function seedFinishedTask(
     exitCode?: number;
     stdout?: string;
     stderr?: string;
+    combined?: string;
     result?: string;
   },
 ): Promise<string> {
@@ -64,6 +92,12 @@ async function seedFinishedTask(
   }
   if (opts.stderr !== undefined) {
     multipart['blanket.stderr.log'] = textFile('blanket.stderr.log', opts.stderr);
+  }
+  if (opts.combined !== undefined) {
+    multipart['blanket.combined.ndjson'] = textFile(
+      'blanket.combined.ndjson',
+      opts.combined,
+    );
   }
   if (opts.result !== undefined) {
     multipart['result.json'] = textFile('result.json', opts.result);
@@ -258,6 +292,37 @@ test.describe('Log view toggle', () => {
     await expect(logPane(page)).not.toContainText('stderr line one');
   });
 
+  test('the both view of a finished task is in time order', async ({
+    page,
+    request,
+  }) => {
+    const id = await seedFinishedTask(request, {
+      type: 'echo_task',
+      state: 'SUCCESS',
+      exitCode: 0,
+      stdout: STDOUT,
+      stderr: STDERR,
+      combined: combinedLog(COMBINED_ENTRIES),
+    });
+
+    await page.goto(`/ui/tasks/${id}`);
+    await logToggle(page, 'both').click();
+
+    // The stored pane reads the same record the live stream replays, so a
+    // task looks the same after it ends as it did while running.
+    await expect(logPane(page).locator('.log-line')).toHaveText([
+      /stdout\s*stdout line one/,
+      /stderr\s*stderr line one/,
+      /stdout\s*stdout line two/,
+    ]);
+    await expect(page.getByText('stdout first, then stderr')).toHaveCount(0);
+
+    // The raw record is linked from the metadata table.
+    await expect(
+      page.getByRole('link', { name: 'blanket.combined.ndjson' }),
+    ).toBeVisible();
+  });
+
   test('a stream the task never wrote to says so', async ({ page, request }) => {
     const id = await seedFinishedTask(request, {
       type: 'echo_task',
@@ -283,7 +348,7 @@ test.describe('Log view toggle', () => {
  */
 async function seedRunningTask(
   apiRequest: Api,
-  opts: { stdout: string; stderr: string },
+  opts: { stdout: string; stderr: string; combined?: string },
 ): Promise<{ id: string; workerId: string }> {
   const workerId = require('crypto').randomBytes(12).toString('hex');
   const registered = await apiRequest.put(`/worker/${workerId}`, {
@@ -299,13 +364,19 @@ async function seedRunningTask(
   });
   expect(registered.status()).toBe(200);
 
-  const created = await apiRequest.post('/task/', {
-    multipart: {
-      data: JSON.stringify({ type: 'echo_task' }),
-      'blanket.stdout.log': textFile('blanket.stdout.log', opts.stdout),
-      'blanket.stderr.log': textFile('blanket.stderr.log', opts.stderr),
-    } as never,
-  });
+  const runningFiles: Record<string, unknown> = {
+    data: JSON.stringify({ type: 'echo_task' }),
+    'blanket.stdout.log': textFile('blanket.stdout.log', opts.stdout),
+    'blanket.stderr.log': textFile('blanket.stderr.log', opts.stderr),
+  };
+  if (opts.combined !== undefined) {
+    runningFiles['blanket.combined.ndjson'] = textFile(
+      'blanket.combined.ndjson',
+      opts.combined,
+    );
+  }
+
+  const created = await apiRequest.post('/task/', { multipart: runningFiles as never });
   expect(created.status()).toBe(201);
   const id = (await created.json()).id as string;
 
@@ -349,14 +420,20 @@ test.describe('Log view toggle on a running task', () => {
 
   // The regression from the #104 review: sitting on `both` filled the pane,
   // but the history was lost every time you navigated away and back -- the
-  // combined stream started tailing from wherever the two files happened to
-  // be rather than replaying what they already held. It now replays both
-  // files on connect, so coming back shows what staying put would have.
+  // combined stream started tailing from wherever the files happened to be
+  // rather than replaying what they already held. It now replays on
+  // connect, so coming back shows what staying put would have -- and, per
+  // the follow-up review, in the order the task produced it rather than
+  // grouped by stream.
   test('coming back to both still shows the stderr history', async ({
     page,
     request,
   }) => {
-    const seeded = await seedRunningTask(request, { stdout: STDOUT, stderr: STDERR });
+    const seeded = await seedRunningTask(request, {
+      stdout: STDOUT,
+      stderr: STDERR,
+      combined: combinedLog(COMBINED_ENTRIES),
+    });
     workerId = seeded.workerId;
 
     await page.goto(`/ui/tasks/${seeded.id}`);
@@ -402,5 +479,37 @@ test.describe('Log view toggle on a running task', () => {
     await expect(
       logPane(page).locator('.log-line', { hasText: 'stdout line two' }),
     ).toHaveCount(1);
+
+    // ...and in time order: the stderr line was produced between the two
+    // stdout lines, so it renders between them. Grouped history -- what
+    // this view used to replay -- would put it last.
+    await expect(logPane(page).locator('.log-line')).toHaveText([
+      /stdout\s*stdout line one/,
+      /stderr\s*stderr line one/,
+      /stdout\s*stdout line two/,
+    ]);
+    // Nothing to apologise for, so no note about grouping.
+    await expect(page.getByText('stdout first, then stderr')).toHaveCount(0);
+  });
+
+  // A task whose worker never wrote a combined record -- one that ran
+  // before turtlemonvh/blanket#104, or under `workers.combinedLog = false`
+  // -- still gets its history, grouped, and says so.
+  test('without a combined record the history is grouped and labelled', async ({
+    page,
+    request,
+  }) => {
+    const seeded = await seedRunningTask(request, { stdout: STDOUT, stderr: STDERR });
+    workerId = seeded.workerId;
+
+    await page.goto(`/ui/tasks/${seeded.id}`);
+    await logToggle(page, 'both').click();
+
+    await expect(logPane(page).locator('.log-line')).toHaveText([
+      /stdout\s*stdout line one/,
+      /stdout\s*stdout line two/,
+      /stderr\s*stderr line one/,
+    ]);
+    await expect(page.getByText('stdout first, then stderr')).toBeVisible();
   });
 });

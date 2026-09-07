@@ -30,12 +30,17 @@ stdout", so the default view is not merely equivalent but identical.
     </label>
 </div>
 
+{{/*
+The grouped note is the fallback case only: a task whose worker recorded
+how its two streams interleaved (blanket.combined.ndjson) shows real time
+order and says nothing, because there is nothing to warn about.
+*/}}
 {{if .Grouped}}
 <p class="muted log-note">
-    stdout first, then stderr: the two files carry no shared ordering once
-    written, so output already recorded when this view opened is grouped by
-    stream.{{if .Live}} Lines arriving from now on are interleaved as they
-    arrive.{{end}}
+    stdout first, then stderr: this task has no combined record of how its
+    two streams interleaved, so output already recorded when this view
+    opened is grouped by stream.{{if .Live}} Lines arriving from now on are
+    interleaved as they arrive.{{end}}
 </p>
 {{end}}
 

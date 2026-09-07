@@ -57,6 +57,21 @@ func InitializeConfig() {
 	// FIXME: Why is this a slice? It makes sending a target result dir to a client pretty tough.
 	viper.SetDefault("tasks.resultsPath", []string{"results"})
 	viper.SetDefault("workers.logfileNameTemplate", "worker.{{.Id.Hex}}.log")
+
+	// Whether a worker records how a task's two output streams
+	// interleaved, as blanket.combined.ndjson in the result dir
+	// (turtlemonvh/blanket#104). On by default: it is what lets the UI's
+	// combined log view show a finished task's output in the order it
+	// was produced rather than grouped by stream.
+	//
+	// Turning it off restores the pre-#104 execution shape exactly --
+	// the child writes straight into blanket.stdout.log /
+	// blanket.stderr.log with no pipe and no worker in between. The
+	// reason to want that: with a pipe, a task that backgrounds a
+	// process and exits has its output closed a couple of seconds later
+	// (worker.childWaitDelay), where before the orphan could keep
+	// writing into the log file indefinitely.
+	viper.SetDefault("workers.combinedLog", true)
 	viper.SetDefault("mcp.enabled", true)
 	viper.SetDefault("mcp.mode", "all")
 	viper.SetDefault("mcp.writeTypesPath", "")

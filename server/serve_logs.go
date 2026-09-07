@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/manucorporat/sse"
+	"github.com/turtlemonvh/blanket/lib/combined_log"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 )
 
@@ -147,6 +148,16 @@ func tailLinesTruncated(filepath string, n int) (string, bool, error) {
 const (
 	TaskStdoutLogFile = "blanket.stdout.log"
 	TaskStderrLogFile = "blanket.stderr.log"
+
+	// TaskCombinedLogFile is the worker's record of how the two streams
+	// above interleaved: one NDJSON line per line of output, in arrival
+	// order, tagged with the stream it came from (lib/combined_log). It
+	// is the only thing on disk that carries that ordering -- the two
+	// per-stream files can't -- so the UI's combined log view reads it
+	// when it is there and falls back to grouping the two files when it
+	// isn't (a task run by a worker older than turtlemonvh/blanket#104,
+	// or one with `workers.combinedLog = false`).
+	TaskCombinedLogFile = combined_log.FileName
 )
 
 // rawLogStreamFor resolves the `?stream=` parameter shared by
