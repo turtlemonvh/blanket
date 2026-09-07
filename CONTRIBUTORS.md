@@ -186,6 +186,34 @@ path with a comment explaining why; never a blanket `--ignore` that
 could silently wave through something that isn't actually allowed. See
 issue #131 for the original audit and #143 for the CI gate.
 
+### Vulnerability scanning and SBOM
+
+`.github/workflows/vuln.yml` (issue #144, decisions on #131) runs weekly
+(Monday 03:17 UTC), on `workflow_dispatch`, and on any PR/push touching
+`go.mod`, `go.sum`, or `tests/e2e/package-lock.json`:
+
+- **`govulncheck`** (pinned via `go run golang.org/x/vuln/cmd/govulncheck@<tag>`
+  — pick the tag from `go list -m -versions golang.org/x/vuln`, not
+  golang/vuln's GitHub Releases page, which stopped publishing releases
+  after v1.1.4 even though the module keeps tagging new versions):
+  call-graph-aware Go stdlib and module vulnerability scanning.
+- **`syft`** generates an SPDX JSON SBOM of the repo (Go modules plus
+  `tests/e2e/package-lock.json`), then **`grype`** scans that SBOM. This
+  is what adds npm coverage govulncheck can't see — grype scans across
+  ecosystems, govulncheck only sees Go.
+- Both steps are **advisory**: `continue-on-error: true` on the job
+  (same posture as `race` above — promote once quiet for a while) and
+  grype runs with `fail-build: false`, so a finding never blocks a PR or
+  merge.
+- **Caveat that matters when reading a red run:** the e2e npm
+  dependencies and the Docker toolchain image used to build blanket
+  never ship inside the released binary. Findings scoped to those are
+  dev-environment signal, not a reason to scramble — see the dependency
+  audit issue #131 for the full reasoning.
+- The SBOM and the grype report are uploaded as workflow artifacts
+  (30-day retention); find them on the run's Summary page under
+  Artifacts.
+
 ## Vendored third-party code
 
 `lib/tomb/` is a verbatim copy of `gopkg.in/tomb.v1` (BSD-3-Clause, one
@@ -230,6 +258,11 @@ resolve to it (#147). It is a nested module: run its tests with
      `blanket-windows-amd64.exe`
    - Attaches `SHA256SUMS` over those three
    - Attaches `blanket-bundle-<tag>.tar.gz`
+   - Generates an SPDX JSON SBOM via `syft` (reading Go build info out of
+     `blanket-linux-amd64`, so it lists exactly the modules linked into
+     the release build) and attaches it as `blanket-<tag>.spdx.json`
+     (#144). It's a separate asset, not folded into `SHA256SUMS` — see
+     the load-bearing note on `SHA256SUMS` below.
 
 `make docker-release` is `docker-build` plus `make checksums bundle`
 (`scripts/bundle.sh`), so a maintainer can produce byte-identical
@@ -429,6 +462,29 @@ pinned issue named by `summary_issue` (#121). That issue is a standing
 log: it stays open, is never assigned, and is the one exception to the
 "exactly one `status:` label" state machine below — it just carries
 `status: in-progress` so audits don't flag it.
+
+### Dependabot
+
+`.github/dependabot.yml` (#145) opens weekly PRs for three ecosystems —
+`gomod`, `github-actions`, and `npm` (`tests/e2e`). Patch and minor
+bumps are grouped per ecosystem into a single PR and are treated as
+`autonomy: ship-to-merge` + `risk: low`: merge on green CI, no per-PR
+label needed. Major bumps are left ungrouped (one PR each) and stay
+`pr-only`, since they can carry API breaks CI may not exercise — not
+for supply-chain reasons.
+
+The supply-chain controls, in place of per-PR manual review (which
+would not catch a compromised release either): each ecosystem's
+`cooldown: default-days: 7` so a version has been public a week before
+Dependabot proposes it (security-advisory updates bypass cooldown by
+design); the weekly govulncheck/grype job (#144) catching disclosures
+after the fact; Go's checksum database (`go.sum` / sum.golang.org)
+making tampering with an already-published version detectable; and
+every GitHub Action in `.github/workflows/*.yml` pinned to a commit SHA
+with its tag as a trailing comment (`uses: actions/checkout@<sha> #
+v4.4.0`) — Dependabot's `github-actions` ecosystem proposes the SHA
+bump when a pinned action moves, keeping the pins current without
+manual lookups.
 
 ### Ownership: assignee = whose turn
 
