@@ -66,6 +66,34 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  # Race detector over the packages listed in the Makefile's test-race
+  # target (turtlemonvh/blanket#119). Not yet a required check:
+  # continue-on-error so a red run is informational rather than blocking,
+  # the same posture the `windows` job started with. Promote this to
+  # required (drop continue-on-error, add to branch protection) once it's
+  # been green for a week -- long enough to catch a flake pattern before
+  # it starts blocking every PR.
+  race:
+    name: race
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build toolchain image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          tags: blanket-dev:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Go tests (race detector)
+        run: make docker-test-race
+
   # Native windows-latest job (issue #79). Unlike `test`, this doesn't use
   # Docker (Docker/Playwright on Windows runners is out of scope per the
   # issue discussion) — it builds the binary directly with the Go
