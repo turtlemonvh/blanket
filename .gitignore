@@ -15,7 +15,8 @@ tests/e2e/blanket.db
 tests/e2e/playwright-report
 
 # Per-developer Claude Code state — settings, scheduled-task locks, etc.
-# stays ignored; committed skills under .claude/skills/ are the exception.
+# stays ignored; committed skills under .claude/skills/ and the night-crew
+# loop config are the exceptions.
 .claude/*
 !.claude/skills/
-
+!.claude/night-crew.json
