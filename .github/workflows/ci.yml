@@ -28,15 +28,20 @@ concurrency:
 # ~215s. That is roughly -25 to -30%, not the halving a first reading of the
 # step times suggests -- see the caveat below. #155 has the breakdown.
 #
-# The caveat, because it is easy to re-derive the wrong number from these
-# steps: serially, the four targets shared a warm Go build cache through the
-# blanket-dev-cache volume, so docker-test-smoke and docker-test-browser each
-# ran `make linux` against an already-populated GOCACHE. Fanned out, every job
-# starts cold and recompiles, which roughly doubles the smoke and browser
-# steps. Parallelism still wins, but it gives back a real share of the gain.
-# Restoring that shared cache across jobs (actions/cache over the Go build
-# cache, rather than a docker named volume that dies with its runner) is the
-# obvious next step and would speed up the serial path too.
+# One effect of the split is worth knowing about, because the step times
+# otherwise invite the wrong conclusion: serially, the four targets shared a
+# warm Go build cache through the blanket-dev-cache volume, so
+# docker-test-smoke and docker-test-browser each ran `make linux` against an
+# already-populated GOCACHE. Fanned out, every job gets its own runner and its
+# own cold volume, and all of them recompile the same packages -- which very
+# nearly cancelled the parallelism win.
+#
+# That is what ./.github/actions/go-build-cache exists to fix: GOCACHE moves
+# onto a host path actions/cache carries between jobs and between runs.
+# Measured locally, cold vs warm: docker-test 73s -> 38s, docker-test-smoke
+# 75s -> 50s, docker-test-browser 82s -> 66s. Note the cache is populated by
+# the *previous* run (the writer saves after its siblings have already
+# started), so the first run after a go.mod/go.sum change sees no benefit.
 #
 # The second benefit is diagnostic: a red `browser` next to a green `unit`
 # says what broke without opening a log, and one surface failing no longer
@@ -68,8 +73,20 @@ jobs:
         with:
           cache-to: type=gha,mode=max
 
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
+
       - name: Go tests
-        run: make docker-test
+        run: make docker-test GO_BUILD_CACHE="${{ steps.gocache.outputs.path }}"
+
+      # The one job that publishes the build cache, for the same reason it is
+      # the one that exports docker layers. `always()` so a failing test run
+      # still leaves a warm cache behind -- the compile it did is valid work
+      # regardless of whether the assertions passed.
+      - uses: ./.github/actions/go-build-cache
+        if: always()
+        with:
+          mode: save
 
   smoke:
     name: smoke
@@ -77,11 +94,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/toolchain-image
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
       # docker-test-smoke chains smoke + restart + migrate + restart-machine
       # + upgrade — all of them cross-process tests against the built binary.
       # See the Makefile for why each one cannot be a Go test.
       - name: Smoke test
-        run: make docker-test-smoke
+        run: make docker-test-smoke GO_BUILD_CACHE="${{ steps.gocache.outputs.path }}"
 
   browser:
     name: browser
@@ -89,8 +108,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/toolchain-image
+      - uses: ./.github/actions/go-build-cache
+        id: gocache
       - name: Browser tests
-        run: make docker-test-browser
+        run: make docker-test-browser GO_BUILD_CACHE="${{ steps.gocache.outputs.path }}"
 
       # Playwright's `html` reporter writes to tests/e2e/playwright-report/
       # by default (see tests/e2e/playwright.config.ts). Surface it as a
@@ -168,6 +189,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/toolchain-image
+      # Deliberately no go-build-cache here. `-race` compiles into a separate
+      # GOCACHE namespace, and the only job that saves a cache (`unit`) builds
+      # without it, so this job would download ~300MB of entries it cannot
+      # use. Worth revisiting only if race gets its own saved cache.
       - name: Go tests (race detector)
         run: make docker-test-race
 

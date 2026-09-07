@@ -180,10 +180,33 @@ DOCKER_IMAGE ?= blanket-dev:latest
 # populates a named volume from the image layer on first use, so subsequent
 # runs reuse it. If you bump tests/e2e/package-lock.json, run
 # `make docker-clean` to drop the stale volume.
+#
+# GO_BUILD_CACHE — optional host directory for the Go *build* cache
+# (turtlemonvh/blanket#155). Unset (the default) it stays in the
+# blanket-dev-cache volume, which is what you want locally: it persists
+# between runs on the same machine with nothing to configure.
+#
+# CI is the case it exists for. Each fanned-out job in ci.yml gets its own
+# runner, so the named volume is always cold and every job recompiles the
+# same packages — the cost that fan-out otherwise pays for parallelism. Point
+# this at a directory `actions/cache` restores and saves, and the compile is
+# shared across jobs and across runs instead.
+#
+# Only the *build* cache moves. The module cache stays in the named volume
+# because Docker populates that from the image's `go mod download` layer on
+# first use — bind-mounting over /go would shadow the pre-warm and make a
+# cold run slower, exactly the trap the node_modules volume above exists to
+# avoid.
+GO_BUILD_CACHE ?=
+ifneq ($(GO_BUILD_CACHE),)
+GO_BUILD_CACHE_MOUNT = -v $(abspath $(GO_BUILD_CACHE)):/gocache -e GOCACHE=/gocache
+endif
+
 DOCKER_RUN = docker run --rm \
 	-v $(CURDIR):/src \
 	-v blanket-dev-cache:/go \
 	-v blanket-npm-cache:/src/tests/e2e/node_modules \
+	$(GO_BUILD_CACHE_MOUNT) \
 	-w /src \
 	$(DOCKER_IMAGE)
 

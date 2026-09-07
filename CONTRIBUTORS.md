@@ -123,16 +123,28 @@ header comment.
   and unmetered. Total runner minutes go up (~10 → ~17 per run); wall
   clock goes down. On a public repo that is the right trade.
 
-  One cost is worth knowing before you tune these further: serially,
-  the four targets shared a warm Go build cache via the
-  `blanket-dev-cache` volume, so `docker-test-smoke` and
+  One effect of the split is worth understanding before tuning these
+  further. Serially, the four targets shared a warm Go build cache via
+  the `blanket-dev-cache` volume, so `docker-test-smoke` and
   `docker-test-browser` each ran `make linux` against a populated
-  `GOCACHE`. Fanned out, each job starts cold, which roughly doubles
-  the smoke and browser steps. Parallelism still wins overall, but
-  sharing that cache across jobs (`actions/cache` over the Go build
-  cache, instead of a docker named volume that dies with its runner)
-  would recover most of the difference and would speed the serial path
-  too.
+  `GOCACHE`. Fanned out, each job gets its own runner and its own cold
+  volume, and every one of them recompiles the same packages — which
+  very nearly cancelled the parallelism win.
+
+  `.github/actions/go-build-cache` is the fix: it moves `GOCACHE` onto
+  a host path that `actions/cache` carries between jobs and between
+  runs, via the Makefile's `GO_BUILD_CACHE` variable. Measured locally,
+  cold vs warm: `docker-test` 73s → 38s, `docker-test-smoke` 75s → 50s,
+  `docker-test-browser` 82s → 66s. Only `unit` saves the cache, for the
+  same reason only `unit` exports docker layers. The cache a job
+  restores comes from the *previous* run, so the first run after a
+  `go.mod`/`go.sum` change gets no benefit. `race` deliberately opts
+  out — `-race` compiles into a separate `GOCACHE` namespace, so it
+  would download entries it cannot use.
+
+  Locally you need none of this: leave `GO_BUILD_CACHE` unset and the
+  build cache stays in the `blanket-dev-cache` volume, which already
+  persists between runs on your machine.
 
   Exactly one of them (`unit`) passes `cache-to` to the composite
   action and so publishes layers back to the GHA cache; the rest read
