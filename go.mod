@@ -74,3 +74,5 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/fsnotify.v1 v1.4.7 // indirect
 )
+
+replace gopkg.in/tomb.v1 => ./lib/tomb

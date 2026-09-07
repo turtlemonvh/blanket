@@ -99,6 +99,15 @@ test-migrate:
 test-restart-machine:
 	bash scripts/restart_machine.sh
 
+# Dependency license gate (turtlemonvh/blanket#143, following the audit in
+# #131): `go-licenses check` against an explicit allowlist, plus a CSV
+# `go-licenses report` of every dependency's detected license. The
+# allowlist itself lives in scripts/licenses.sh, not here, so there's one
+# place to read or update the policy -- see CONTRIBUTORS.md's "Dependency
+# licenses" section.
+licenses:
+	bash scripts/licenses.sh
+
 # SHA256SUMS over the cross-compiled binaries, and the offline bundle
 # (turtlemonvh/blanket#23 phase 6). The release workflow runs both after
 # `make docker-build`; run them locally the same way, because a release
@@ -199,6 +208,15 @@ docker-test-smoke: docker-image
 docker-build: docker-image
 	$(DOCKER_RUN) make linux darwin windows VERSION=$(VERSION)
 
+# Same license gate as `make licenses`, run inside the toolchain image --
+# useful if your host Go install doesn't match go.mod's pinned toolchain.
+# CI itself doesn't use this: the licenses.yml workflow runs `make
+# licenses` directly on a `setup-go`-provisioned runner rather than paying
+# for a full image build on a job that fires rarely (path-gated to
+# go.mod/go.sum changes).
+docker-licenses: docker-image
+	$(DOCKER_RUN) make licenses
+
 # Everything a release attaches: the three binaries, SHA256SUMS over them,
 # and the offline bundle. Same image CI uses, so `make docker-release
 # VERSION=v0.5.0` locally produces byte-identical checksums to the tag.
@@ -220,4 +238,4 @@ docker-shell: docker-image
 docker-clean:
 	-docker volume rm blanket-dev-cache blanket-npm-cache
 
-.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine test-upgrade checksums bundle install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-release docker-shell docker-clean
+.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine test-upgrade checksums bundle install-playwright vet fmt check-fmt clean licenses docker-image docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-release docker-shell docker-clean docker-licenses
