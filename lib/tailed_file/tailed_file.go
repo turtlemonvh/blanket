@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -35,14 +36,34 @@ type TailedFileSubscriber struct {
 	TailedFile *TailedFile
 }
 
-// Use the mutex to guard access to FileOffset, Subscribers
+// Use the mutex to guard access to FileOffset, Subscribers.
+//
+// subscriberCount mirrors len(Subscribers) but is read/written with
+// sync/atomic instead of tf's mutex -- deliberately, not just as an
+// optimization. The tailer goroutine below (StartTailedFile's inner func)
+// holds tf.Lock() for the entire fan-out to subscriber channels, including
+// the blocking send itself (subscriber channels are unbuffered until a
+// caller has backfilled past lines into them). A reader that needs the
+// subscriber count -- GetSubscriberCount, called from the cleanup
+// goroutine's gauge update on every 2s tick, and StopIfNoSubscribers --
+// must not take tf.Lock() to get it: if it did, and it ran while the
+// tailer goroutine was mid-send waiting on a slow/absent receiver, the two
+// would deadlock (the reader blocked on the lock the tailer holds, the
+// tailer blocked on a channel only that same reader's goroutine drains).
+// This isn't hypothetical -- it reproduced as a hang in
+// TestStreamLogSingleSub during turtlemonvh/blanket#119 once
+// GetSubscriberCount started taking tf.Lock(). The atomic counter sidesteps
+// it entirely: readers never need the lock, so they can never queue behind
+// a blocked send. See the writers (Subscribe, Stop, TailedFileSubscriber.Stop)
+// for where it's kept in sync with the map.
 type TailedFile struct {
-	Filepath       string
-	PastLines      []string
-	FileOffset     int64
-	Tailer         *tail.Tail
-	Subscribers    map[int64]*TailedFileSubscriber
-	FilesContainer *TailedFileCollection
+	Filepath        string
+	PastLines       []string
+	FileOffset      int64
+	Tailer          *tail.Tail
+	Subscribers     map[int64]*TailedFileSubscriber
+	FilesContainer  *TailedFileCollection
+	subscriberCount int64
 	sync.Mutex
 }
 
@@ -57,15 +78,27 @@ func init() {
 		for {
 			select {
 			case <-ticker.C:
-				// Update gauges
-				nTailedFiles.Set(int64(len(defaultTfc.fileList)))
-				nTailedFiles.Set(defaultTfc.GetSubscriberCount())
+				defaultTfc.updateGauges()
 			case <-quit:
 				ticker.Stop()
 				return
 			}
 		}
 	}()
+}
+
+// updateGauges refreshes the nTailedFiles/nTailedFileSubscribers expvars.
+// Pulled out of the init() ticker goroutine (rather than inlined) so a test
+// can invoke it directly against a concurrent workload instead of waiting on
+// the 2-second ticker to fire — see TestConcurrentCollectionAccessAgainstCleanup.
+//
+// Both fileCount and GetSubscriberCount take their own locks internally, so
+// this reads a consistent-enough snapshot without holding tfc's lock across
+// both calls (that would just widen the window another goroutine could be
+// blocked in, for gauges that are inherently a little stale anyway).
+func (tfc *TailedFileCollection) updateGauges() {
+	nTailedFiles.Set(tfc.fileCount())
+	nTailedFileSubscribers.Set(tfc.GetSubscriberCount())
 }
 
 /*
@@ -77,12 +110,27 @@ func NewTailedFileCollection() *TailedFileCollection {
 	}
 }
 
+// fileCount returns how many files are currently tailed, guarded by tfc's
+// lock so it's safe to call from the cleanup goroutine concurrently with
+// GetTailedFile/StopTailedFile/StopAll.
+func (tfc *TailedFileCollection) fileCount() int64 {
+	tfc.Lock()
+	defer tfc.Unlock()
+	return int64(len(tfc.fileList))
+}
+
 func (tfc *TailedFileCollection) GetSubscriberCount() int64 {
-	ntotal := 0
+	tfc.Lock()
+	defer tfc.Unlock()
+
+	// atomic.LoadInt64, not tf.Lock() -- see the subscriberCount comment on
+	// TailedFile for why taking tf's mutex here can deadlock against the
+	// tailer goroutine.
+	var ntotal int64
 	for _, tf := range tfc.fileList {
-		ntotal += len(tf.Subscribers)
+		ntotal += atomic.LoadInt64(&tf.subscriberCount)
 	}
-	return int64(ntotal)
+	return ntotal
 }
 
 func (tfc *TailedFileCollection) GetTailedFile(p string) (*TailedFile, error) {
@@ -266,13 +314,18 @@ func (tfc *TailedFileCollection) StopIfNoSubscribers(tf *TailedFile) {
 	// FIXME: Use timeMultiplier
 	time.Sleep(5 * time.Second)
 
-	// Checking without lock to prevent deadlock in delete operation
-	if len(tf.Subscribers) == 0 {
+	// atomic.LoadInt64, not tf.Lock() -- see the subscriberCount comment on
+	// TailedFile. This is still check-then-act (a subscriber can join
+	// between this read and StopTailedFile below), same as before the
+	// #119 fix -- only the read itself is now race-free.
+	subCount := atomic.LoadInt64(&tf.subscriberCount)
+
+	if subCount == 0 {
 		// Still no new subscribers
 		log.WithFields(log.Fields{
 			"file":              tf.Filepath,
-			"subs":              tf.Subscribers,
-			"filesInCollection": tf.FilesContainer.fileList,
+			"subs":              subCount,
+			"filesInCollection": tf.FilesContainer.fileCount(),
 		}).Info("stopping tailed file because no subscribers remain")
 		tfc.StopTailedFile(tf.Filepath)
 	}
@@ -299,14 +352,27 @@ func (tf *TailedFile) Stop() error {
 		delete(tf.Subscribers, sub.Id)
 		close(sub.NewLines)
 	}
+	atomic.StoreInt64(&tf.subscriberCount, 0)
 	return tf.Tailer.Stop()
 }
 
 // Return a channel that sends strings
 func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
-	// Buffer by the file offset so adding initial lines doesn't block
+	// Buffer by the file offset so adding initial lines doesn't block.
+	// Read FileOffset under tf's lock: the tailer goroutine in
+	// StartTailedFile mutates it under the same lock every time a line
+	// arrives, so reading it here unlocked would race with that write
+	// (turtlemonvh/blanket#119 -- this one surfaced via the server
+	// package's TestStreamTaskLog_StaysOpenUntilTerminal, which is a real
+	// concurrent Follow-while-tailing rather than the cleanup-goroutine
+	// races this issue started from, but the same fix applies: don't read
+	// a tf field the tailer writes without going through tf.Lock()).
+	tf.Lock()
+	bufSize := tf.FileOffset
+	tf.Unlock()
+
 	sub := &TailedFileSubscriber{
-		NewLines:   make(chan string, tf.FileOffset),
+		NewLines:   make(chan string, bufSize),
 		IsCaughtUp: false,
 		TailedFile: tf,
 	}
@@ -329,9 +395,10 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 			}
 		}
 		tf.Subscribers[sub.Id] = sub
+		atomic.AddInt64(&tf.subscriberCount, 1)
 
 		log.WithFields(log.Fields{
-			"subs":  tf.Subscribers,
+			"subs":  len(tf.Subscribers),
 			"subId": sub.Id,
 		}).Info("Subscribed")
 
@@ -365,9 +432,10 @@ func (tfs *TailedFileSubscriber) Stop() {
 	tfs.TailedFile.Lock()
 	defer tfs.TailedFile.Unlock()
 	delete(tfs.TailedFile.Subscribers, tfs.Id)
+	atomic.AddInt64(&tfs.TailedFile.subscriberCount, -1)
 	close(tfs.NewLines)
 	log.WithFields(log.Fields{
-		"subs":  tfs.TailedFile.Subscribers,
+		"subs":  len(tfs.TailedFile.Subscribers),
 		"subId": tfs.Id,
 	}).Info("Unsubscribed")
 
