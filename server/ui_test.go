@@ -1659,3 +1659,23 @@ func TestUI_TemplateCacheIsConcurrencySafe(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// turtlemonvh/blanket#126: the task-type link on a task's detail page
+// goes to the task type's UI page, not the JSON route.
+func TestUI_TaskDetail_LinksTaskTypeUIPage(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tmpl := createRecurringTemplate(t, r)
+	childId := seedChildRun(t, s, r, tmpl.Id)
+
+	w := getUI(r, "/ui/tasks/"+childId.Hex())
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, `href="/ui/task-types/`+tmpl.TypeId+`"`)
+	assert.NotContains(t, body, `href="/task_type/`+tmpl.TypeId+`"`,
+		"the task type link must open the UI page, not the JSON representation")
+}
