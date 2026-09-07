@@ -300,11 +300,22 @@ func (s *ServerConfig) startEventStream(c *gin.Context, framing string) *StreamE
  * The stream itself
  */
 
-// logTail is one attached tailed_file subscription plus the per-stream
+// logTail is one attached tailed_file.ReplayTail plus the per-stream
 // sequence counter for the events it produces.
+//
+// A ReplayTail rather than a shared tailed_file.Follow subscription
+// (turtlemonvh/blanket#123): Follow's history is whatever the file's
+// shared PastLines ring happens to hold, which depends on who else is
+// already tailing the same path -- cold, a subscriber gets the file from
+// the start (or DefaultFileOffset back); warm, only the ring's last 100
+// lines, however much more the file holds. ReplayAndFollow instead reads
+// its own history, capped at uiLogHistoryLines, and starts following
+// from the exact byte offset that read stopped at, so every connection
+// gets the same defined window and the seam neither drops nor repeats a
+// line.
 type logTail struct {
 	stream string
-	sub    *tailed_file.TailedFileSubscriber
+	rt     *tailed_file.ReplayTail
 	seq    int
 }
 
@@ -313,38 +324,29 @@ func (l *logTail) next() int {
 	return l.seq
 }
 
-// followTail attaches to one of the task's log files, or returns nil if
-// it isn't there yet -- the worker creates both files in
+// followTail opens a replay tail on one of the task's log files, or
+// returns nil if it isn't there yet -- the worker creates both files in
 // SetupExecutionDirectory, so a task that hasn't been claimed has
 // neither, and the caller simply retries on its next wake.
 func followTail(task tasks.Task, filename, stream string) *logTail {
-	sub, err := tailed_file.Follow(path.Join(task.ResultDir, filename))
+	rt, err := tailed_file.ReplayAndFollow(path.Join(task.ResultDir, filename), uiLogHistoryLines)
 	if err != nil {
 		return nil
 	}
-	return &logTail{stream: stream, sub: sub}
+	return &logTail{stream: stream, rt: rt}
 }
 
-// stopTail releases a tail subscription without deadlocking.
-//
-// The tailer goroutine sends to subscriber channels while holding the
-// TailedFile lock, and TailedFileSubscriber.Stop needs that same lock --
-// so a handler that stops reading and then unsubscribes can wedge the
-// tailer permanently. Draining the channel concurrently with Stop lets
-// any in-flight send complete; the drain then ends when Stop closes the
-// channel.
+// stopTail releases a tail. ReplayTail.Stop (lib/tailed_file/replay.go)
+// is already safe to call from a handler that has stopped reading
+// Lines -- its forwarding goroutine selects on its own done channel
+// rather than blocking on a send nobody will ever receive -- so, unlike
+// the tailed_file.TailedFileSubscriber this used to wrap, no drain
+// workaround is needed here.
 func stopTail(l *logTail) {
-	if l == nil || l.sub == nil {
+	if l == nil || l.rt == nil {
 		return
 	}
-	drained := make(chan struct{})
-	go func() {
-		for range l.sub.NewLines {
-		}
-		close(drained)
-	}()
-	l.sub.Stop()
-	<-drained
+	l.rt.Stop()
 }
 
 // tailAttachable reports whether the task has progressed far enough for
@@ -442,11 +444,31 @@ func (s *ServerConfig) runTaskEventStream(c *gin.Context, enc *StreamEncoder, ta
 			}
 
 			if tailAttachable(cur.State) {
+				// Replay each file's history as log events the moment it
+				// attaches -- stdout's block completes before stderr's
+				// even starts, matching the UI's grouped fallback view,
+				// and emitLog's seq counter simply keeps counting from
+				// there into the live lines that follow, so there is no
+				// seam a client can observe in the numbering.
 				if stdout == nil && !stdoutClosed {
 					stdout = followTail(cur, TaskStdoutLogFile, LogStreamStdout)
+					if stdout != nil {
+						for _, line := range stdout.rt.History {
+							if !emitLog(stdout, line) {
+								return
+							}
+						}
+					}
 				}
 				if stderr == nil && !stderrClosed {
 					stderr = followTail(cur, TaskStderrLogFile, LogStreamStderr)
+					if stderr != nil {
+						for _, line := range stderr.rt.History {
+							if !emitLog(stderr, line) {
+								return
+							}
+						}
+					}
 				}
 			}
 
@@ -465,10 +487,10 @@ func (s *ServerConfig) runTaskEventStream(c *gin.Context, enc *StreamEncoder, ta
 
 		var outCh, errCh <-chan string
 		if stdout != nil {
-			outCh = stdout.sub.NewLines
+			outCh = stdout.rt.Lines
 		}
 		if stderr != nil {
-			errCh = stderr.sub.NewLines
+			errCh = stderr.rt.Lines
 		}
 
 		select {
@@ -517,10 +539,10 @@ func (s *ServerConfig) drainTails(ctx context.Context, stdout, stderr **logTail,
 	for {
 		var outCh, errCh <-chan string
 		if *stdout != nil {
-			outCh = (*stdout).sub.NewLines
+			outCh = (*stdout).rt.Lines
 		}
 		if *stderr != nil {
-			errCh = (*stderr).sub.NewLines
+			errCh = (*stderr).rt.Lines
 		}
 		if outCh == nil && errCh == nil {
 			return

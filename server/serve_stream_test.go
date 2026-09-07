@@ -550,6 +550,339 @@ func TestStreamTaskLog_StaysOpenUntilTerminal(t *testing.T) {
 	}
 }
 
+/*
+ * Warm reconnect replays history (turtlemonvh/blanket#123)
+ */
+
+// warmLogTask builds a RUNNING task with nLines of stdout and stderr
+// output already on disk, via the same direct-DB shortcut ui_logs_test.go
+// uses (runningLogTask) rather than the claim/run HTTP flow -- nothing
+// here depends on a real worker having touched the task.
+func warmLogTask(t *testing.T, s *ServerConfig, nLines int) tasks.Task {
+	t.Helper()
+	var stdout, stderr strings.Builder
+	for i := 1; i <= nLines; i++ {
+		fmt.Fprintf(&stdout, "stdout line %d\n", i)
+		fmt.Fprintf(&stderr, "stderr line %d\n", i)
+	}
+	return runningLogTask(t, s, stdout.String(), stderr.String())
+}
+
+// pendingNdjsonEvents decodes every complete NDJSON line collected so
+// far, dropping a possibly-incomplete trailing one -- for inspecting an
+// open stream's progress mid-flight, unlike ndjsonEvents which assumes
+// the body is done.
+func pendingNdjsonEvents(t *testing.T, collected string) []map[string]interface{} {
+	t.Helper()
+	lines := strings.Split(collected, "\n")
+	if !strings.HasSuffix(collected, "\n") && len(lines) > 0 {
+		lines = lines[:len(lines)-1]
+	}
+	var events []map[string]interface{}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(line), &ev), "undecodable event line: %s", line)
+		events = append(events, ev)
+	}
+	return events
+}
+
+func indexOfEvent(events []map[string]interface{}, match func(map[string]interface{}) bool) int {
+	for i, ev := range events {
+		if match(ev) {
+			return i
+		}
+	}
+	return -1
+}
+
+// drainRawLines reads st until it has seen at least n raw `event:message`
+// frames, or fails the test. Used both to pull a connection's own history
+// (proving it got every line) and, before #123, to fully drain a *first*
+// connection so a shared TailedFile's ring has genuinely cycled past the
+// early lines before a second connection attaches -- otherwise both
+// connections can catch the same cold read burst and the "warm" scenario
+// never actually happens.
+func drainRawLines(t *testing.T, st *openStream, n int, timeout time.Duration) string {
+	t.Helper()
+	got := ""
+	deadline := time.After(timeout)
+	for strings.Count(got, "event:message") < n {
+		select {
+		case c := <-st.chunk:
+			got += c
+		case err := <-st.done:
+			t.Fatalf("stream closed with only %d/%d lines: %v", strings.Count(got, "event:message"), n, err)
+		case <-deadline:
+			t.Fatalf("did not see all %d lines within %s; got %d", n, timeout, strings.Count(got, "event:message"))
+		}
+	}
+	return got
+}
+
+// drainNdjsonLogCounts reads st until it has seen at least wantStdout
+// stdout log events and wantStderr stderr log events, or fails the test.
+// Returns everything read.
+func drainNdjsonLogCounts(t *testing.T, st *openStream, wantStdout, wantStderr int, timeout time.Duration) string {
+	t.Helper()
+	return drainNdjsonLogCountsFrom(t, st, "", wantStdout, wantStderr, timeout)
+}
+
+// drainNdjsonLogCountsFrom is drainNdjsonLogCounts, but counts against an
+// already-collected prefix (so a caller can keep accumulating into one
+// buffer across several waits on the same connection) and returns only
+// what it itself read from st, not the prefix.
+func drainNdjsonLogCountsFrom(t *testing.T, st *openStream, already string, wantStdout, wantStderr int, timeout time.Duration) string {
+	t.Helper()
+	var collected string
+	deadline := time.After(timeout)
+	for {
+		stdoutN, stderrN := 0, 0
+		for _, ev := range eventsOfType(pendingNdjsonEvents(t, already+collected), EventTypeLog) {
+			if ev["stream"] == LogStreamStdout {
+				stdoutN++
+			} else {
+				stderrN++
+			}
+		}
+		if stdoutN >= wantStdout && stderrN >= wantStderr {
+			return collected
+		}
+		select {
+		case c := <-st.chunk:
+			collected += c
+		case err := <-st.done:
+			t.Fatalf("stream closed with stdout=%d/%d stderr=%d/%d: %v", stdoutN, wantStdout, stderrN, wantStderr, err)
+		case <-deadline:
+			t.Fatalf("timed out waiting for stdout=%d stderr=%d log events; got stdout=%d stderr=%d", wantStdout, wantStderr, stdoutN, stderrN)
+		}
+	}
+}
+
+// TestStreamTaskLog_WarmReconnectReplaysFullHistory is the regression
+// test for the issue itself: the raw route used to attach with
+// tailed_file.Follow, whose TailedFile is shared between every subscriber
+// of the same path, so a *second* connection to an already-tailed file
+// only got the shared 100-line PastLines ring no matter how much more the
+// file held. 217 lines is the issue's own reproduction number. With a
+// first connection already attached (warm), the second must still replay
+// every line from the start.
+func TestStreamTaskLog_WarmReconnectReplaysFullHistory(t *testing.T) {
+	const nLines = 217
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	s.TimeMultiplier = 0.1
+
+	tsk := warmLogTask(t, s, nLines)
+
+	srv := httptest.NewServer(s.GetRouter())
+	defer srv.Close()
+	url := srv.URL + "/task/" + tsk.Id.Hex() + "/log"
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	first := openLogStream(t, ctx1, url, "")
+	defer first.resp.Body.Close()
+	// Drain the first connection until it has actually seen every line:
+	// only then has a shared ring (the pre-#123 tailed_file.Follow) had
+	// the chance to cycle past the early ones. Stopping after just one
+	// chunk would let both connections catch the same cold-start burst,
+	// which is "warm" in name only and wouldn't have caught the bug.
+	drainRawLines(t, first, nLines, 10*time.Second)
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	second := openLogStream(t, ctx2, url, "")
+	defer second.resp.Body.Close()
+
+	got := drainRawLines(t, second, nLines, 10*time.Second)
+
+	assert.Equal(t, nLines, strings.Count(got, "event:message"),
+		"a second, already-warm connection must replay this connection's own history, not a shared ring's worth")
+	assert.Contains(t, got, "data:stdout line 1\n", "history must start at the first line on disk")
+	assert.Contains(t, got, fmt.Sprintf("data:stdout line %d\n", nLines))
+}
+
+// ...and the same for ?stream=stderr, which follows the other file
+// through the same code path.
+func TestStreamTaskLog_WarmReconnectReplaysFullHistory_Stderr(t *testing.T) {
+	const nLines = 217
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	s.TimeMultiplier = 0.1
+
+	tsk := warmLogTask(t, s, nLines)
+
+	srv := httptest.NewServer(s.GetRouter())
+	defer srv.Close()
+	url := srv.URL + "/task/" + tsk.Id.Hex() + "/log?stream=stderr"
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	first := openLogStream(t, ctx1, url, "")
+	defer first.resp.Body.Close()
+	drainRawLines(t, first, nLines, 10*time.Second)
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	second := openLogStream(t, ctx2, url, "")
+	defer second.resp.Body.Close()
+
+	got := drainRawLines(t, second, nLines, 10*time.Second)
+
+	assert.Equal(t, nLines, strings.Count(got, "event:message"))
+	assert.Contains(t, got, "data:stderr line 1\n")
+	assert.Contains(t, got, fmt.Sprintf("data:stderr line %d\n", nLines))
+	assert.NotContains(t, got, "stdout line", "?stream=stderr must not leak the other file's content")
+}
+
+// TestStreamTaskLog_NDJSON_WarmReconnectReplaysHistoryThenLive is the
+// structured stream's counterpart: a second connection to an
+// already-tailed task must replay each file's full history (again more
+// than the shared ring) before any live line, stdout's block fully ahead
+// of stderr's (matching the UI's grouped fallback), with per-stream seq
+// counting straight through the seam and nothing repeated at it.
+func TestStreamTaskLog_NDJSON_WarmReconnectReplaysHistoryThenLive(t *testing.T) {
+	const nLines = 150
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	s.TimeMultiplier = 0.1
+
+	tsk := warmLogTask(t, s, nLines)
+
+	srv := httptest.NewServer(s.GetRouter())
+	defer srv.Close()
+	url := srv.URL + "/task/" + tsk.Id.Hex() + "/log"
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	first := openLogStream(t, ctx1, url, ContentTypeNDJSON)
+	defer first.resp.Body.Close()
+	// Drain the first connection until *it* has seen every history line
+	// on both streams -- one chunk isn't enough to make this genuinely
+	// warm (see drainRawLines's comment on the raw-route version of this
+	// test for why).
+	drainNdjsonLogCounts(t, first, nLines, nLines, 10*time.Second)
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	second := openLogStream(t, ctx2, url, ContentTypeNDJSON)
+	defer second.resp.Body.Close()
+
+	collected := drainNdjsonLogCounts(t, second, nLines, nLines, 15*time.Second)
+
+	// Both files' history has fully arrived on the second connection.
+	// Append one more live line to each and keep reading -- if the seam
+	// dropped or duplicated anything, or a live line jumped ahead of
+	// still-in-flight history, it would show up in the final per-stream
+	// sequence checked below.
+	appendTaskLog(t, tsk, TaskStdoutLogFile, fmt.Sprintf("stdout line %d\n", nLines+1))
+	appendTaskLog(t, tsk, TaskStderrLogFile, fmt.Sprintf("stderr line %d\n", nLines+1))
+	collected += drainNdjsonLogCountsFrom(t, second, collected, nLines+1, nLines+1, 10*time.Second)
+
+	tsk.State = "SUCCESS"
+	require.NoError(t, s.DB.SaveTask(&tsk))
+	s.TaskEvents.Notify()
+
+closeLoop:
+	for {
+		select {
+		case c := <-second.chunk:
+			collected += c
+		case <-second.done:
+			break closeLoop
+		case <-time.After(10 * time.Second):
+			t.Fatalf("stream did not close after the task finished; collected: %s", collected)
+		}
+	}
+	// Drain anything still sitting in the buffered chunk channel: select
+	// above can pick the done case even when a final chunk is already
+	// waiting, and dropping it would leave collected mid-object.
+drain:
+	for {
+		select {
+		case c := <-second.chunk:
+			collected += c
+		default:
+			break drain
+		}
+	}
+
+	events := ndjsonEvents(t, collected)
+	logs := eventsOfType(events, EventTypeLog)
+
+	var stdoutLines, stderrLines []map[string]interface{}
+	for _, ev := range logs {
+		if ev["stream"] == LogStreamStdout {
+			stdoutLines = append(stdoutLines, ev)
+		} else {
+			stderrLines = append(stderrLines, ev)
+		}
+	}
+
+	require.Len(t, stdoutLines, nLines+1, "warm reconnect must replay every stdout history line plus the one live line, no more and no fewer")
+	require.Len(t, stderrLines, nLines+1)
+
+	for i, ev := range stdoutLines {
+		assert.Equal(t, fmt.Sprintf("stdout line %d", i+1), ev["line"], "stdout line %d out of order or duplicated", i+1)
+		assert.Equal(t, float64(i+1), ev["seq"], "seq must count straight through the history/live seam with no gap or repeat")
+	}
+	for i, ev := range stderrLines {
+		assert.Equal(t, fmt.Sprintf("stderr line %d", i+1), ev["line"], "stderr line %d out of order or duplicated", i+1)
+		assert.Equal(t, float64(i+1), ev["seq"])
+	}
+
+	// stdout's whole history block must be replayed before stderr's
+	// starts (matching the UI's grouped fallback), so the first stderr
+	// log event's overall position must come after the last stdout
+	// *history* line's.
+	firstStderrIdx := indexOfEvent(events, func(ev map[string]interface{}) bool {
+		return ev["type"] == EventTypeLog && ev["stream"] == LogStreamStderr
+	})
+	lastStdoutHistoryIdx := indexOfEvent(events, func(ev map[string]interface{}) bool {
+		return ev["type"] == EventTypeLog && ev["stream"] == LogStreamStdout && ev["line"] == fmt.Sprintf("stdout line %d", nLines)
+	})
+	require.GreaterOrEqual(t, firstStderrIdx, 0)
+	require.GreaterOrEqual(t, lastStdoutHistoryIdx, 0)
+	assert.Less(t, lastStdoutHistoryIdx, firstStderrIdx, "stdout's history block must fully replay before stderr's starts")
+}
+
+// TestStreamTaskLog_FlushesHistoryWithoutWaitingForLiveLines is the raw
+// route's flush regression, matching ui_logs.go's
+// TestUI_TaskLogStream_FlushesReplayWithoutWaitingForLiveLines: c.Stream
+// only flushes once its step function returns, and that step then blocks
+// for a whole idle window (LOGLINE_WAIT_DURATION) waiting on a live line
+// -- so without streamRawLog's explicit c.Writer.Flush() after printing
+// history, a client connecting to a quiet running task would see nothing
+// for a full idle window even though the history was already written to
+// the response.
+//
+// Deliberately runs at the production idle window (TimeMultiplier 1, same
+// as an unconfigured server): a scaled-down one would hide the bug by
+// returning from the step early regardless of the fix.
+func TestStreamTaskLog_FlushesHistoryWithoutWaitingForLiveLines(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	s.TimeMultiplier = 1
+
+	tsk := runningLogTask(t, s, "already on disk\n", "")
+
+	srv := httptest.NewServer(s.GetRouter())
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st := openLogStream(t, ctx, srv.URL+"/task/"+tsk.Id.Hex()+"/log", "")
+	defer st.resp.Body.Close()
+
+	got := st.nextChunk(t, 2*time.Second)
+	assert.Contains(t, got, "already on disk")
+}
+
 // negotiation is pure request inspection; worth a table rather than a
 // live stream per case.
 func TestStructuredLogStreamRequested(t *testing.T) {

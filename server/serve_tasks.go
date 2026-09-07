@@ -804,6 +804,16 @@ func (s *ServerConfig) removeTask(c *gin.Context) {
 // which picks which of the task's two log files it follows. Absent means
 // stdout, so the UI's default log pane -- and every existing caller --
 // sees exactly what it always did.
+//
+// On connect it replays up to uiLogHistoryLines of that file's history
+// before it starts following live (turtlemonvh/blanket#123): the route
+// used to attach with tailed_file.Follow, whose TailedFile is shared
+// between every subscriber of the same path, so how much history a new
+// subscriber saw was an accident of who else was already tailing it --
+// the whole file cold, or only the shared ring's last 100 lines warm.
+// tailed_file.ReplayAndFollow takes its own unshared tail instead, so
+// every connection gets the same defined window and the seam between
+// history and live neither drops nor repeats a line.
 func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 	var err error
 	var taskId objectid.ObjectId
@@ -831,12 +841,13 @@ func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 		return
 	}
 
-	sub, err := tailed_file.Follow(path.Join(task.ResultDir, logFile))
+	logPath := path.Join(task.ResultDir, logFile)
+	rt, err := tailed_file.ReplayAndFollow(logPath, uiLogHistoryLines)
 	if err != nil {
 		c.String(http.StatusInternalServerError, "Error opening logfile stream")
 		return
 	}
-	defer sub.Stop()
+	defer rt.Stop()
 
 	// Task is stopped when it is in a terminal state or we get an error
 	// fetching its information.
@@ -855,23 +866,21 @@ func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 		current, ferr := s.DB.GetTask(taskId)
 		if ferr != nil {
 			log.WithFields(log.Fields{
-				"err":            ferr.Error(),
-				"taskId":         taskId,
-				"subscriptionId": sub.Id,
-				"tailedFile":     sub.TailedFile.Filepath,
+				"err":        ferr.Error(),
+				"taskId":     taskId,
+				"tailedFile": logPath,
 			}).Error("error refreshing task state while processing logstreaming request")
 			return true
 		}
 		if tasks.IsTerminalState(current.State) {
 			log.WithFields(log.Fields{
-				"taskId":         taskId,
-				"taskState":      current.State,
-				"subscriptionId": sub.Id,
-				"tailedFile":     sub.TailedFile.Filepath,
+				"taskId":     taskId,
+				"taskState":  current.State,
+				"tailedFile": logPath,
 			}).Info("stopping logstreaming request because task reached a terminal state")
 			return true
 		}
 		return false
 	}
-	s.streamLog(c, sub, isComplete)
+	s.streamRawLog(c, rt, isComplete)
 }
