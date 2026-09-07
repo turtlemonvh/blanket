@@ -115,12 +115,24 @@ header comment.
   artifact on failure.
 
   These were four sequential steps inside a single `test` job until
-  #155 fanned them out, which cut the blocking path from ~265s to
-  ~136s. The old rationale for keeping them serial was that "parallel
-  jobs would each pay the image build" — true, but that is an argument
-  about billed minutes, and this repo is public, so GitHub-hosted
-  standard runners are free and unmetered. Total runner minutes go up;
-  wall clock goes down. On a public repo that is the right trade.
+  #155 fanned them out, cutting the blocking path from a 298s mean
+  (n=7, range 231-406s) to ~215s — roughly 25-30%. The old rationale
+  for keeping them serial was that "parallel jobs would each pay the
+  image build" — true, but that is an argument about billed minutes,
+  and this repo is public, so GitHub-hosted standard runners are free
+  and unmetered. Total runner minutes go up (~10 → ~17 per run); wall
+  clock goes down. On a public repo that is the right trade.
+
+  One cost is worth knowing before you tune these further: serially,
+  the four targets shared a warm Go build cache via the
+  `blanket-dev-cache` volume, so `docker-test-smoke` and
+  `docker-test-browser` each ran `make linux` against a populated
+  `GOCACHE`. Fanned out, each job starts cold, which roughly doubles
+  the smoke and browser steps. Parallelism still wins overall, but
+  sharing that cache across jobs (`actions/cache` over the Go build
+  cache, instead of a docker named volume that dies with its runner)
+  would recover most of the difference and would speed the serial path
+  too.
 
   Exactly one of them (`unit`) passes `cache-to` to the composite
   action and so publishes layers back to the GHA cache; the rest read

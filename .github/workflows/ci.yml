@@ -23,10 +23,20 @@ concurrency:
 # wall-clock latency on a PR, and four concurrent 60s image builds cost 60s
 # of wall clock rather than 240s.
 #
-# Measured on the same commit, serial vs fanned out: the old `test` job took
-# 406s and was the blocking path on every PR; fanned out, the longest leaf is
-# ~200s and the blocking path is roughly halved. See #155 for the
-# step-by-step breakdown and the 47-run baseline behind it.
+# Measured: the serial `test` job averaged 298s over the 7 master pushes
+# preceding this change (range 231-406s); fanned out, the blocking path is
+# ~215s. That is roughly -25 to -30%, not the halving a first reading of the
+# step times suggests -- see the caveat below. #155 has the breakdown.
+#
+# The caveat, because it is easy to re-derive the wrong number from these
+# steps: serially, the four targets shared a warm Go build cache through the
+# blanket-dev-cache volume, so docker-test-smoke and docker-test-browser each
+# ran `make linux` against an already-populated GOCACHE. Fanned out, every job
+# starts cold and recompiles, which roughly doubles the smoke and browser
+# steps. Parallelism still wins, but it gives back a real share of the gain.
+# Restoring that shared cache across jobs (actions/cache over the Go build
+# cache, rather than a docker named volume that dies with its runner) is the
+# obvious next step and would speed up the serial path too.
 #
 # The second benefit is diagnostic: a red `browser` next to a green `unit`
 # says what broke without opening a log, and one surface failing no longer
