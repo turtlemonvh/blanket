@@ -14,7 +14,7 @@
 ARG PLAYWRIGHT_VERSION=v1.63.0
 FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-noble
 
-ARG GO_VERSION=1.25.9
+ARG GO_VERSION=1.25.14
 ARG TARGETARCH=amd64
 
 # Extra CLI tools: make for the Makefile, git for build ldflags, curl + jq
