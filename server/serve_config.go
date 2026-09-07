@@ -2,10 +2,10 @@ package server
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/kardianos/osext"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"net/http"
+	"os"
 	"path"
 )
 
@@ -28,7 +28,7 @@ func (s *ServerConfig) getConfigProcessed(c *gin.Context) {
 	conf["instanceId"] = s.InstanceId()
 	conf["serverStartedTs"] = s.StartedTs()
 
-	execPath, err := osext.Executable()
+	execPath, err := os.Executable()
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err": err.Error(),

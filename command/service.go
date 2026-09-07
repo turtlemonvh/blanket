@@ -27,7 +27,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kardianos/osext"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/service"
@@ -87,7 +86,7 @@ func init() {
 // worker.buildDaemonCmd's forwarding rule from issue #45), and a log file
 // under blanket's XDG data dir.
 func buildServiceConfig() (service.Config, error) {
-	execPath, err := osext.Executable()
+	execPath, err := os.Executable()
 	if err != nil {
 		return service.Config{}, fmt.Errorf("resolving blanket executable path: %w", err)
 	}
