@@ -12,6 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib/timing"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -296,6 +297,14 @@ func InitializeConfig() {
 	if blanketCmdV.PersistentFlags().Changed("drain-timeout") {
 		viper.BindPFlag("restart.drainTimeout", blanketCmdV.PersistentFlags().Lookup("drain-timeout"))
 	}
+
+	// Load the resolved timeMultiplier into lib/timing's atomic once,
+	// here, after config/env/flags have all had their say. Every other
+	// reader (lib/timing's own Scale/Multiplier, server/serve_sync.go's
+	// fallback) reads that atomic instead of calling viper directly, so
+	// this is the only place in a normal run that touches viper for this
+	// key -- see turtlemonvh/blanket#128.
+	timing.LoadFromConfig()
 }
 
 func InitializeLogging() {

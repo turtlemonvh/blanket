@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	bolt "github.com/turtlemonvh/blanket/lib/bolt"
+	"github.com/turtlemonvh/blanket/lib/timing"
 	"github.com/turtlemonvh/blanket/server"
 )
 
@@ -65,11 +66,15 @@ var RootCmd = &cobra.Command{
 		// Serve gracefully
 
 		c := server.ServerConfig{
-			DB:                    DB,
-			Q:                     bolt.NewBlanketBoltQueue(db),
-			Port:                  viper.GetInt("port"),
-			ResultsPath:           viper.GetString("tasks.resultsPath"),
-			TimeMultiplier:        viper.GetFloat64("timeMultiplier"),
+			DB:          DB,
+			Q:           bolt.NewBlanketBoltQueue(db),
+			Port:        viper.GetInt("port"),
+			ResultsPath: viper.GetString("tasks.resultsPath"),
+			// timing.Multiplier(), not a fresh viper read: InitializeConfig
+			// already called timing.LoadFromConfig() above, and this value
+			// gets copied into ServerConfig.TimeMultiplier once at startup
+			// rather than re-read from viper later (see turtlemonvh/blanket#128).
+			TimeMultiplier:        timing.Multiplier(),
 			Version:               Version,
 			SchedulerInterval:     viper.GetDuration("scheduler.interval"),
 			SchedulerMaxScheduled: viper.GetInt("scheduler.maxScheduled"),
