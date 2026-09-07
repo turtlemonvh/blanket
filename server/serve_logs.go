@@ -104,6 +104,83 @@ func (s *ServerConfig) streamLog(c *gin.Context, sub *tailed_file.TailedFileSubs
 	})
 }
 
+// streamRawLog is streamLog's counterpart for GET /task/:id/log's raw
+// shape (turtlemonvh/blanket#123): rt already holds up to
+// uiLogHistoryLines of the file's history (tailed_file.ReplayAndFollow,
+// opened by the caller) in addition to its live channel, where streamLog's
+// tailed_file.Follow subscription carries only whatever a shared ring
+// buffer happened to have. The history is printed as the same `message`
+// SSE frames a live line produces, then the function behaves exactly like
+// streamLog against rt.Lines.
+//
+// isComplete has the same contract as streamLog's: true once the task is
+// terminal (or unreachable), which is only checked once the live channel
+// has gone quiet for a full idle window.
+func (s *ServerConfig) streamRawLog(c *gin.Context, rt *tailed_file.ReplayTail, isComplete func() bool) {
+	lineno := 1
+	if len(rt.History) > 0 {
+		c.Writer.Header()["Content-Type"] = []string{"text/event-stream"}
+		for _, logline := range rt.History {
+			sse.Encode(c.Writer, sse.Event{
+				Id:    strconv.Itoa(lineno),
+				Event: "message",
+				Data:  logline + "\n",
+			})
+			lineno++
+		}
+		// c.Stream below only flushes once its step function returns, and
+		// the first call is about to block for a full idle window waiting
+		// on a live line -- on a quiet task that would leave this history
+		// invisible for LOGLINE_WAIT_DURATION after connecting, exactly the
+		// gap replaying it exists to close. Same fix as ui_logs.go's
+		// uiTaskLogStream, same reason.
+		c.Writer.Flush()
+	}
+
+	loglineChannelIsEmpty := false
+
+	// Closed when the server starts shutting down -- see streamLog's own
+	// comment on shutdown above.
+	shutdown := s.shutdownChan()
+
+	c.Stream(func(w io.Writer) bool {
+		timer := time.NewTimer(time.Second * time.Duration(s.TimeMultiplier*LOGLINE_WAIT_DURATION))
+
+		select {
+		case <-shutdown:
+			timer.Stop()
+			c.Writer.Header()["Content-Type"] = []string{"text/event-stream"}
+			writeServerRestarting(w)
+			return false
+		case logline, ok := <-rt.Lines:
+			timer.Stop()
+			if !ok {
+				// The tailer stopped from under us; nothing more is
+				// coming down this channel.
+				return false
+			}
+			c.Writer.Header()["Content-Type"] = []string{"text/event-stream"}
+			sse.Encode(c.Writer, sse.Event{
+				Id:    strconv.Itoa(lineno),
+				Event: "message",
+				Data:  logline + "\n",
+			})
+			lineno++
+			loglineChannelIsEmpty = false
+		case <-timer.C:
+			loglineChannelIsEmpty = true
+		}
+
+		if loglineChannelIsEmpty {
+			if isComplete() {
+				return false
+			}
+		}
+
+		return true
+	})
+}
+
 // tailLines reads the last n lines from a file. Returns an empty string if
 // the file doesn't exist or is empty.
 func tailLines(filepath string, n int) (string, error) {

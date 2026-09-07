@@ -34,6 +34,19 @@ type TailedFileSubscriber struct {
 	IsCaughtUp bool
 	Id         int64
 	TailedFile *TailedFile
+
+	// done is closed by Stop, before Stop takes tf.Lock(). The tailer
+	// goroutine (StartTailedFile's inner func) holds tf.Lock() across its
+	// entire per-line fan-out, including the blocking send to each
+	// subscriber's NewLines -- so a handler that has stopped reading
+	// NewLines and then calls Stop would otherwise deadlock: the tailer
+	// sits parked mid-send holding the lock Stop needs, and nothing
+	// drains NewLines to free it. Selecting on done in that send (see the
+	// fan-out loop below) gives the tailer an escape hatch that needs no
+	// lock, so Stop can always make progress -- see turtlemonvh/blanket#123,
+	// which hit exactly this with GET /task/:id/log's bare `defer sub.Stop()`.
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 // Use the mutex to guard access to FileOffset, Subscribers.
@@ -291,10 +304,16 @@ func (tfc *TailedFileCollection) StartTailedFile(p string) (*TailedFile, error) 
 			tf.FileOffset = (tf.FileOffset + 1) % int64(len(tf.PastLines))
 			tf.PastLines[tf.FileOffset] = nline.Text
 
-			// Send to each subscriber channel
-			// In practice shouldn't block because buffered
+			// Send to each subscriber channel, or move on if that
+			// subscriber is on its way out (sub.done closed by Stop).
+			// Without the second case this send blocks forever against a
+			// subscriber whose handler stopped reading and is trying to
+			// Stop -- see the done field's comment on TailedFileSubscriber.
 			for _, sub := range tf.Subscribers {
-				sub.NewLines <- nline.Text
+				select {
+				case sub.NewLines <- nline.Text:
+				case <-sub.done:
+				}
 			}
 
 			// Free lock again
@@ -375,6 +394,7 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 		NewLines:   make(chan string, bufSize),
 		IsCaughtUp: false,
 		TailedFile: tf,
+		done:       make(chan struct{}),
 	}
 
 	// Launch a goroutine that sends the first N lines on this channel
@@ -427,20 +447,31 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 	return sub
 }
 
-// Deregister subscriber
+// Deregister subscriber. Safe to call more than once (only the first
+// call does anything) and safe to call from a handler that has stopped
+// reading NewLines -- see the done field's comment above for why that
+// used to deadlock.
 func (tfs *TailedFileSubscriber) Stop() {
-	tfs.TailedFile.Lock()
-	defer tfs.TailedFile.Unlock()
-	delete(tfs.TailedFile.Subscribers, tfs.Id)
-	atomic.AddInt64(&tfs.TailedFile.subscriberCount, -1)
-	close(tfs.NewLines)
-	log.WithFields(log.Fields{
-		"subs":  len(tfs.TailedFile.Subscribers),
-		"subId": tfs.Id,
-	}).Info("Unsubscribed")
+	tfs.stopOnce.Do(func() {
+		// Close done *before* taking the lock: if the tailer goroutine is
+		// parked mid-send to this subscriber holding tf.Lock(), this is
+		// what lets it give up on that send and continue, so the Lock()
+		// below can't wait on a goroutine that is itself waiting on us.
+		close(tfs.done)
 
-	if len(tfs.TailedFile.Subscribers) == 0 {
-		// Stop tailing if there are still no subscribers after a few seconds
-		go tfs.TailedFile.FilesContainer.StopIfNoSubscribers(tfs.TailedFile)
-	}
+		tfs.TailedFile.Lock()
+		defer tfs.TailedFile.Unlock()
+		delete(tfs.TailedFile.Subscribers, tfs.Id)
+		atomic.AddInt64(&tfs.TailedFile.subscriberCount, -1)
+		close(tfs.NewLines)
+		log.WithFields(log.Fields{
+			"subs":  len(tfs.TailedFile.Subscribers),
+			"subId": tfs.Id,
+		}).Info("Unsubscribed")
+
+		if len(tfs.TailedFile.Subscribers) == 0 {
+			// Stop tailing if there are still no subscribers after a few seconds
+			go tfs.TailedFile.FilesContainer.StopIfNoSubscribers(tfs.TailedFile)
+		}
+	})
 }
