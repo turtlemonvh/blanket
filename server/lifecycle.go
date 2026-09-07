@@ -123,6 +123,10 @@ func (s *ServerConfig) Serve() *BlanketServer {
 		"port": s.Port,
 	}).Info("Starting main server")
 
+	// Record which process now owns this database, before anything else
+	// can observe the server as up (turtlemonvh/blanket#23 phase 4).
+	s.persistInstance()
+
 	// Background loops: currently just the task scheduler (SCHEDULED /
 	// RECURRING tasks; see server/scheduler.go). Also the place a future
 	// reaper loop for cleaning the queue/db/workers (turtlemonvh/blanket#23
@@ -269,6 +273,17 @@ func (bs *BlanketServer) shutdown(ctx context.Context) error {
 	}
 
 	// (f) Storage last -- everything above may still touch the database.
+	//
+	// The lock-holder record goes first, and is the reason this step is
+	// two statements rather than one: a record left behind after the
+	// handle closes would tell the *next* process that a crashed blanket
+	// still owns the file. Clearing it on the clean path is what makes
+	// finding one there meaningful (turtlemonvh/blanket#23 phase 4).
+	if bs.cfg != nil && bs.cfg.DB != nil {
+		if err := bs.cfg.DB.ClearLockHolder(); err != nil {
+			log.WithField("err", err).Warn("could not clear the lock-holder record at shutdown")
+		}
+	}
 	if bs.closeStorage != nil {
 		bs.closeStorage()
 	}
