@@ -26,6 +26,9 @@ here go deeper.
   a background service (systemd user unit / launchd LaunchAgent /
   Task Scheduler entry), opting in at install time, and
   `blanket uninstall`.
+- [**Upgrading**](upgrade.md) — database schema versions, backups and
+  retention, `blanket backup` / `blanket migrate`, and what to do when a
+  migration dies half-way.
 
 ## For maintainers
 
