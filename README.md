@@ -82,6 +82,8 @@ types, and the full REST API, see the [docs](docs/README.md):
 - [**Autostart**](docs/autostart.md) — running blanket as a background
   service that starts on login/boot, and `blanket uninstall`
 - [**Task flow**](docs/task_flow.md) — task and worker state machines
+- [**Upgrading**](docs/upgrade.md) — schema versions, backups,
+  `blanket backup` / `blanket migrate`
 - [**MCP interface**](docs/mcp.md) — expose blanket to MCP clients (agents),
   security considerations, and setup
 

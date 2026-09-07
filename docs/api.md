@@ -484,10 +484,11 @@ the thresholds, and the `reaper.*` config keys.
 ## Server
 
 ```
-GET /                           # redirects to the web UI
-GET /version                    # build info as JSON
-GET /config/                    # processed server config
-GET /ops/status/                # runtime metrics (goroutines, memory, etc.)
+GET  /                          # redirects to the web UI
+GET  /version                   # build info as JSON
+GET  /config/                   # processed server config
+GET  /ops/status/               # runtime metrics (goroutines, memory, etc.)
+POST /ops/backup                # take a database backup — see "Ops endpoints"
 ```
 
 `GET /config/` returns every resolved config key, plus three values that
@@ -497,6 +498,65 @@ turtlemonvh/blanket#23 — `instanceId` and `serverStartedTs`, the same pair
 a worker's [heartbeat](#heartbeat-turtlemonvhblanket23) response carries.
 A changed `instanceId` means the server process was replaced, which is how
 a client tells a restart from a slow request.
+
+## Ops endpoints
+
+A small group of **privileged, local-only** endpoints for operating the
+install rather than for using it (turtlemonvh/blanket#23). Today that is
+`POST /ops/backup`; phase 5's `/ops/restart*` will join it.
+
+```
+POST /ops/backup                # write a consistent database backup now
+                                 # ?dir=<path> overrides the destination
+```
+
+Every mutating `/ops/` endpoint requires **both**:
+
+- a **loopback** client address, decided from the connection's own
+  `RemoteAddr` and never from `X-Forwarded-For` (which the caller writes,
+  and could simply set to `127.0.0.1`); and
+- an **`X-Blanket-Restart`** header. Its *value* is not checked and is not
+  a secret. Its job is to force a browser into a CORS preflight, because a
+  cross-origin POST carrying only "simple" headers is sent without one —
+  the browser blocks the attacker from reading the response, but the
+  request still lands.
+
+`/ops/` is also **carved out of the wildcard CORS handler** that covers the
+rest of the API, so that preflight is refused rather than approved. Without
+that carve-out, the permissive policy would approve the very preflight the
+header exists to provoke.
+
+Anything missing either requirement gets **403** with
+`{"error": "..."}`. `curl`, a script, and the blanket CLI are unaffected:
+they set the header and connect from loopback.
+
+There is deliberately no auth token yet — loopback-only covers the
+single-machine install, which is the only deployment shape blanket has
+today.
+
+### `POST /ops/backup`
+
+Takes a point-in-time copy of the database **without pausing anything**.
+BoltDB's MVCC makes a read transaction a consistent image of the whole
+file, so this is safe on a live, busy server — and it is the only way to
+back one up, since the CLI cannot open the database while the server holds
+its exclusive lock.
+
+```
+$ curl -X POST -H 'X-Blanket-Restart: 1' localhost:8773/ops/backup
+{"path":"/var/lib/blanket/backups/blanket-1-2026-09-06T21-02-11.418Z.db","schemaVersion":1}
+```
+
+| Status | Meaning |
+| ------ | ------- |
+| 200 | Backup written; `path` is the file, `schemaVersion` the schema it holds. |
+| 403 | Not from loopback, or the `X-Blanket-Restart` header is missing. |
+| 500 | The backup failed — most often the free-space precheck refusing (see [upgrade.md](upgrade.md#the-free-space-precheck)). |
+
+Backups land in `<database dir>/backups/` unless `?dir=` or the
+`storage.backupDir` config key says otherwise, and the newest 3 are kept.
+See [**upgrade.md**](upgrade.md) for naming, retention, the precheck
+thresholds, and the `blanket backup` / `blanket migrate` CLI.
 
 ## Streaming endpoints (SSE)
 
