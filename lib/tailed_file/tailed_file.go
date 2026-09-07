@@ -427,12 +427,29 @@ func (tf *TailedFile) Subscribe() *TailedFileSubscriber {
 		// loop bound excluded the newest slot, silently dropping the most
 		// recent line whenever Subscribe landed after the tailer had already
 		// written to PastLines[FileOffset].
+		//
+		// The send selects on sub.done for the same reason the tailer's
+		// fan-out does: this goroutine holds tf.Lock() across the whole
+		// backfill, and NewLines is buffered by FileOffset as read
+		// *before* this goroutine ran. If the tailer got a line in between,
+		// the buffer is one short and the last send blocks -- and a
+		// subscriber that never reads (a handler on its way out) then
+		// parks us here holding the lock Stop needs. Seen as an
+		// intermittent CI deadlock in TestSubscriberStop_WhileNotReading.
 		nlines := 0
 		for i := tf.FileOffset + 1; i <= tf.FileOffset+int64(len(tf.PastLines)); i++ {
 			item := tf.PastLines[i%int64(len(tf.PastLines))]
-			if item != "" {
-				sub.NewLines <- item
+			if item == "" {
+				continue
+			}
+			select {
+			case sub.NewLines <- item:
 				nlines++
+			case <-sub.done:
+				log.WithFields(log.Fields{
+					"subId": sub.Id,
+				}).Info("Subscriber stopped during backfill")
+				return
 			}
 		}
 		sub.IsCaughtUp = true

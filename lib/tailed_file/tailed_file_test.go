@@ -237,3 +237,61 @@ func TestSubscriberStop_WhileNotReading(t *testing.T) {
 
 	testTfc.StopTailedFile(tmpfile.Name())
 }
+
+// The backfill variant of the deadlock above: lines already in the ring
+// when a subscriber arrives are replayed by Subscribe's goroutine, which
+// holds tf.Lock() while it sends them. With NewLines sized from a
+// FileOffset read before that goroutine ran, a line the tailer slipped in
+// between leaves the buffer one short, the replay parks on the send, and
+// Stop -- which needs the lock -- can never return. Writing the lines
+// before Follow makes the replay path the one under test every time.
+func TestSubscriberStop_WhileNotReading_DuringBackfill(t *testing.T) {
+	tmpfile, err := ioutil.TempFile("", "stop-deadlock-backfill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+	defer tmpfile.Close()
+
+	if _, err := tmpfile.WriteString("one\ntwo\nthree\n"); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Sync()
+
+	testTfc := NewTailedFileCollection()
+	defer testTfc.StopAll()
+	first, err := testTfc.Follow(tmpfile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first subscriber reads, like a real handler: the tailer holds
+	// tf.Lock() while it fans out, so a subscriber that never reads would
+	// park the tailer and block every later Subscribe on the lock -- a
+	// different (pre-existing) hazard from the one under test here.
+	go func() {
+		for range first.NewLines {
+		}
+	}()
+	// Let the tailer read the three lines into the ring, then attach a
+	// second subscriber that never reads: its replay has three lines to
+	// send and a buffer sized by whatever FileOffset was a moment earlier.
+	time.Sleep(2 * time.Second)
+	sub, err := testTfc.Follow(tmpfile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	stopped := make(chan struct{})
+	go func() {
+		sub.Stop()
+		first.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("TailedFileSubscriber.Stop deadlocked against Subscribe's backfill goroutine")
+	}
+}
