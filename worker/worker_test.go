@@ -46,6 +46,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/httpx"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/testutil"
+	"github.com/turtlemonvh/blanket/lib/timing"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 )
@@ -90,7 +91,12 @@ func runWorkerSubprocess() {
 	viper.Set("port", port)
 	viper.Set("tasks.typesPaths", []string{os.Getenv("BLANKET_WORKER_TYPES_DIR")})
 	viper.Set("tasks.resultsPath", os.Getenv("BLANKET_WORKER_RESULTS_DIR"))
-	viper.Set("timeMultiplier", 1.0)
+	// This is a re-exec'd subprocess (see TestMain), not a goroutine
+	// inside the parent test binary, so there's no other goroutine to
+	// race with here -- but timing.SetMultiplier is still the right call,
+	// not viper.Set, since it's the one lib/timing's Scale/ScaleSeconds
+	// actually read (see turtlemonvh/blanket#128).
+	timing.SetMultiplier(1.0)
 
 	// Lets a parent test shorten how long the SIGTERM handler will keep
 	// trying to reach a server that is never coming back; see
@@ -281,7 +287,12 @@ func newWorkerHarness(t *testing.T) *workerHarness {
 	viper.Set("port", port)
 	viper.Set("tasks.typesPaths", []string{typesDir})
 	viper.Set("tasks.resultsPath", resultsDir)
-	viper.Set("timeMultiplier", 1.0)
+	// timing.SetMultiplier, not viper.Set: this worker keeps polling in a
+	// background goroutine for the rest of the test (and briefly past
+	// cleanupFn, until its context is cancelled), so a concurrent
+	// viper.Set/GetFloat64 pair here is exactly the race turtlemonvh/blanket#128
+	// fixed by moving the multiplier out of viper onto an atomic.
+	timing.SetMultiplier(1.0)
 
 	workerID := objectid.NewObjectId()
 	wConf := worker.WorkerConf{
@@ -325,6 +336,7 @@ func newWorkerHarness(t *testing.T) *workerHarness {
 			viper.Set("port", 0)
 			viper.Set("tasks.typesPaths", nil)
 			viper.Set("tasks.resultsPath", "")
+			timing.SetMultiplier(timing.DefaultMultiplier)
 		},
 	}
 	return h

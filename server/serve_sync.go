@@ -31,6 +31,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/lib/timing"
 	"github.com/turtlemonvh/blanket/tasks"
 )
 
@@ -95,15 +96,16 @@ func syncMaxResultBytes() int64 {
 
 // timeMultiplier resolves the test-speed knob the same way the rest of
 // the server does: the explicitly-configured ServerConfig field wins, and
-// viper is the fallback for a config built without one.
+// lib/timing's atomic-backed default is the fallback for a config built
+// without one. This deliberately does not call viper directly -- that
+// used to race with any test's viper.Set from another goroutine (a
+// leftover server's background loop reading this concurrently with the
+// next test configuring itself); see turtlemonvh/blanket#128.
 func (s *ServerConfig) timeMultiplier() float64 {
 	if s.TimeMultiplier > 0 {
 		return s.TimeMultiplier
 	}
-	if m := viper.GetFloat64("timeMultiplier"); m > 0 {
-		return m
-	}
-	return 1.0
+	return timing.Multiplier()
 }
 
 // CompletionPayload is the body of a successful synchronous submit. It is
