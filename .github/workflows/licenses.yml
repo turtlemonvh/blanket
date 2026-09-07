@@ -1,0 +1,57 @@
+name: Licenses
+
+# Dependency license gate (turtlemonvh/blanket#143, following the audit in
+# #131). A pinned dependency version's license can't change out from under
+# us, so it's safe -- and, per Timothy's testing-time concern, desirable --
+# to path-gate this to go.mod/go.sum changes rather than run it on every
+# PR.
+#
+# Deliberately NOT added to branch protection / required checks: a
+# path-filtered workflow doesn't run at all on PRs that don't touch
+# go.mod/go.sum, and GitHub's required-checks gate blocks merge on a
+# check that never reports (perpetually "expected"). Blocking still
+# happens *within* the job -- a disallowed license fails this run -- it
+# just isn't a required check for every PR. workflow_dispatch is here so
+# it can be run manually (a full audit, or exercising this workflow on a
+# branch that doesn't itself touch go.mod).
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - go.mod
+      - go.sum
+  push:
+    branches: [master]
+    paths:
+      - go.mod
+      - go.sum
+  workflow_dispatch: {}
+
+jobs:
+  licenses:
+    name: licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Native Go rather than the Docker toolchain image: this job is
+      # deliberately rare (path-gated) and go-licenses only needs `go` +
+      # the module cache, so there's no reason to pay for an image build
+      # (see `windows` job in ci.yml for the same setup-go pattern).
+      # go-version-file tracks go.mod's pinned toolchain -- see
+      # CLAUDE.md's "three Go version pins must stay in sync" gotcha.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go-licenses check
+        run: make licenses REPORT_OUT=go-licenses-report.csv
+
+      - name: Upload license report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-licenses-report
+          path: go-licenses-report.csv
+          retention-days: 90
+          if-no-files-found: warn
