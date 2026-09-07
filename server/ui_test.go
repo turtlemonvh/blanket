@@ -1559,6 +1559,7 @@ func TestRenderLogLineHTML_Escapes(t *testing.T) {
 	assert.Contains(t, out, `<span class="log-tag">stderr</span>`)
 	assert.Contains(t, out, "&lt;img src=x onerror=")
 	assert.NotContains(t, out, "<img")
+}
 
 // --- worker state in the UI (turtlemonvh/blanket#23 phase 3) ---
 
