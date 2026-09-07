@@ -70,18 +70,6 @@ func (Q *BlanketBoltQueue) AddTask(t *tasks.Task) error {
 	})
 }
 
-// Optional function that is called by a background daemon to move tasks that were supposed to be handled by a worker
-// but also are still in the queue (i.e. ack or nack function never got called)
-// - In rabbitmq and other queues this is handled for you with a configurable ttl on ack requests
-// - In mongo, postgres, bolt, claims are made by setting the workerId field
-// When cleaning up unacked, check if the task is in the database >state CLAIMED; if so, maybe just ack failed and we don't want to re-run and duplicate
-func (Q *BlanketBoltQueue) CleanupUnclaimedTasks() error {
-	// FIXME: Implement me
-	// Find all tasks in queue with a worker id that have a lastModifiedTs older than the TTL
-	// Set the WorkerId of those tasks back to ObjectId{} to allow them to get processed
-	return nil
-}
-
 // Claim a task in the queue; return functions to confirm or deny claim
 // Implementers can choose to make the ack and nack functions no-ops, with the side effect of less safety
 // Implementers can make the calculation of weights for tasks more complex

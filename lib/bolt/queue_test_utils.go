@@ -1,32 +1,14 @@
 package bolt
 
 import (
-	"fmt"
 	"github.com/turtlemonvh/blanket/lib/queue"
-	bolt "go.etcd.io/bbolt"
-	"io/ioutil"
-	"os"
-	"time"
 )
 
+// NewTestQueue returns a queue backed by a throwaway bolt file. The
+// database buckets are created in the same file (see NewTestDBAndQueue in
+// database_test_utils.go), so a queue method that needs to read the tasks
+// bucket -- CleanupUnclaimedTasks does -- can.
 func NewTestQueue() (queue.BlanketQueue, func()) {
-	// Retrieve a temporary path.
-	f, err := ioutil.TempFile("", "")
-	if err != nil {
-		panic(fmt.Sprintf("temp file: %s", err))
-	}
-	path := f.Name()
-	f.Close()
-	os.Remove(path)
-
-	// Open the database.
-	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: 1 * time.Second})
-	if err != nil {
-		panic(fmt.Sprintf("open: %s", err))
-	}
-
-	Q := NewBlanketBoltQueue(db)
-	return Q, func() {
-		db.Close()
-	}
+	_, Q, closer := NewTestDBAndQueue()
+	return Q, closer
 }

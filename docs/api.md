@@ -158,10 +158,11 @@ Two caveats worth knowing before reaching for `?wait`:
 
 * Workers discover queued work by polling, so even a 100ms task takes
   roughly 2-4 seconds of wall clock. `?wait` doesn't change that.
-* A worker that dies mid-task strands its task in `CLAIMED`/`RUNNING`
-  (orphan recovery is not implemented yet), and a synchronous caller
-  waiting on such a task simply burns its whole wait budget and gets a
-  504.
+* A worker that dies mid-task leaves its task in `CLAIMED`/`RUNNING` until
+  the [reaper](task_flow.md#the-reaper) reconciles it, which takes minutes
+  by design and may legitimately conclude that the task should be left
+  alone. A synchronous caller waiting on such a task burns its whole wait
+  budget and gets a 504 well before then.
 
 ### Streaming submission: `POST /task/?wait&stream`
 
@@ -388,6 +389,16 @@ which endpoint drives each transition, and
 [task_flow.md](task_flow.md#outcome-journal) for the on-disk journal the
 worker keeps alongside these calls.
 
+Two transitions have no worker behind them. The
+[reaper](task_flow.md#the-reaper) applies a recovered outcome through this
+same `finish` endpoint (carrying the journal's `runId`, so it is
+indistinguishable from a very late report by the worker itself), and it
+requeues a task whose worker died before the command ever started. A
+requeued task goes back to `WAITING` with its `workerId` and `runId`
+cleared and its `requeueCount` field — present on every task response —
+incremented; once that count reaches `reaper.maxRequeues` the task is
+failed to `ERROR` instead of being requeued again.
+
 Note that worker-facing routes are unauthenticated, like everything else
 blanket serves, so `exitCode` is spoofable by anything that can reach the
 port. That is not a change in posture, but it is worth knowing before
@@ -424,8 +435,10 @@ Lifecycle.
 POST   /worker/                 # launch a new worker (used by the UI)
 PUT    /worker/:id              # initial creation + status updates from worker
                                  # field-level merge: the worker owns pid,
-                                 # logfile, startedTs, tags, checkInterval;
-                                 # the server owns stopped + lastHeardTs
+                                 # pidStartTs, logfile, startedTs, tags,
+                                 # checkInterval; the server owns stopped,
+                                 # stoppedReason, lastHeardTs and lost
+PUT    /worker/:id/heartbeat    # liveness ping; no body. See below.
 PUT    /worker/:id/stop         # stop after current task; sets Stopped=true
                                  # ?force=true also sends an immediate kill
                                  # signal to the worker process
@@ -433,6 +446,40 @@ PUT    /worker/:id/restart      # re-start an existing stopped worker
                                  # (clears Stopped server-side, then relaunches)
 DELETE /worker/:id              # remove from DB; only valid if stopped
 ```
+
+### Heartbeat (turtlemonvh/blanket#23)
+
+`PUT /worker/:id/heartbeat` takes **no body** and answers:
+
+```json
+{
+  "stopped": false,
+  "lastHeardTs": 1757088000,
+  "serverInstanceId": "6a9c504d0372dcda2a889778",
+  "serverStartedTs": 1757087000
+}
+```
+
+| Field | Meaning |
+| ----- | ------- |
+| `stopped` | The worker's server-side `stopped` flag right now. A worker that reads `true` shuts down after its current task, so a drain lands within one check interval. |
+| `lastHeardTs` | The timestamp the server just recorded, **from its own clock**. There is deliberately no way to supply one: every reaper decision is arithmetic on this number, and a worker-supplied value would measure clock skew rather than liveness. |
+| `serverInstanceId` | Identifies the server *process*. A change means the server restarted since the last heartbeat. |
+| `serverStartedTs` | When that process started serving. |
+
+404 for a worker that is not in the database — an ordinary outcome when an
+operator deletes a worker whose process is still winding down, not a
+server error. The call also clears the worker's `lost` flag: a worker that
+checks in is by definition not lost.
+
+Worker records carry four fields beyond the obvious ones:
+`pidStartTs` (the worker process's start time, which is what makes its pid
+usable as a liveness signal despite pid reuse), `lastHeardTs`, `lost`
+(the reaper believes this worker is gone; a badge in the UI and nothing
+else), and `stoppedReason` (set when the reaper stopped it, empty for an
+operator stop). See
+[task_flow.md](task_flow.md#the-reaper) for the decision table these feed,
+the thresholds, and the `reaper.*` config keys.
 
 ## Server
 
@@ -442,6 +489,14 @@ GET /version                    # build info as JSON
 GET /config/                    # processed server config
 GET /ops/status/                # runtime metrics (goroutines, memory, etc.)
 ```
+
+`GET /config/` returns every resolved config key, plus three values that
+are properties of the running process rather than of the configuration:
+`basepath` (the directory the binary was resolved from), and — as of
+turtlemonvh/blanket#23 — `instanceId` and `serverStartedTs`, the same pair
+a worker's [heartbeat](#heartbeat-turtlemonvhblanket23) response carries.
+A changed `instanceId` means the server process was replaced, which is how
+a client tells a restart from a slow request.
 
 ## Streaming endpoints (SSE)
 

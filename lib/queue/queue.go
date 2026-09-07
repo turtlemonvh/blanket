@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/turtlemonvh/blanket/lib"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
 )
@@ -27,7 +28,13 @@ FIXME:
 type BlanketQueue interface {
 	AddTask(task *tasks.Task) error
 	ClaimTask(worker *worker.WorkerConf) (tasks.Task, func() error, func() error, error)
-	CleanupUnclaimedTasks() error
+	// CleanupUnclaimedTasks reconciles queue entries whose claim was never
+	// acked. It takes the same injected clock/liveness/journal options as
+	// the database's cleanup routines (turtlemonvh/blanket#23 phase 3) --
+	// see database.ReapOptions for why. That is also why this package now
+	// imports lib/database: one options type for all three routines beats
+	// three near-identical ones.
+	CleanupUnclaimedTasks(opts *database.ReapOptions) (database.ReapReport, error)
 }
 
 var (

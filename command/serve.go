@@ -38,6 +38,15 @@ var RootCmd = &cobra.Command{
 			Version:               Version,
 			SchedulerInterval:     viper.GetDuration("scheduler.interval"),
 			SchedulerMaxScheduled: viper.GetInt("scheduler.maxScheduled"),
+			// The reaper is on by default (see command/root.go); this is
+			// the one place the config key is read, so a hand-built
+			// ServerConfig in a test never acquires the loop implicitly.
+			ReaperEnabled:          viper.GetBool("reaper.enabled"),
+			ReaperInterval:         viper.GetDuration("reaper.interval"),
+			ReaperWorkerStaleAfter: viper.GetDuration("reaper.workerStaleAfter"),
+			ReaperWorkerDeadAfter:  viper.GetDuration("reaper.workerDeadAfter"),
+			ReaperTaskStaleAfter:   viper.GetDuration("reaper.taskStaleAfter"),
+			ReaperMaxRequeues:      viper.GetInt("reaper.maxRequeues"),
 			Cleanup: func() {
 				if err := db.Close(); err != nil {
 					log.WithField("err", err).Warn("error closing database at shutdown")

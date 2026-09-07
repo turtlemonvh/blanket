@@ -96,6 +96,11 @@ tr:hover td { background: #fafbfc; }
 .badge.state-ERROR    { background: #fbe9e9; color: var(--danger); border-color: #ecb9b9; }
 .badge.state-STOPPED  { background: #f0f0f0; color: var(--muted); border-color: var(--border); }
 .badge.state-TIMEDOUT { background: #fbe9e9; color: var(--danger); border-color: #ecb9b9; }
+/* Worker states. LOST is the reaper's "this worker stopped heartbeating"
+   (turtlemonvh/blanket#23 phase 3) -- a warning, not a failure: the
+   worker may still be running, it just isn't checking in. */
+.badge.state-ACTIVE   { background: #e6f4ea; color: var(--ok);   border-color: #b2d8bf; }
+.badge.state-LOST     { background: #fff6e0; color: var(--warn); border-color: #ead59a; }
 
 .muted { color: var(--muted); }
 .row-actions a { margin-right: 0.5rem; cursor: pointer; color: var(--accent); }

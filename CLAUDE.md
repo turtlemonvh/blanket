@@ -32,7 +32,7 @@ binary invoked with different subcommands.
 - `worker/` — claim loop, task exec, daemonization.
 - `tasks/` — `Task` + `TaskType` types and TOML loading.
 - `lib/` — `bolt/`, `database/`, `queue/`, `objectid/`, `tailed_file/`,
-  `docs/` (see below).
+  `httpx/`, `timing/`, `proclive/`, `docs/` (see below).
 - `command/` — Cobra CLI subcommands (`submit`, `ps`, `rm`, `worker`).
 - `examples/types/` — realistic task-type TOMLs users can copy.
 - `testdata/types/echo_task.toml` — the minimal smoke-test fixture.

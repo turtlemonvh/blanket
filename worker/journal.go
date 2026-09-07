@@ -67,12 +67,17 @@ type OutcomeJournal struct {
 	TaskId   string `json:"taskId"`
 	WorkerId string `json:"workerId"`
 
-	// Pid is the child process's pid. PidStartTs is its start time, used to
-	// guard against pid reuse when checking liveness; it stays 0 until
-	// phase 3 adds the per-platform `proclive` package that can read it —
-	// there's no cheap portable way to get it here today. A zero
-	// PidStartTs means "unknown", and a reader must treat liveness as
-	// inconclusive rather than assuming the pid is this process.
+	// Pid is the child process's pid. PidStartTs is its start time in unix
+	// seconds, read from lib/proclive immediately after cmd.Start()
+	// (turtlemonvh/blanket#23 phase 3), and it is what guards against pid
+	// reuse: a pid that exists but started at a different moment is a
+	// different process, so a reaper can tell "the child is still running"
+	// from "something else now has that number".
+	//
+	// It stays 0 when the platform can't report one, and in every journal
+	// written by a phase-1 worker. Zero means "unknown", and a reader must
+	// treat liveness as inconclusive rather than assuming the pid is this
+	// process — see proclive.IsAlive, which encodes exactly that.
 	Pid        int   `json:"pid"`
 	PidStartTs int64 `json:"pidStartTs"`
 

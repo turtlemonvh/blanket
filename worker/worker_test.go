@@ -42,6 +42,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/turtlemonvh/blanket/lib/httpx"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/testutil"
 	"github.com/turtlemonvh/blanket/tasks"
@@ -215,7 +216,26 @@ func (h *workerHarness) cancel(id objectid.ObjectId) {
 	if err != nil {
 		h.t.Fatalf("cancel task: %v", err)
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	// Asserted, not ignored: the server refuses to cancel a task that is
+	// neither queued nor RUNNING — a CLAIMED one, say, see
+	// server.cancelTaskById — and a caller that drops that answer on the
+	// floor goes on to assert against a task that was never cancelled. That
+	// is exactly how turtlemonvh/blanket#116 stayed hidden.
+	if resp.StatusCode != http.StatusOK {
+		h.t.Fatalf("cancel task %s: unexpected status %d", id.Hex(), resp.StatusCode)
+	}
+}
+
+// waitForState blocks until the server reports the task in the given
+// state. A test that acts on a task mid-run (cancelling it, say) needs the
+// server's view to have caught up first: the worker reaches a state
+// locally before the round trip that records it lands.
+func (h *workerHarness) waitForState(id objectid.ObjectId, state string, within time.Duration) {
+	h.t.Helper()
+	require.Eventually(h.t, func() bool {
+		return h.fetch(id).State == state
+	}, within, 50*time.Millisecond, "task %s never reached %s", id.Hex(), state)
 }
 
 // newWorkerHarness stands up the in-memory server, points viper at it, and
@@ -430,15 +450,9 @@ func TestProcessOne_StoppedMidFlight(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- h.work.ProcessOne(&claimed) }()
 
-	// Give the task a moment to transition to RUNNING, then cancel.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		cur := h.fetch(taskId)
-		if cur.State == "RUNNING" {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	// RUNNING first: a cancel that arrives while the task is still CLAIMED
+	// is refused, and the run would then finish normally.
+	h.waitForState(taskId, "RUNNING", 10*time.Second)
 	h.cancel(taskId)
 
 	// ProcessOne should return within a few seconds once the monitor goroutine
@@ -542,40 +556,55 @@ func TestProcessOne_ProducesLogs(t *testing.T) {
 	}
 }
 
-// metricsGoroutineCount hits the server's /ops/status/ metrics endpoint
-// (see server/serve_metrics.go) and extracts the nGoRoutines gauge. That
-// gauge is refreshed on a 2s ticker rather than computed per-request, so
-// callers that need a value reflecting a just-happened state change should
-// poll (e.g. via require.Eventually) instead of sampling once.
-func (h *workerHarness) metricsGoroutineCount() int64 {
-	h.t.Helper()
-	resp, err := http.Get(h.srv.URL + "/ops/status/")
-	if err != nil {
-		h.t.Fatalf("fetch metrics: %v", err)
-	}
-	defer resp.Body.Close()
-	var m struct {
-		NGoRoutines int64 `json:"nGoRoutines"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
-		h.t.Fatalf("decode metrics: %v", err)
-	}
-	return m.NGoRoutines
+// closeIdleHTTPConns drops every keep-alive connection cached by this
+// test's own client and by the worker's (lib/httpx's shared client), so a
+// goroutine count taken afterwards measures goroutines rather than
+// connection pools.
+//
+// An idle keep-alive connection is not free in goroutine terms: net/http
+// keeps a readLoop and a writeLoop per pooled client connection, plus a
+// conn.serve on the server side, and lib/httpx caches up to 8 per host for
+// a full minute (MaxIdleConnsPerHost/IdleConnTimeout). That is cached
+// capacity, not a leak — but runtime.NumGoroutine() counts it like one,
+// and how much of it exists after a run depends on how many requests
+// happened to overlap, i.e. on how slow the machine is. See
+// TestProcessTasks_NoGoroutineLeak.
+func closeIdleHTTPConns() {
+	http.DefaultClient.CloseIdleConnections()
+	httpx.Client().CloseIdleConnections()
+}
+
+// goroutineDump renders every goroutine's stack, for a failure message
+// that says which goroutines are still around rather than only how many.
+func goroutineDump() string {
+	buf := make([]byte, 1<<20)
+	return string(buf[:runtime.Stack(buf, true)])
 }
 
 // TestProcessTasks_NoGoroutineLeak drains several tasks through the full
-// ProcessTasks loop and confirms the process's goroutine count — as
-// exposed by the /ops/status/ metrics endpoint — returns to its pre-run
-// baseline once the loop exits. Regression guard for the per-task
-// monitoring goroutine ProcessOne starts for every task (worker.go's
-// taskDone channel): it must exit once cmd.Wait() returns rather than
-// accumulate one per task processed.
+// ProcessTasks loop and confirms the process's goroutine count returns to
+// its pre-run baseline once the loop exits. Regression guard for the
+// per-task monitoring goroutine ProcessOne starts for every task
+// (worker.go's taskDone channel): it must exit once cmd.Wait() returns
+// rather than accumulate one per task processed.
 //
-// The metrics gauge only refreshes every 2s (see serve_metrics.go's
-// ticker), so both the baseline and final readings poll with
-// require.Eventually instead of sampling once, and the final comparison
-// allows a small tolerance rather than requiring exact equality — stray
-// runtime/GC goroutines make an exact pre/post match flaky.
+// The worker under test runs in this process, so runtime.NumGoroutine() is
+// the reading. It used to come from the server's /ops/status/ nGoRoutines
+// gauge instead, which reports the same number but only as of its last 2s
+// tick — and only at the cost of an HTTP round trip that opened a
+// connection of its own, perturbing what was being measured. (That
+// endpoint is covered by server/serve_tasks_test.go and the Playwright
+// suite.)
+//
+// Both readings are taken with the HTTP connection pools emptied, because
+// a pooled connection costs goroutines that no amount of waiting reclaims
+// within a test's lifetime — see closeIdleHTTPConns. Without that, this
+// measured peak request concurrency as much as it measured leaks, and so
+// failed on the (slower, and therefore more overlapping) Windows CI runner
+// while passing everywhere else: turtlemonvh/blanket#116.
+//
+// A small tolerance survives: stray runtime/GC goroutines make an exact
+// pre/post match flaky.
 func TestProcessTasks_NoGoroutineLeak(t *testing.T) {
 	h := newWorkerHarness(t)
 	defer h.cleanup()
@@ -583,11 +612,8 @@ func TestProcessTasks_NoGoroutineLeak(t *testing.T) {
 	h.writeTaskType("echo_task", testTaskTypeToml)
 	h.work.CheckInterval = worker.MIN_CHECK_INTERVAL_SECONDS
 
-	var baseline int64
-	require.Eventually(t, func() bool {
-		baseline = h.metricsGoroutineCount()
-		return baseline > 0
-	}, 5*time.Second, 200*time.Millisecond, "never got a nonzero baseline goroutine reading")
+	closeIdleHTTPConns()
+	baseline := runtime.NumGoroutine()
 
 	done := make(chan error, 1)
 	go func() { done <- h.work.ProcessTasks() }()
@@ -612,11 +638,23 @@ func TestProcessTasks_NoGoroutineLeak(t *testing.T) {
 		t.Fatal("ProcessTasks did not exit after stop")
 	}
 
-	const tolerance = int64(5)
-	require.Eventually(t, func() bool {
-		return h.metricsGoroutineCount() <= baseline+tolerance
-	}, 6*time.Second, 250*time.Millisecond,
-		"goroutine count did not return to baseline after worker run (baseline=%d)", baseline)
+	// A server-side connection goroutine exits a moment after its peer
+	// hangs up, so this polls rather than sampling once.
+	const tolerance = 5
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		closeIdleHTTPConns()
+		after := runtime.NumGoroutine()
+		if after <= baseline+tolerance {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("goroutine count did not return to baseline after worker run "+
+				"(baseline=%d, now=%d, tolerance=%d)\n%s",
+				baseline, after, tolerance, goroutineDump())
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // sigtermTaskTypeToml sleeps long enough that the parent test can observe

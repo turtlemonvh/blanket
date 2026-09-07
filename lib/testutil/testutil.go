@@ -22,29 +22,27 @@ import (
 	"github.com/turtlemonvh/blanket/server"
 )
 
-// NewTestServer returns a *server.ServerConfig backed by fresh in-memory
-// BoltDB database and queue instances, plus a cleanup func that releases
-// them. ResultsPath defaults to t.TempDir() (removed automatically by the
+// NewTestServer returns a *server.ServerConfig backed by a fresh throwaway
+// BoltDB file holding both the database and the queue buckets -- the same
+// single-handle arrangement production uses (see
+// bolt.NewTestDBAndQueue) -- plus a cleanup func that releases it.
+// ResultsPath defaults to t.TempDir() (removed automatically by the
 // testing package); callers that need a specific results directory (e.g.
 // worker integration tests that inspect written task output) should
 // overwrite it before use.
 func NewTestServer(t testing.TB) (*server.ServerConfig, func()) {
 	t.Helper()
 
-	DB, DBCloser := bolt.NewTestDB()
-	Q, QCloser := bolt.NewTestQueue()
+	DB, Q, closer := bolt.NewTestDBAndQueue()
 
 	return &server.ServerConfig{
-			DB:           DB,
-			Q:            Q,
-			ResultsPath:  t.TempDir(),
-			Version:      "blanket (test)",
-			TaskEvents:   server.NewEventHub(),
-			WorkerEvents: server.NewEventHub(),
-		}, func() {
-			DBCloser()
-			QCloser()
-		}
+		DB:           DB,
+		Q:            Q,
+		ResultsPath:  t.TempDir(),
+		Version:      "blanket (test)",
+		TaskEvents:   server.NewEventHub(),
+		WorkerEvents: server.NewEventHub(),
+	}, closer
 }
 
 // NewTestHTTPServer wraps handler in an httptest.Server, for tests (e.g.

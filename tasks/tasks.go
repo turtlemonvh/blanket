@@ -77,6 +77,18 @@ type Task struct {
 	// migration is needed.
 	ExitCode *int `json:"exitCode"`
 
+	// RequeueCount is how many times the reaper has put this task back on
+	// the queue after the worker that claimed it died before starting it
+	// (turtlemonvh/blanket#23 phase 3). Additive: a record written before
+	// this field existed decodes as 0, which is exactly right.
+	//
+	// It exists to be capped. A task that kills whichever worker claims it
+	// — an OOM, a driver that takes the machine down — would otherwise be
+	// requeued forever, taking out every worker in turn, with nothing in
+	// the record to show why. Past reaper.maxRequeues the reaper fails the
+	// task instead, and this count is the evidence for that decision.
+	RequeueCount int `json:"requeueCount"`
+
 	// Scheduling (turtlemonvh/blanket#61). All additive: zero values
 	// (0, "", zero ObjectId) mean "no scheduling", so records written
 	// before this feature existed still load and behave exactly as

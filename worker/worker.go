@@ -12,6 +12,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib"
 	"github.com/turtlemonvh/blanket/lib/httpx"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/lib/proclive"
 	"github.com/turtlemonvh/blanket/lib/timing"
 	"github.com/turtlemonvh/blanket/tasks"
 	"os"
@@ -74,11 +75,41 @@ type WorkerConf struct {
 	Stopped       bool              `json:"stopped"`
 	CheckInterval float64           `json:"checkInterval"` // seconds
 	StartedTs     int64             `json:"startedTs"`
+
+	// PidStartTs is Pid's process start time in unix seconds
+	// (turtlemonvh/blanket#23 phase 3), stamped by the worker itself from
+	// lib/proclive when it registers. Worker-owned, like Pid.
+	//
+	// Pid alone is not enough for the reaper: pids are recycled, so a
+	// stale one may now belong to an unrelated process, and "that pid
+	// exists" would read as "this worker is alive" forever. Pairing the
+	// two is what makes a dead worker conclusively dead. Zero means the
+	// platform couldn't report one (or the record predates this field),
+	// which proclive.IsAlive turns into an inconclusive answer, and the
+	// reaper then falls back to heartbeat staleness alone.
+	PidStartTs int64 `json:"pidStartTs"`
+
 	// LastHeardTs is the unix timestamp of the last time the server heard
-	// from (or acted on) this worker record — currently bumped when the
-	// worker is stopped. Intended to grow into a general heartbeat field;
-	// see the "not heartbeated in a while" FIXME on CleanupStalledWorkers.
+	// from this worker: bumped by PUT /worker/:id/heartbeat, and by the
+	// server's own stop/start/restart acts on the record. Server-owned —
+	// the server writes it from its own clock and never from a value the
+	// worker sends, or the reaper's arithmetic would be measuring the
+	// worker's clock skew rather than its liveness.
 	LastHeardTs int64 `json:"lastHeardTs"`
+
+	// Lost marks a worker the reaper believes is gone: its heartbeat has
+	// been stale for longer than reaper.workerStaleAfter
+	// (turtlemonvh/blanket#23 phase 3). Server-owned, and purely
+	// informational — it drives a badge in the UI and nothing else. A
+	// worker can be Lost without being Stopped (a live pid that stopped
+	// heartbeating), and any heartbeat, restart, or start clears it.
+	Lost bool `json:"lost"`
+
+	// StoppedReason records who stopped the worker and why, when it wasn't
+	// a plain operator stop: today only the reaper sets it, to
+	// "reaper: <...>". Server-owned. Phase 5 uses the same field to keep a
+	// worker's own shutdown call from erasing a restart's intent.
+	StoppedReason string `json:"stoppedReason"`
 
 	// stopping is a purely local shutdown flag, set by the SIGTERM/SIGINT
 	// handler (turtlemonvh/blanket#23 phase 1). The claim loop's exit
@@ -92,6 +123,12 @@ type WorkerConf struct {
 	// "nothing has requested a stop" (the zero value for every WorkerConf
 	// that isn't running its own Run loop).
 	stopping *atomic.Bool `json:"-"`
+
+	// serverInstanceId is the last server instance id seen on a heartbeat
+	// response (see heartbeat.go). Local to the running worker: it is
+	// never sent, never stored, and json:"-" keeps Refetch's unmarshal
+	// over *c from clearing it, the same way it leaves `stopping` alone.
+	serverInstanceId string `json:"-"`
 }
 
 // stopRequested reports whether this process has been asked to shut down by
@@ -227,6 +264,10 @@ func (c *WorkerConf) Run() error {
 		}()
 
 		c.Pid = os.Getpid()
+		// Stamped once, here, and sent with every registration: the pid on
+		// its own can't survive pid reuse, and the server has no way to
+		// read this after the fact if the worker is already gone.
+		c.PidStartTs, _ = proclive.StartTime(c.Pid)
 
 		err = c.SetLogfileName()
 		if err != nil {
@@ -443,6 +484,32 @@ func (c *WorkerConf) ProcessTasks() error {
 			"id": c.Id,
 		}).Info("successfully refreshed worker state")
 
+		// Heartbeat on the same cadence as the poll
+		// (turtlemonvh/blanket#23 phase 3). A failure here is not fatal
+		// and does not back the loop off: the worker is demonstrably able
+		// to reach the server (the refetch above just succeeded), and
+		// missing a heartbeat costs nothing until enough of them are
+		// missed for the reaper to notice — which is exactly the signal
+		// the reaper is meant to act on.
+		if hb, herr := c.Heartbeat(); herr != nil {
+			log.WithFields(log.Fields{
+				"id":  c.Id,
+				"err": herr.Error(),
+			}).Warn("heartbeat failed; the server may mark this worker lost")
+		} else {
+			c.noteServerInstance(hb)
+			if hb.Stopped {
+				// The drain landed. Taking it from the heartbeat rather
+				// than waiting for the next refetch is what keeps drain
+				// latency to one check interval.
+				c.Stopped = true
+				log.WithFields(log.Fields{
+					"id": c.Id,
+				}).Info("heartbeat reports this worker has been stopped; shutting down")
+				break
+			}
+		}
+
 		t, err = tasks.MarkAsClaimed(c.Id)
 		if err != nil {
 			delay := c.backoffSleep(outageAttempts)
@@ -579,13 +646,22 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	// recovering if this worker dies. Write the journal before telling the
 	// server anything: a crash between Start and the RUNNING transition is
 	// otherwise completely invisible.
+	// The child's start time goes in alongside its pid: read now, while the
+	// process is certainly alive, because it is only useful as a
+	// before-picture. A reaper comparing it against a re-read later is how
+	// "the child is still running" stays distinguishable from "this pid has
+	// been recycled by something unrelated" (see lib/proclive). A platform
+	// that can't report one leaves 0, the journal's documented "unknown".
+	childStartTs, _ := proclive.StartTime(cmd.Process.Pid)
+
 	journal := &OutcomeJournal{
-		State:     OutcomeStateRunning,
-		RunId:     runId,
-		TaskId:    taskId.Hex(),
-		WorkerId:  c.Id.Hex(),
-		Pid:       cmd.Process.Pid,
-		StartedTs: time.Now().Unix(),
+		State:      OutcomeStateRunning,
+		RunId:      runId,
+		TaskId:     taskId.Hex(),
+		WorkerId:   c.Id.Hex(),
+		Pid:        cmd.Process.Pid,
+		PidStartTs: childStartTs,
+		StartedTs:  time.Now().Unix(),
 	}
 	c.writeJournal(resultDir, journal)
 

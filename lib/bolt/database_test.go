@@ -241,11 +241,13 @@ func TestFinishTask_ExitCode(t *testing.T) {
 		assert.Equal(t, 0, *stored.ExitCode)
 	}
 
-	// A task not in a finishable state is still rejected. CLAIMED is the
-	// genuine case now: a task that never started can't be finished. (An
-	// *already terminal* task is a 200 no-op instead, since
-	// turtlemonvh/blanket#23 phase 1 made the transition idempotent -- see
-	// the repeat-finish case below and TestFinishTask_FirstTerminalStateWins.)
+	// CLAIMED is a finishable state as of turtlemonvh/blanket#23 phase 3.
+	// Two real paths reach a terminal state without ever having been
+	// RUNNING -- the worker reporting ERROR when cmd.Start() itself fails
+	// (which happens before the RUNNING transition), and the reaper
+	// failing a task that has exhausted its requeues -- and rejecting them
+	// left the task CLAIMED forever, which is exactly the stranding #23 is
+	// about.
 	claimed := tasks.Task{
 		Id:        objectid.NewObjectId(),
 		TypeId:    "echo_task",
@@ -253,7 +255,23 @@ func TestFinishTask_ExitCode(t *testing.T) {
 		CreatedTs: time.Now().Unix(),
 	}
 	assert.NoError(t, DB.SaveTask(&claimed))
-	assert.Error(t, DB.FinishTask(claimed.Id, database.FinishState("ERROR")))
+	assert.NoError(t, DB.FinishTask(claimed.Id, database.FinishState("ERROR")))
+	stored, err = DB.GetTask(claimed.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "ERROR", stored.State)
+
+	// A state the machine has no transition out of is still rejected. (An
+	// *already terminal* task is a 200 no-op instead, since
+	// turtlemonvh/blanket#23 phase 1 made the transition idempotent -- see
+	// the repeat-finish case below and TestFinishTask_FirstTerminalStateWins.)
+	bogus := tasks.Task{
+		Id:        objectid.NewObjectId(),
+		TypeId:    "echo_task",
+		State:     "NOT_A_STATE",
+		CreatedTs: time.Now().Unix(),
+	}
+	assert.NoError(t, DB.SaveTask(&bogus))
+	assert.Error(t, DB.FinishTask(bogus.Id, database.FinishState("ERROR")))
 
 	// A repeat finish of an already-terminal task is a no-op, and must not
 	// clobber the exit code the first report stored -- the interaction

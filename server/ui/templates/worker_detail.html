@@ -15,7 +15,19 @@
             <tr><td>Tags</td><td>{{join .Worker.Tags ", "}}</td></tr>
             <tr><td>Started</td><td>{{fmtTs .Worker.StartedTs}}</td></tr>
             <tr><td>Poll Interval</td><td>{{.Worker.CheckInterval}}s</td></tr>
-            <tr><td>Stopped</td><td>{{if .Worker.Stopped}}yes{{else}}no{{end}}</td></tr>
+            <tr><td>State</td><td>
+                {{if .Worker.Stopped}}<span class="badge state-STOPPED">stopped</span>
+                {{else if .Worker.Lost}}<span class="badge state-LOST">lost</span>
+                {{else}}<span class="badge state-ACTIVE">active</span>{{end}}
+            </td></tr>
+            {{/* Heartbeat + reaper detail (turtlemonvh/blanket#23 phase 3).
+                 "Last heard" is the server's own timestamp, so it is the
+                 number the reaper actually acts on; the reason says which
+                 threshold a reaper stop crossed. */}}
+            <tr><td>Last Heard</td><td>{{if .Worker.LastHeardTs}}{{fmtTs .Worker.LastHeardTs}}{{else}}<span class="muted">never</span>{{end}}</td></tr>
+            {{if .Worker.StoppedReason}}
+            <tr><td>Stopped Reason</td><td>{{.Worker.StoppedReason}}</td></tr>
+            {{end}}
             <tr><td>Logfile</td><td class="muted">{{.Worker.Logfile}}</td></tr>
             <tr><td>Full Log</td><td><a href="/worker/{{hex .Worker.Id}}/logs">Download logfile</a></td></tr>
             <tr><td>JSON</td><td><a href="/worker/{{hex .Worker.Id}}">JSON representation</a></td></tr>

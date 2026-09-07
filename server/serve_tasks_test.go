@@ -13,6 +13,7 @@
 //     TestCancelTask_RunningWithoutForce
 //   - PUT /task/:id/cancel?force=true from RUNNING: TestCancelTask_RunningWithForce
 //   - cancelTaskById RUNNING force gate: TestCancelTaskById_RunningRequiresForce
+//   - cancelTaskById from CLAIMED (refused): TestCancelTaskById_Claimed
 //   - malformed/missing :id on task routes (#115), 400 vs. 404:
 //     TestGetTask_InvalidId/_MissingId, TestDeleteTask_InvalidId,
 //     TestCancelTask_InvalidId/_MissingTask, plus the cross-resource table
@@ -25,7 +26,7 @@
 //   - PUT /task/:id/progress (wrong state): TestUpdateProgress_WrongState
 //   - PUT /task/:id/finish: TestFinishTask_Valid, TestFinishTask_MissingTask,
 //     TestFinishTask_AlreadyTerminalIsNoop, TestFinishTask_InvalidState,
-//     TestFinishTask_FromClaimedIsBadRequest,
+//     TestFinishTask_FromClaimedIsAccepted,
 //     TestFinishTask_InvalidExitCode (serve_sync_test.go)
 //   - PUT /task/:id/run + /finish idempotency and the RunId fencing token
 //     (turtlemonvh/blanket#23 phase 1): TestRunTask_*, TestFinishTask_*RunId*,
@@ -523,6 +524,56 @@ func TestCancelTaskById_AlreadyTerminal(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTaskNotCancelable)
 }
 
+// TestCancelTaskById_Claimed pins a state this PR's reaper work makes easy
+// to misread: FinishTask now accepts CLAIMED as a source state (so the
+// reaper can resolve a task whose worker died between the claim and the
+// run), but *cancelling* still does not. A CLAIMED task belongs to a worker
+// that has already started, or is about to start, a subprocess for it; the
+// worker learns about a cancellation from the STOPPED tombstone via its
+// monitor goroutine, and that goroutine does not exist until the task is
+// RUNNING. So the tombstone would either be clobbered by the worker's own
+// MarkAsRunning or leave an orphaned child, and cancelling from CLAIMED
+// stays refused until the worker side can handle losing that race.
+//
+// The consequence for tests: a cancel is only meaningful once the *server*
+// reports RUNNING. See worker/outage_test.go's TestProcessOne_JournalLifecycle
+// and turtlemonvh/blanket#116.
+func TestCancelTaskById_Claimed(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+	r := s.GetRouter()
+
+	created := postTask(r, "echo_task")
+	var createdTask tasks.Task
+	json.Unmarshal(created.Body.Bytes(), &createdTask)
+
+	wconf := worker.WorkerConf{
+		Id:      objectid.NewObjectId(),
+		Tags:    []string{"bash", "unix"},
+		Stopped: false,
+	}
+	assert.NoError(t, s.DB.UpdateWorker(&wconf))
+
+	claimReq, _ := http.NewRequest("POST", fmt.Sprintf("/task/claim/%s", wconf.Id.Hex()), nil)
+	claimW := httptest.NewRecorder()
+	r.ServeHTTP(claimW, claimReq)
+	assert.Equal(t, http.StatusOK, claimW.Code)
+
+	claimed, err := s.DB.GetTask(createdTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "CLAIMED", claimed.State)
+
+	// Neither with nor without force.
+	assert.ErrorIs(t, s.cancelTaskById(context.Background(), createdTask.Id, false), ErrTaskNotCancelable)
+	assert.ErrorIs(t, s.cancelTaskById(context.Background(), createdTask.Id, true), ErrTaskNotCancelable)
+
+	still, err := s.DB.GetTask(createdTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "CLAIMED", still.State)
+}
+
 // putTaskInRunningState registers a worker matching echo_task's tags, claims
 // createdTask for it, and marks the task RUNNING — all through the same
 // handlers a real worker would call (POST /task/claim/:workerid, PUT
@@ -806,7 +857,7 @@ func TestFinishTask_MissingTask(t *testing.T) {
 // report was already recorded. The first terminal state a task reaches
 // wins, and saying so with a 200 lets the worker finish cleanly.
 // A finish from a non-terminal but ineligible state (CLAIMED) still 400s;
-// see TestFinishTask_FromClaimedIsBadRequest.
+// see TestFinishTask_FromClaimedIsAccepted.
 func TestFinishTask_AlreadyTerminalIsNoop(t *testing.T) {
 	cleanup := setupTestTaskType(t)
 	defer cleanup()
@@ -1425,13 +1476,22 @@ func TestFinishTask_RepeatKeepsStoredExitCode(t *testing.T) {
 	}
 }
 
-// A CLAIMED task has not started yet, so a finish for it is a genuine
-// client error rather than a replay — it keeps the historical 400.
-func TestFinishTask_FromClaimedIsBadRequest(t *testing.T) {
-	_, r, taskId, cleanup := newClaimedTask(t)
+// A CLAIMED task can be finished as of turtlemonvh/blanket#23 phase 3.
+// This used to be a 400, on the reasoning that a task which never started
+// cannot have an outcome — but two real paths reach a terminal state from
+// CLAIMED: the worker reporting ERROR when cmd.Start() itself fails
+// (before the RUNNING transition ever happens), and the reaper failing a
+// task that has exhausted its requeues. Refusing them stranded the task in
+// CLAIMED forever, which is the failure #23 exists to fix.
+func TestFinishTask_FromClaimedIsAccepted(t *testing.T) {
+	s, r, taskId, cleanup := newClaimedTask(t)
 	defer cleanup()
 
-	assert.Equal(t, http.StatusBadRequest, putTransition(r, taskId, "finish", "state=SUCCESS&runId=RUN1"))
+	assert.Equal(t, http.StatusOK, putTransition(r, taskId, "finish", "state=ERROR&runId=RUN1"))
+
+	got, err := s.DB.GetTask(taskId)
+	assert.NoError(t, err)
+	assert.Equal(t, "ERROR", got.State)
 }
 
 // TestUpdateProgress_RunIdMismatchIsConflict: progress carries the same

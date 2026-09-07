@@ -134,6 +134,12 @@ func (DB *BlanketBoltDB) UpdateWorker(w *worker.WorkerConf) error {
 			// Server-owned fields survive a worker's own update.
 			merged.Stopped = current.Stopped
 			merged.LastHeardTs = current.LastHeardTs
+			merged.StoppedReason = current.StoppedReason
+			// Lost is server-owned too, but a re-registering worker is
+			// itself evidence of life, so this is the one server-owned
+			// field an update clears rather than preserves. Leaving it set
+			// would strand the badge on a worker that plainly came back.
+			merged.Lost = false
 		}
 
 		bts, err := json.Marshal(&merged)
@@ -161,7 +167,33 @@ func (DB *BlanketBoltDB) UpdateWorker(w *worker.WorkerConf) error {
 func (DB *BlanketBoltDB) StartWorker(workerId objectid.ObjectId) (worker.WorkerConf, error) {
 	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
 		w.Stopped = false
+		w.StoppedReason = ""
+		w.Lost = false
 		w.LastHeardTs = time.Now().Unix()
+		return nil
+	})
+}
+
+// HeartbeatWorker records that the server just heard from a worker
+// (turtlemonvh/blanket#23 phase 3): LastHeardTs is stamped from the
+// server's own clock and the Lost flag, if the reaper had set one, is
+// cleared.
+//
+// The timestamp is deliberately not a parameter. Every staleness
+// calculation in the reaper is `now - LastHeardTs`, and both halves have
+// to come from the same clock or the answer measures the difference
+// between two machines' idea of the time rather than whether the worker is
+// alive. (Workers are same-host today, so the skew would be zero — but the
+// reaper deletes state on the strength of this number, and "it happens to
+// be the same clock" is not a property worth depending on.)
+//
+// Returns the updated record so the handler can answer with the worker's
+// current Stopped flag: that round trip is what lets a drain take effect
+// within one check interval instead of one poll of the whole config.
+func (DB *BlanketBoltDB) HeartbeatWorker(workerId objectid.ObjectId) (worker.WorkerConf, error) {
+	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
+		w.LastHeardTs = time.Now().Unix()
+		w.Lost = false
 		return nil
 	})
 }
@@ -174,6 +206,9 @@ func (DB *BlanketBoltDB) StartWorker(workerId objectid.ObjectId) (worker.WorkerC
 func (DB *BlanketBoltDB) StopWorker(workerId objectid.ObjectId) (worker.WorkerConf, error) {
 	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
 		w.Stopped = true
+		// An explicit stop is its own explanation, and it overrides
+		// whatever the reaper may have written earlier.
+		w.StoppedReason = ""
 		w.LastHeardTs = time.Now().Unix()
 		return nil
 	})
@@ -187,15 +222,6 @@ func (DB *BlanketBoltDB) DeleteWorker(workerId objectid.ObjectId) error {
 		}
 		return b.Delete(IdBytes(workerId))
 	})
-}
-
-// FIXME: Look for workers that have not heartbeated in a while
-// - get pids
-// - query OS for process information
-// - remove from DB if not running (pid is not found or is to a non-worker process)
-// - kill if running and not responsive
-func (DB *BlanketBoltDB) CleanupStalledWorkers() error {
-	return nil
 }
 
 // Tasks
@@ -235,15 +261,6 @@ func (DB *BlanketBoltDB) UpdateTaskProgress(taskId objectid.ObjectId, progress i
 		t.Progress = progress
 		return nil
 	})
-}
-
-// Things to clean up
-// - tasks still in state `CLAIMED` X min after StartedTs because:
-//   - worker failed to parse worker object
-//   - worker crashed trying to run the task
-func (DB *BlanketBoltDB) CleanupStalledTasks() error {
-	// FIXME: Implement me
-	return nil
 }
 
 // This will be called on a task pulled out of the queue
@@ -355,6 +372,14 @@ func (DB *BlanketBoltDB) RunTask(taskId objectid.ObjectId, fields *database.Task
 // the ExitCode a first report may already have written
 // (turtlemonvh/blanket#27) — a retry must never downgrade a recorded exit
 // status to "unknown".
+//
+// CLAIMED is an eligible source state (turtlemonvh/blanket#23 phase 3).
+// There are two ways a task reaches a terminal state without ever having
+// been RUNNING, and both were rejected before: the worker's own
+// "cmd.Start() failed, report ERROR" path, which runs before the RUNNING
+// transition, and the reaper failing a task that has exhausted its
+// requeues. Refusing them left the task CLAIMED forever, which is the
+// stranding this whole issue is about.
 func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, fields *database.TaskFinishConfig) error {
 	// Set lots of fields
 	return ModifyTaskInBoltTransaction(DB.db, &taskId, func(t *tasks.Task) error {
@@ -380,9 +405,9 @@ func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, fields *database.T
 		}
 
 		switch t.State {
-		case "RUNNING", "WAITING", "SCHEDULED", "RECURRING", "PAUSED":
+		case "RUNNING", "WAITING", "SCHEDULED", "RECURRING", "PAUSED", "CLAIMED":
 		default:
-			return fmt.Errorf("Task found in unexpected state; found '%s', expected one of 'RUNNING', 'WAITING', 'SCHEDULED', 'RECURRING', or 'PAUSED'", t.State)
+			return fmt.Errorf("Task found in unexpected state; found '%s', expected one of 'RUNNING', 'WAITING', 'SCHEDULED', 'RECURRING', 'PAUSED', or 'CLAIMED'", t.State)
 		}
 		t.State = fields.State
 		if t.State == "SUCCESS" {

@@ -65,7 +65,7 @@ verify Windows-specific changes natively:
 
 ```powershell
 go build -o blanket-windows-amd64.exe .
-go test ./worker/... ./command/... ./lib/service/...
+go test ./worker/... ./command/... ./lib/service/... ./lib/proclive/...
 pwsh scripts/smoke.ps1 -Binary .\blanket-windows-amd64.exe
 ```
 
@@ -106,7 +106,8 @@ header comment.
   `actions/setup-go`'s `go-version-file: go.mod`, so it tracks the same
   toolchain pin everything else uses — see CLAUDE.md's "three Go version
   pins" gotcha), runs `go test` for the packages with Windows-specific
-  code (`./worker/...`, `./command/...`, `./lib/service/...`), then a
+  code (`./worker/...`, `./command/...`, `./lib/service/...`,
+  `./lib/proclive/...`), then a
   PowerShell smoke pass (`scripts/smoke.ps1` — see below) and two runs of
   `scripts/install.ps1` against the just-built binary, asserting its
   `$PROFILE` shell-integration block is written idempotently. It does

@@ -31,6 +31,7 @@ plumbing.
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -105,15 +106,31 @@ func (s *ServerConfig) startBackgroundLoops(ctx context.Context) func() {
 		interval = DefaultSchedulerInterval
 	}
 
-	done := make(chan struct{})
+	var wg sync.WaitGroup
+
+	wg.Add(1)
 	go func() {
-		defer close(done)
+		defer wg.Done()
 		s.schedulerLoop(loopCtx, interval)
 	}()
 
+	// The reaper (turtlemonvh/blanket#23 phase 3). Off unless explicitly
+	// enabled: command/serve.go passes the `reaper.enabled` config key,
+	// which defaults to true, while a ServerConfig built by hand in a test
+	// gets no loop rewriting task state underneath it. See
+	// server/reaper.go for the grace layers that make a pass safe to run
+	// right after a restart.
+	if s.ReaperEnabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.reaperLoop(loopCtx, s.reaperInterval())
+		}()
+	}
+
 	return func() {
 		cancel()
-		<-done
+		wg.Wait()
 	}
 }
 
