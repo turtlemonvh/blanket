@@ -106,10 +106,36 @@ header comment.
 
 `.github/workflows/ci.yml` runs on PRs and master pushes.
 
-- **`test`** (required check): builds the image, then runs
-  `docker-check-fmt`, `docker-test`, `docker-test-smoke`,
-  `docker-test-browser` in sequence. Uploads Playwright HTML report
-  as an artifact on failure.
+- **`fmt`**, **`unit`**, **`smoke`**, **`browser`**: one job per test
+  surface, all running in parallel. Each builds the toolchain image via
+  the shared `.github/actions/toolchain-image` composite action, then
+  runs a single `make docker-*` target — `docker-check-fmt`,
+  `docker-test`, `docker-test-smoke`, `docker-test-browser`
+  respectively. `browser` uploads the Playwright HTML report as an
+  artifact on failure.
+
+  These were four sequential steps inside a single `test` job until
+  #155 fanned them out, which cut the blocking path from ~265s to
+  ~136s. The old rationale for keeping them serial was that "parallel
+  jobs would each pay the image build" — true, but that is an argument
+  about billed minutes, and this repo is public, so GitHub-hosted
+  standard runners are free and unmetered. Total runner minutes go up;
+  wall clock goes down. On a public repo that is the right trade.
+
+  Exactly one of them (`unit`) passes `cache-to` to the composite
+  action and so publishes layers back to the GHA cache; the rest read
+  from it. Since they all build the same image concurrently, having
+  each export `mode=max` would upload the same layers N times for no
+  benefit.
+- **`test`** (required check): an aggregator, not a test runner. It
+  `needs` the four surfaces above and fails if any of them did not
+  succeed. It keeps that name so master's branch protection — which
+  lists `test` as its single required context — goes on working across
+  the fan-out with no settings change, and with no window in which
+  master merges against a check that no longer reports. The
+  `if: always()` plus the explicit result comparison is load-bearing: a
+  job whose `needs` failed is *skipped*, and a skipped required check
+  does **not** block a merge.
 - **`windows`**: runs natively on `windows-latest` — no Docker (Docker
   and Playwright are out of scope on Windows; see the issue #79
   discussion). Builds the binary with `go build` (Go version pinned via
@@ -127,11 +153,14 @@ header comment.
   (currently everything scheduling-related is Linux-only).
 - **`cross-compile`** (master pushes only): `make docker-build` —
   catches platform-only breakage without spending minutes on every PR.
-- **`race`**: builds the same toolchain image as `test`, then runs
-  `make docker-test-race` (issue #119). `continue-on-error: true` — a red
-  `race` run is informational, not blocking, until it's been green for a
-  week; promote it to a required check (drop `continue-on-error`, add to
-  branch protection) once that holds.
+- **`race`**: builds the same toolchain image as the surfaces above,
+  then runs `make docker-test-race` (issue #119). `continue-on-error:
+  true` — a red `race` run is informational, not blocking, until it's
+  been green for a week; promote it to a required check (drop
+  `continue-on-error`, add to branch protection) once that holds. As of
+  the #155 measurements that bar has demonstrably not been met: over 36
+  sampled runs `race` failed 11.1% of the time, the highest rate of any
+  job.
 
 `.github/workflows/licenses.yml` runs the `licenses` job separately, and
 is `paths:`-gated to `go.mod`/`go.sum` changes on PRs and master pushes,

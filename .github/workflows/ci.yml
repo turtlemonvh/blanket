@@ -15,42 +15,70 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Each test surface gets its own job (turtlemonvh/blanket#155). They used to
+# be four sequential steps inside a single `test` job, on the rationale that
+# "parallel jobs would each pay the image build" -- true, but that is an
+# argument about billed minutes, and this repo is public, so GitHub-hosted
+# standard runners are free and unmetered. What is actually scarce here is
+# wall-clock latency on a PR, and four concurrent 60s image builds cost 60s
+# of wall clock rather than 240s.
+#
+# Measured over 47 runs before the change: the `test` job averaged 265s
+# (max 350s) and was the blocking path on every PR. Fanned out, the longest
+# leaf is ~135s, and the blocking path becomes the native `windows` job at
+# ~136s -- see #155 for the full step-level breakdown.
+#
+# The second benefit is diagnostic: a red `browser` next to a green `unit`
+# says what broke without opening a log, and one surface failing no longer
+# hides the result of the three that would have run after it.
 jobs:
-  # Single job that builds the Dockerfile, then runs every test surface
-  # against the resulting image. Sequential (not fanned out) because the
-  # image isn't in a registry — parallel jobs would each pay the image build.
-  test:
-    name: test
+  # ---------------------------------------------------------------------
+  # Test surfaces. One job per `make docker-*` target, all in parallel.
+  # ---------------------------------------------------------------------
+
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain-image
+      - name: gofmt
+        run: make docker-check-fmt
+
+  unit:
+    name: unit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Buildx is required for the gha cache backend used below.
-      - uses: docker/setup-buildx-action@v3
-
-      # First cold run takes ~5m; cached runs settle to ~30s when go.mod /
-      # package-lock.json haven't changed. mode=max exports every layer for
-      # maximum cache hit rate — fits inside GHA's 10GB repo budget today.
-      - name: Build toolchain image
-        uses: docker/build-push-action@v5
+      # The one job that publishes layers back to the GHA cache. Every other
+      # docker job in this workflow reads from it; see the composite action's
+      # `cache-to` input for why exactly one writer.
+      - uses: ./.github/actions/toolchain-image
         with:
-          context: .
-          tags: blanket-dev:latest
-          load: true
-          cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      # Reuse the Makefile targets verbatim — Dockerfile is the single
-      # source of truth, same locally and in CI.
-      - name: gofmt
-        run: make docker-check-fmt
 
       - name: Go tests
         run: make docker-test
 
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain-image
+      # docker-test-smoke chains smoke + restart + migrate + restart-machine
+      # + upgrade — all of them cross-process tests against the built binary.
+      # See the Makefile for why each one cannot be a Go test.
       - name: Smoke test
         run: make docker-test-smoke
 
+  browser:
+    name: browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain-image
       - name: Browser tests
         run: make docker-test-browser
 
@@ -66,6 +94,52 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  # ---------------------------------------------------------------------
+  # Aggregate gate.
+  # ---------------------------------------------------------------------
+
+  # `test` is the only context in master's branch protection required-checks
+  # list. Keeping a job by that name — now an aggregator over the four
+  # surfaces above rather than the job that runs them — means the fan-out
+  # needs no branch-protection edit, and there is no window in which master
+  # is merging against a check that no longer reports.
+  #
+  # `if: always()` plus the explicit result comparison is load-bearing: a job
+  # whose `needs` failed is *skipped*, and a skipped required check does not
+  # block a merge. Without this the fan-out would quietly defeat the very
+  # protection it is trying to preserve.
+  test:
+    name: test
+    needs: [fmt, unit, smoke, browser]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check every test surface succeeded
+        env:
+          RESULTS: >-
+            fmt=${{ needs.fmt.result }}
+            unit=${{ needs.unit.result }}
+            smoke=${{ needs.smoke.result }}
+            browser=${{ needs.browser.result }}
+        run: |
+          echo "$RESULTS"
+          failed=0
+          for pair in $RESULTS; do
+            case "${pair#*=}" in
+              success) ;;
+              *) echo "::error::${pair%%=*} did not succeed (${pair#*=})"; failed=1 ;;
+            esac
+          done
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "all test surfaces passed"
+
+  # ---------------------------------------------------------------------
+  # Supplementary jobs. Already parallel before the fan-out; unchanged
+  # except for picking up the shared composite action.
+  # ---------------------------------------------------------------------
+
   # Race detector over the packages listed in the Makefile's test-race
   # target (turtlemonvh/blanket#119). Not yet a required check:
   # continue-on-error so a red run is informational rather than blocking,
@@ -73,30 +147,23 @@ jobs:
   # required (drop continue-on-error, add to branch protection) once it's
   # been green for a week -- long enough to catch a flake pattern before
   # it starts blocking every PR.
+  #
+  # Note for whoever does that promotion: over the 36 runs sampled in #155
+  # this job failed 11.1% of the time, the highest rate of any job, so the
+  # "green for a week" bar has demonstrably not been met yet.
   race:
     name: race
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build toolchain image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          tags: blanket-dev:latest
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
+      - uses: ./.github/actions/toolchain-image
       - name: Go tests (race detector)
         run: make docker-test-race
 
-  # Native windows-latest job (issue #79). Unlike `test`, this doesn't use
-  # Docker (Docker/Playwright on Windows runners is out of scope per the
-  # issue discussion) — it builds the binary directly with the Go
+  # Native windows-latest job (issue #79). Unlike the docker jobs, this
+  # doesn't use Docker (Docker/Playwright on Windows runners is out of scope
+  # per the issue discussion) — it builds the binary directly with the Go
   # toolchain the runner provides, then runs the subset of the test suite
   # that actually exercises Windows-specific code: the packages with
   # _windows.go files (worker/, command/) plus lib/service (rendered
@@ -104,6 +171,10 @@ jobs:
   # Windows-host run here), and a small PowerShell smoke script covering
   # both native Windows executors (cmd, powershell). See CONTRIBUTORS.md's
   # CI section for what this job does and deliberately doesn't cover.
+  #
+  # Now the blocking path on a PR (~136s mean), since the docker surfaces
+  # fanned out beneath it. Its `setup-go` step averages 68s and peaks at
+  # 114s, which is where to look first if this needs to get faster (#155).
   windows:
     name: windows
     runs-on: windows-latest
@@ -132,7 +203,7 @@ jobs:
       # OpenProcess/GetProcessTimes (turtlemonvh/blanket#23 phase 3) and
       # this is the only job that can execute that file at all. Not
       # `go test ./...` — Docker- and browser-dependent surfaces are
-      # covered by the Linux `test` job.
+      # covered by the Linux jobs.
       - name: Go tests (Windows-specific packages)
         run: go test -v -count=1 ./worker/... ./command/... ./lib/service/... ./lib/proclive/...
 
@@ -180,21 +251,13 @@ jobs:
 
   # Cross-compile only runs on master pushes. It catches darwin/windows-only
   # breakage at the tip of master without spending minutes on every PR (and
-  # the test job above already exercises the linux build end-to-end).
+  # the linux build is exercised end-to-end by the jobs above).
   cross-compile:
     name: cross-compile
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build toolchain image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          tags: blanket-dev:latest
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - uses: ./.github/actions/toolchain-image
       - name: Cross-compile linux/darwin/windows
         run: make docker-build
