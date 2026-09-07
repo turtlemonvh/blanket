@@ -99,6 +99,29 @@ test-migrate:
 test-restart-machine:
 	bash scripts/restart_machine.sh
 
+# SHA256SUMS over the cross-compiled binaries, and the offline bundle
+# (turtlemonvh/blanket#23 phase 6). The release workflow runs both after
+# `make docker-build`; run them locally the same way, because a release
+# artifact that only CI can produce is one nobody can check before tagging.
+#
+# `make checksums` needs the three binaries in the repo root, so:
+#     make linux darwin windows checksums bundle VERSION=v0.5.0
+checksums:
+	bash scripts/bundle.sh checksums
+
+bundle:
+	VERSION=$(VERSION) bash scripts/bundle.sh bundle
+
+# Upgrade / rollback tests for the built binary (turtlemonvh/blanket#23
+# phase 6). Cross-process by nature and then some: the claim is "the
+# binary on disk was replaced and a *different* process came back running
+# it", which no in-process test can even state. It builds blanket twice
+# with different VERSION ldflags, serves them from a fake releases API and
+# from a bundle, and drives the real command. Shares scripts/lib/harness.sh
+# with the other four.
+test-upgrade:
+	bash scripts/upgrade.sh
+
 install-playwright:
 	cd tests/e2e && npm install && npx playwright install --with-deps chromium
 
@@ -128,6 +151,8 @@ clean:
 	-rm -f ${TEST_REPORT}
 	-rm -f ${VET_REPORT}
 	-rm -f ${BINARY}-*
+	-rm -f SHA256SUMS
+	-rm -rf dist
 
 # ---------------------------------------------------------------------------
 # Docker — reproducible toolchain image. Same image CI will run.
@@ -169,10 +194,16 @@ docker-test-browser: docker-image
 	$(DOCKER_RUN) make linux test-browser
 
 docker-test-smoke: docker-image
-	$(DOCKER_RUN) make linux test-smoke test-restart test-migrate test-restart-machine
+	$(DOCKER_RUN) make linux test-smoke test-restart test-migrate test-restart-machine test-upgrade
 
 docker-build: docker-image
 	$(DOCKER_RUN) make linux darwin windows VERSION=$(VERSION)
+
+# Everything a release attaches: the three binaries, SHA256SUMS over them,
+# and the offline bundle. Same image CI uses, so `make docker-release
+# VERSION=v0.5.0` locally produces byte-identical checksums to the tag.
+docker-release: docker-image
+	$(DOCKER_RUN) make linux darwin windows checksums bundle VERSION=$(VERSION)
 
 # Interactive shell in the toolchain image for ad-hoc work.
 docker-shell: docker-image
@@ -189,4 +220,4 @@ docker-shell: docker-image
 docker-clean:
 	-docker volume rm blanket-dev-cache blanket-npm-cache
 
-.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-shell docker-clean
+.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine test-upgrade checksums bundle install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-release docker-shell docker-clean

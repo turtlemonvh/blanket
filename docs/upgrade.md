@@ -3,14 +3,25 @@
 How blanket's database is versioned, backed up, and migrated, and what to
 do when something goes wrong in the middle of it.
 
-This page covers the storage half of [issue
-#23](https://github.com/turtlemonvh/blanket/issues/23) and the restart
-state machine that drives an upgrade. `blanket upgrade` / `blanket
-rollback` (phase 6) are not built yet — until they are, the restart is
-driven by the `curl` recipe below, which is the same sequence that command
-will run.
+This page covers [issue
+#23](https://github.com/turtlemonvh/blanket/issues/23) end to end: the
+database's schema versions and backups, the restart state machine, and
+`blanket upgrade` / `blanket rollback`, which drive it.
 
 ## The short version
+
+```
+blanket upgrade --check     # is there a newer release?
+blanket upgrade --yes       # install it and restart onto it
+blanket rollback --yes      # change your mind
+```
+
+`blanket upgrade` verifies the download against the release's
+`SHA256SUMS`, keeps the binary it replaces in a [rollback
+slot](#rollback-slots), takes a database backup before anything moves, and
+walks the running server through the [restart state
+machine](#the-restart-state-machine). Everything it does is also
+[printable](#print-plan) and doable by hand.
 
 If you are upgrading from a blanket released before 0.3.0:
 
@@ -176,8 +187,9 @@ A backup momentarily doubles the database's footprint, so:
 ### Retention
 
 The **3 newest** backups are kept and older ones are pruned; the count is
-`storage.backupRetention`. Three matches the three rollback slots phase 6
-will keep — the database half of a slot is exactly one of these files.
+`storage.backupRetention`. Three matches the three [rollback
+slots](#rollback-slots) `blanket upgrade` keeps — the database half of a
+slot is exactly one of these files.
 There is no size cap, by design: a cap that silently stopped taking
 backups would defeat the purpose, so the policy is a count plus a warning.
 
@@ -261,10 +273,315 @@ loss rather than as a compile error.
 `--yes` is required, and there is no interactive prompt: this runs in
 maintenance windows and from scripts, where a prompt is a hang.
 
+## Upgrading with the CLI
+
+`blanket upgrade` is a *driver* of everything else on this page. It does
+not contain its own copy of the backup, the migration or the restart — the
+server owns all three — and what it adds is the part that lives outside the
+process: choosing a release, proving the bytes are the right bytes, putting
+the file on disk without ever leaving a partial one there, keeping what it
+replaced, and writing down what it did so a `kill -9` of the CLI is
+recoverable.
+
+```
+blanket upgrade --check                    is a newer version available?
+blanket upgrade --print-plan               the exact steps, with real paths
+blanket upgrade --yes                      do it
+blanket upgrade v0.5.0 --yes               a specific version
+blanket upgrade --bundle b.tar.gz --yes    from an offline bundle
+blanket upgrade --stage-only               download + verify, install nothing
+blanket upgrade --no-restart --yes         install, leave the server alone
+blanket upgrade --resume --yes             finish an interrupted attempt
+blanket upgrade --abort                    unwind an interrupted attempt
+```
+
+### The sequence
+
+```
+discover   which version, and where its bytes come from
+verify     against SHA256SUMS, always
+stage      a temp file beside the installed binary
+begin      POST /ops/restart/begin
+backup     POST /ops/backup            -> BACKED_UP, and the record names the file
+pause      POST /ops/restart/pause     -> no worker is forked from here on
+slot+swap  keep the old binary, rename the new one into place
+swapped    POST /ops/restart/swapped
+drain      POST /ops/restart/drain     -> unless --drain-mode never
+exec       POST /ops/restart/exec
+verify     a server answers with a NEW instanceId and the new version
+```
+
+Every step is written to [the journal](#the-upgrade-journal) before the
+next one starts.
+
+An upgrade **drains** where a routine restart does not. That is
+[`--drain-mode`](#--drain-mode-whether-a-restart-stops-its-workers)'s whole
+distinction: a worker rides out a server restart by design, so a config
+change should not stop the fleet — but a new binary contains new *worker*
+code, and a worker that survived the restart is running the old one.
+`--drain-mode never` is how an operator who would rather keep a long task
+running says so.
+
+### Verification, and why there is no `--no-verify`
+
+Every binary is checked against the release's `SHA256SUMS` asset before it
+is installed, and there is no flag to turn that off. A flag that disabled
+the only integrity check on a file about to replace the one you are running
+is a flag that every "just make it work" answer on the internet would tell
+people to pass.
+
+The consequence is worth stating plainly:
+
+> **Releases published before this feature existed carry no `SHA256SUMS`
+> and cannot be auto-upgraded *to*.** There is no honest way to add
+> checksums to a published release after the fact. `blanket upgrade
+> v0.2.0` will refuse and say so. Install such a release by hand, or build
+> a [bundle](#offline-bundles) from it.
+
+Upgrading *from* an old release is unaffected — what matters is which
+release you are upgrading to.
+
+### Exit codes
+
+Five outcomes are distinguishable rather than collapsed into 0/1, because
+the caller is usually a script in a maintenance window and the difference
+between "there was nothing to do" and "I replaced the binary but the server
+did not come back" is the difference between going to bed and getting
+paged. `blanket rollback` uses the same codes.
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Done: the new binary is installed and a new server answered on it. For `--check`, **an upgrade is available**. |
+| `10` | **Nothing to do** — already at the target version, or nothing to roll back to. |
+| `11` | **Staged only** — the binary is staged or installed and no restart was attempted (`--stage-only`, `--no-restart`, or no server was running). |
+| `12` | **Verification failed** — a checksum did not match, or the server that came back is not the one that was installed. |
+| `13` | **Restart refused** — the binary is in place but the server would not restart: a 409 from the state machine, or a restart already in flight. |
+| `1` | Any other error. |
+| `2` | Usage: the flags don't make sense, or a precondition a human must fix is unmet (including a missing `--yes`). |
+
+Note that `--check` exits **0** when there *is* something to do, which is
+the opposite of [`blanket migrate --check`](#blanket-migrate). They answer
+different questions: `migrate --check` is a health probe ("is anything
+pending?", where pending is the abnormal case), and `upgrade --check` asks
+"would this command do something?".
+
+### `--print-plan`
+
+Prints the [manual `curl` sequence](#restarting-by-hand) with *this*
+install's port, paths, slot directory and target version substituted in,
+and stops. It is the same seven steps in the same order, because it is the
+same sequence — the command runs it over HTTP instead of through `curl`.
+
+```
+$ blanket upgrade --print-plan
+# blanket upgrade v0.4.0 -> v0.5.0
+# The CLI runs exactly these steps over HTTP. Journal: /var/lib/blanket/upgrade/journal.json
+
+BASE=http://localhost:8773
+OPS=(-H 'X-Blanket-Restart: 1')
+
+# 0. Verify and stage the new binary beside the installed one.
+#    source: https://github.com/turtlemonvh/blanket/releases/download/v0.5.0/blanket-linux-amd64
+#    checksums: SHA256SUMS from the v0.5.0 release
+#    staged as: .blanket-upgrade-XXXXXX* in /home/you/.local/bin
+...
+```
+
+### Atomic staging
+
+The rule: **the installed path is never a partial file.** The download goes
+to a temp file *in the same directory* as the installed binary (a different
+directory can be a different filesystem, which would make the last step a
+copy rather than a rename), is verified there, and is then renamed into
+place. Rename within a directory is atomic — any reader sees either the old
+file or the new one.
+
+On unix that rename is the whole swap: the kernel keeps the old inode alive
+for the running process, so the server keeps executing the image it started
+with until it re-execs. On **Windows** it cannot be, because Windows
+refuses to replace a file that is currently executing. There the running
+`blanket.exe` is renamed out of the way first (`blanket.exe.old-<ts>`) and
+swept on the next `blanket upgrade` or `blanket rollback`, once the process
+holding it is gone.
+
+`scripts/install.sh` and `scripts/install.ps1` follow the same
+download-verify-rename pattern, for the same reason.
+
+### Rollback slots
+
+Each upgrade keeps the binary it replaced, together with the name of the
+database backup taken just before it, in a **slot** under
+`<state dir>/slots/<timestamp>-<version>/`. Three are kept and older ones
+are pruned (`upgrade.slots`), matching `storage.backupRetention` — the
+database half of a slot *is* one of those backup files, so a fourth slot
+would be one whose backup had already been pruned out from under it.
+
+There is no size cap, by design (the same call the backups make): a cap
+that silently stopped keeping slots would remove the safety net in exactly
+the situation it exists for. Instead, an upgrade **warns** when the
+filesystem holding the slots has less room than three more copies of the
+binary would need.
+
+Pruning happens *after* the new slot is written, never before. A prune that
+ran first would, on a full disk, delete a good rollback point and then fail
+to create its replacement.
+
+```
+blanket rollback --list               what can be rolled back to
+blanket rollback --yes                the newest slot
+blanket rollback --slot <dir> --yes   a specific one
+blanket rollback --restore-db --yes   also restore that slot's database backup
+```
+
+The saved binary is verified against the digest recorded when it was saved,
+before it is put back — a rollback that installed a corrupted binary would
+turn a bad upgrade into an unbootable install. A rollback also keeps a slot
+of what *it* replaced, so it is itself undoable.
+
+**`--restore-db` is opt-in and the binary is not**, because they are not
+the same kind of undo. Putting the binary back loses nothing. Putting the
+database back discards every task, worker record and queue entry created
+since the backup was taken. It also requires the **server stopped**, for
+the same reason `blanket migrate --restore` does: overwriting the file
+underneath a running server does not restore anything, since bolt has the
+old pages mapped and flushes them back over the new contents on the next
+write.
+
+### The upgrade journal
+
+The CLI's own state, at `<state dir>/journal.json`. This is the half of the
+restart state that [lives outside the
+database](#why-the-state-lives-in-two-places), and it exists because the
+facts `--resume`, `--abort` and `blanket rollback` need — where the staged
+binary is, what the previous binary was, which backup was taken — must
+survive precisely the event that erases the server's record: the next boot.
+
+One JSON object, rewritten in full on every transition via a temp file plus
+rename (a torn journal is worse than none, because a half-written one still
+parses often enough to be believed). Fields are additive-only and unknown
+ones are ignored on read, since reading the journal is exactly what a
+downgrade does.
+
+```json
+{
+  "schema": 1,
+  "id": "6a9e386e6be34ccbb1ba428f",
+  "action": "upgrade",
+  "state": "VERIFIED",
+  "fromVersion": "v0.4.0",
+  "toVersion": "v0.5.0",
+  "binaryPath": "/home/you/.local/bin/blanket",
+  "stagedPath": "",
+  "sha256": "7edc89b2…",
+  "slotPath": "/var/lib/blanket/upgrade/slots/20260907040709.183-v0.4.0",
+  "backupPath": "/var/lib/blanket/backups/blanket-1-2026-09-07T04-07-10.293Z.db",
+  "source": "github",
+  "port": 8773,
+  "restartId": "…",
+  "fromInstanceId": "…",
+  "toInstanceId": "…",
+  "steps": [{ "state": "PLANNED", "ts": 1788754030 }, "…"]
+}
+```
+
+`state` is one of `PLANNED`, `STAGED`, `BACKED_UP`, `PAUSED`, `SWAPPED`,
+`DRAINED`, `EXECED`, `VERIFIED`, `ABORTED`, `FAILED`. The first eight
+mirror the server's states where the two coincide, so a journal and a `GET
+/ops/restart/status` read as the same story; `PLANNED` and `STAGED` are the
+driver's alone, because downloading a file is not something the server ever
+sees.
+
+### `--resume` and `--abort`
+
+| Journal state when the CLI died | `--resume --yes` | `--abort` |
+| ------------------------------- | ---------------- | --------- |
+| `PLANNED` | Refuses. A partial download cannot be resumed — the only safe thing to do with an unverified file is throw it away. Run the upgrade again. | Removes the staging file. |
+| `STAGED` | Re-verifies the staged binary against the recorded digest, then continues from `begin`. | Removes it; nothing was installed. |
+| `BACKED_UP`, `PAUSED` | Continues, skipping the transitions the server has already made. | Clears the server-side restart (un-pausing worker spawn); nothing was installed. |
+| `SWAPPED`, `DRAINED`, `EXECED` | The new binary is already installed; finishes the restart. | Clears the server-side restart and **leaves the new binary in place**, naming `blanket rollback` as the way back. |
+
+`--abort` always tries `POST /ops/restart/abort` first, journal or no
+journal: a paused server is the failure mode that outlives everything else,
+and it is the one an operator typing `--abort` most needs undone.
+
+Forward-only means "do the transitions that have not happened yet", which
+is both the first-run path and the resume path — the CLI reads the server's
+current state and skips ahead, rather than having a second implementation
+for resuming. A restart in flight that is *not* this attempt (matched by
+id) is refused, because two drivers racing over one state machine is how an
+install ends up paused with nobody to un-pause it.
+
+### Offline bundles
+
+A **bundle** is one file containing everything an install needs and nothing
+it has to fetch: the binaries for all three platforms, the `SHA256SUMS`
+that covers them, the example task types, the `blanket-task-type` skill,
+the install scripts, and a `manifest.json` naming the version. Releases
+attach one as `blanket-bundle-<version>.tar.gz`; `make bundle` builds one
+locally.
+
+```
+blanket upgrade --bundle blanket-bundle-v0.5.0.tar.gz --yes
+```
+
+`--bundle` accepts either the tarball or an already-extracted directory —
+an air-gapped operator ends up with the latter after unpacking once onto a
+share, and refusing it would mean re-tarring a directory to satisfy a
+format check.
+
+**Verification is identical to the online path.** The bundle is not trusted
+for being local: it carries the same `SHA256SUMS`, generated by the same
+script, and the binary is checked against it before it is installed. What
+the bundle changes is where the bytes come from, not whether they are
+checked. It is also what
+[docs/offline_install.md](offline_install.md) now points at, in place of a
+four-step "download these things separately from the same tag, and be
+careful they match" checklist — which is a checklist a human executes, and
+therefore a checklist a human gets wrong.
+
+### The update notice
+
+`blanket ps` prints one line when a newer release is known:
+
+```
+A newer blanket is available: v0.5.0 (you have v0.4.0). Run `blanket upgrade` to install it.
+```
+
+The requirement here is a constraint, not a feature: **this can never slow
+the CLI down.** `blanket ps` is a command people run in a loop and pipe
+into other things, and a version check that added a network round trip to
+it would be a regression dressed as a courtesy.
+
+So: the message comes from a cache an *earlier* run wrote. A cold cache
+prints nothing rather than fetching. The refresh runs at most once a day,
+in a background goroutine with a hard 250ms budget, and writes the cache
+for the next invocation — so an unreachable GitHub and a firewall that
+blackholes packets cost exactly the same, because the budget is a deadline
+and not a timeout on a response. The check-stamp is written even when the
+fetch fails, or an offline machine would retry on every single invocation
+forever.
+
+It stays quiet when stdout is not a terminal (so `blanket ps | wc -l` is
+unaffected), under `--json`, and entirely when
+`upgrade.checkForUpdates: false`.
+
+### Windows
+
+Windows never self-restarts. A detached replacement escapes a service's job
+object, so `sc stop blanket` cannot reach it and it holds the database lock
+invisibly — the worst failure mode in the system. So `--exec-mode` degrades
+to `exit` there, and after the old server stops the upgrade CLI **starts
+the replacement itself**. Under the service control manager it prints the
+command instead:
+
+```powershell
+sc start blanket
+```
+
 ## The restart state machine
 
 Replacing a running blanket is a sequence, and the thing driving it is
-**outside the process**: `curl`, or (phase 6) `blanket upgrade`. Any step
+**outside the process**: `blanket upgrade`, or `curl`. Any step
 can be the last one, because a machine can lose power between any two of
 them. So the sequence is written down, one state at a time, every step is
 an HTTP call, and every state has a documented recovery.
@@ -281,10 +598,10 @@ exactly the window where the server is going away and coming back. So:
 - a **journal file** owned by the driver is what a *human* reads when the
   server is down and did not come back.
 
-The journal is phase 6's, because nothing in the server reads it — the
-server learns everything it needs from the record plus the worker records,
-and a file format defined a phase before its only writer exists is a format
-defined by guesswork.
+Nothing in the server reads the journal — the server learns everything it
+needs from the record plus the worker records — so its format belongs to
+the CLI that writes it. It is documented under [the upgrade
+journal](#the-upgrade-journal).
 
 ### The states
 
@@ -468,8 +785,8 @@ sc start blanket    # or: blanket
 Routine restarts do not drain, on purpose: a worker rides out a server
 outage by design (it retries with backoff and keeps its task running), so
 stopping the fleet for a config change would cost real work for nothing.
-Drain when the *worker* code changes — an upgrade — which is what phase 6's
-`blanket upgrade` will do, and what `always` makes unconditional for an
+Drain when the *worker* code changes — an upgrade — which is what
+`blanket upgrade` does, and what `always` makes unconditional for an
 install that would rather be certain than quick.
 
 ## Config keys
@@ -483,6 +800,11 @@ install that would rather be certain than quick.
 | `restart.drainMode` | `auto` | Whether a restart stops its workers: `auto`, `always`, `never`. Also `--drain-mode`. |
 | `restart.drainTimeout` | `60s` | How long a drain waits for stopped workers to exit before reporting the stragglers. A bound on the *wait*, never on the task — a worker finishes what it is running first. Also `--drain-timeout`. |
 | `restart.deadline` | `5m` | How long the watchdog gives the restart's driver between transitions before aborting. Generous: the steps it spans include a human swapping a binary by hand. |
+| `upgrade.checkForUpdates` | `true` | Whether the CLI prints [the update notice](#the-update-notice). Off is one line for an install that would rather its CLI never mentioned the internet. |
+| `upgrade.stateDir` | `""` | Where the journal, the rollback slots and the notice cache live. Empty means `<database dir>/upgrade`, beside the backups the slots pair with. |
+| `upgrade.slots` | `3` | How many [rollback slots](#rollback-slots) to keep. |
+| `upgrade.repo` | `turtlemonvh/blanket` | Which repository releases come from. |
+| `upgrade.releasesBaseURL` | `https://api.github.com` | The Releases API root. Overridable (and `--releases-base-url`, hidden) so `scripts/upgrade.sh` can serve a fake releases API off localhost; a suite that reached api.github.com would fail whenever an unauthenticated CI runner got rate-limited. |
 
 ## The ops endpoints
 
@@ -531,6 +853,31 @@ swap; nothing is wrong with the database.
 finished. `GET /ops/restart/status` says who and when; `POST
 /ops/restart/abort` ends it. It also ends itself, after
 `restart.deadline`, and it never survives a restart of the server.
+
+**"this release publishes no SHA256SUMS"** — you asked to upgrade to a
+release cut before checksums were published. It cannot be verified and so
+will not be installed; see [the SHA256SUMS
+caveat](#verification-and-why-there-is-no---no-verify). Install it by hand,
+or use `--bundle`.
+
+**"checksum mismatch"** — the bytes that arrived are not the bytes the
+release says they are. Nothing was installed and the staged file was
+removed. Retry; if it repeats, download the asset and the `SHA256SUMS` by
+hand and compare them yourself before going any further.
+
+**"a restart is already in flight"** — another driver (or a previous run of
+this one that is not this attempt) has the state machine. `blanket upgrade
+--abort` clears it, as does `POST /ops/restart/abort`; it also clears
+itself after `restart.deadline`.
+
+**The upgrade exited 12 and the server did not come back** — the new binary
+*is* installed. Start it by hand to see what it says, or `blanket rollback
+--yes` to put the previous one back. `<state dir>/journal.json` records
+exactly how far the attempt got.
+
+**A `blanket.exe.old-*` file next to the binary (Windows)** — the running
+`.exe` that a swap moved aside. It is removed by the next `blanket upgrade`
+or `blanket rollback`, once the process holding it has exited.
 
 **A worker did not come back after an upgrade** — check its
 `stoppedReason`. `restart: gave up respawning after 3 attempts` means the

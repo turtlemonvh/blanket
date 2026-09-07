@@ -7,7 +7,47 @@ directories — is already local-only; the only network calls the
 installers make are the binary download and (optionally) the example
 task types. Both can be pointed at local files instead.
 
-## 1. On a machine with internet access
+## The easy way: the release bundle
+
+Every release from v0.4.0 onward attaches
+`blanket-bundle-<version>.tar.gz`, which contains **everything below in
+one file**: the binaries for all three platforms, a `SHA256SUMS` that
+covers them, the example task types, the `blanket-task-type` skill, the
+install scripts, and a `manifest.json` naming the version. Copy that one
+file to the offline machine and you are done shopping.
+
+```bash
+tar xzf blanket-bundle-v0.5.0.tar.gz
+cd blanket-bundle-v0.5.0
+BINARY_PATH=./blanket-linux-amd64 TYPES_SRC=./types \
+  INSTALL_SKILLS=1 SKILLS_SRC=./skills \
+  INSTALL_SHELL_INTEGRATION=1 \
+  sh install.sh
+```
+
+The same file upgrades an existing offline install, with the same checksum
+verification the online path does — the bundle is not trusted for being
+local:
+
+```bash
+blanket upgrade --bundle blanket-bundle-v0.5.0.tar.gz --yes
+```
+
+`--bundle` also accepts the extracted directory, which is what you end up
+with after unpacking once onto a share. See
+[upgrade.md](upgrade.md#offline-bundles).
+
+Maintainers: `make bundle VERSION=v0.5.0` builds one locally
+(`scripts/bundle.sh`), so a bundle can be produced from any tag or commit,
+not only from a published release.
+
+## The manual way
+
+This is what the bundle packages up; it is still here because a checklist
+you can read is worth having, and because releases before v0.4.0 have no
+bundle to download.
+
+### 1. On a machine with internet access
 
 Pick the release tag you want (e.g. `v0.2.0`) and grab three things,
 all from that same tag so they match:
@@ -32,13 +72,13 @@ all from that same tag so they match:
    subdirectory locally (the installer copies the whole subdirectory,
    matching where Claude Code expects to find it).
 
-## 2. Move everything to the offline machine
+### 2. Move everything to the offline machine
 
 Copy the binary, the install script, and (optionally) the `.toml`
 files over — USB drive, internal file share, whatever's available.
 No `git clone` required.
 
-## 3. Run the installer with local sources
+### 3. Run the installer with local sources
 
 Both installers accept environment variables that skip their network
 calls in favor of local paths:

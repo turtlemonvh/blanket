@@ -21,7 +21,13 @@ var psCmd = &cobra.Command{
 		InitializeConfig()
 		viper.Set("logLevel", "error")
 		InitializeLogging()
+		// The update notice (turtlemonvh/blanket#23 phase 6). Printed from
+		// a cache and refreshed in the background; `blanket ps` is a
+		// command people run in a loop, so it must not cost a round trip.
+		// See command/notice.go.
+		doneNotice := StartUpdateNotice()
 		ListTasks()
+		doneNotice()
 	},
 }
 

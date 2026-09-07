@@ -33,10 +33,12 @@ make docker-test           # Go unit tests
 make docker-test-race      # Go unit tests under -race (worker/server/bolt/…)
 make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh
                            #   + scripts/restart.sh + scripts/migrate.sh
-                           #   + scripts/restart_machine.sh)
+                           #   + scripts/restart_machine.sh
+                           #   + scripts/upgrade.sh)
 make docker-test-browser   # Playwright suite
 make docker-shell          # interactive container for ad-hoc work
 make docker-build          # cross-compile linux/darwin/windows
+make docker-release        # cross-compile + SHA256SUMS + offline bundle
 make docker-clean          # drop persisted Go + npm cache volumes
 ```
 
@@ -51,6 +53,9 @@ make test-race             # run Go unit tests under -race (needs cgo + gcc)
 make test-smoke            # run smoke tests
 make test-restart          # run shutdown/restart tests (signals, SIGUSR2)
 make test-restart-machine  # run the restart state-machine crash-injection tests
+make test-upgrade          # run the blanket upgrade / rollback tests
+make checksums             # SHA256SUMS over the cross-compiled binaries
+make bundle                # dist/blanket-bundle-<version>.tar.gz
 make test-browser          # run Playwright tests
 make fmt                   # gofmt all Go files
 make check-fmt             # fail if any Go file isn't gofmt-clean
@@ -88,8 +93,8 @@ same scaffolding — free port, throwaway workdir, generated config,
 readiness polling, cleanup on every exit path.
 
 That scaffolding lives in **`scripts/lib/harness.sh`**. `scripts/smoke.sh`,
-`scripts/restart.sh`, `scripts/migrate.sh` and
-`scripts/restart_machine.sh` all source it; a new subprocess test should too,
+`scripts/restart.sh`, `scripts/migrate.sh`, `scripts/restart_machine.sh`
+and `scripts/upgrade.sh` all source it; a new subprocess test should too,
 rather than copying the setup a third time. Everything it defines is
 prefixed `harness_`, and it exports `BINARY`, `WORKDIR`, `PORT`, `BASE`,
 `CONFIG`, `SERVER_PID` and `SERVER_LOG`. The usage sketch is in the file's
@@ -136,10 +141,35 @@ built binary over real HTTP, Playwright drives the UI.
 2. Tag the commit: `git tag v0.2.0 && git push origin v0.2.0`
 3. The `.github/workflows/release.yml` workflow triggers on `v*` tags:
    - Builds the Docker toolchain image
-   - Cross-compiles via `make docker-build VERSION=<tag>`
+   - Cross-compiles, checksums and bundles via
+     `make docker-release VERSION=<tag>`
    - Creates a GitHub Release with auto-generated notes
    - Attaches binaries: `blanket-linux-amd64`, `blanket-darwin-amd64`,
      `blanket-windows-amd64.exe`
+   - Attaches `SHA256SUMS` over those three
+   - Attaches `blanket-bundle-<tag>.tar.gz`
+
+`make docker-release` is `docker-build` plus `make checksums bundle`
+(`scripts/bundle.sh`), so a maintainer can produce byte-identical
+artifacts locally before tagging — a release artifact only CI can build is
+one nobody can check.
+
+**`SHA256SUMS` is load-bearing, and only from this release onward.**
+`blanket upgrade` verifies every download against it and has no
+`--no-verify` flag (decision row 11 of issue #23's brief), so a release
+that ships without it **cannot be auto-upgraded to** — and there is no
+honest way to add checksums to a published release after the fact.
+Releases cut before this existed are permanently in that category; the
+error tells the user to use `--bundle` instead. If the checksum step is
+ever removed or renamed, the upgrade path for that release is gone.
+
+The bundle is the offline-install artifact: binaries for all three
+platforms, the `SHA256SUMS` that covers them, `examples/types/*.toml`, the
+`blanket-task-type` skill, both install scripts and a `manifest.json`
+naming the version. `blanket upgrade --bundle` installs from it with
+identical verification. See
+[`docs/offline_install.md`](docs/offline_install.md) and
+[`docs/upgrade.md`](docs/upgrade.md#offline-bundles).
 
 The `VERSION` make variable is passed through as an ldflags `-X` value,
 along with `BUILD_DATE` (local time at minute precision). Tagged builds
