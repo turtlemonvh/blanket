@@ -83,6 +83,14 @@ var RootCmd = &cobra.Command{
 			ReaperTaskStaleAfter:   viper.GetDuration("reaper.taskStaleAfter"),
 			ReaperMaxRequeues:      viper.GetInt("reaper.maxRequeues"),
 			BackupDir:              viper.GetString("storage.backupDir"),
+			// The restart state machine (turtlemonvh/blanket#23 phase 5).
+			// Read here, like every other config key, so a hand-built
+			// ServerConfig in a test gets the documented defaults from
+			// server/restart.go rather than viper's global state.
+			ExecMode:        viper.GetString("restart.execMode"),
+			DrainMode:       viper.GetString("restart.drainMode"),
+			DrainTimeout:    viper.GetDuration("restart.drainTimeout"),
+			RestartDeadline: viper.GetDuration("restart.deadline"),
 			Cleanup: func() {
 				if err := db.Close(); err != nil {
 					log.WithField("err", err).Warn("error closing database at shutdown")
@@ -91,9 +99,20 @@ var RootCmd = &cobra.Command{
 		}
 
 		// Blocks until SIGINT/SIGTERM (drain, then exit leaving no restart
-		// intent) or, on unix, SIGUSR2 (drain, then re-exec in place --
-		// never returns). See server/lifecycle.go.
+		// intent), SIGUSR2 on unix (drain, then re-exec in place -- never
+		// returns), or POST /ops/restart/exec. See server/lifecycle.go.
 		if err := c.Serve().ListenAndServe(); err != nil {
+			// A requested restart in --exec-mode=exit asks for a specific
+			// exit code, and it must not be 0: the systemd unit blanket
+			// installs says Restart=on-failure, so a clean exit is exactly
+			// what would leave the server down. See
+			// server.RestartExitCode.
+			var exitErr *server.ExitCodeError
+			if errors.As(err, &exitErr) {
+				log.Warn(exitErr.Msg)
+				db.Close()
+				os.Exit(exitErr.Code)
+			}
 			log.WithField("err", err).Fatal("server exited with an error")
 		}
 	},

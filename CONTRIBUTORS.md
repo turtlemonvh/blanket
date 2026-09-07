@@ -32,7 +32,8 @@ See `Dockerfile` for what the image carries.
 make docker-test           # Go unit tests
 make docker-test-race      # Go unit tests under -race (worker/server/bolt/…)
 make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh
-                           #   + scripts/restart.sh)
+                           #   + scripts/restart.sh + scripts/migrate.sh
+                           #   + scripts/restart_machine.sh)
 make docker-test-browser   # Playwright suite
 make docker-shell          # interactive container for ad-hoc work
 make docker-build          # cross-compile linux/darwin/windows
@@ -49,6 +50,7 @@ make test                  # run Go unit tests
 make test-race             # run Go unit tests under -race (needs cgo + gcc)
 make test-smoke            # run smoke tests
 make test-restart          # run shutdown/restart tests (signals, SIGUSR2)
+make test-restart-machine  # run the restart state-machine crash-injection tests
 make test-browser          # run Playwright tests
 make fmt                   # gofmt all Go files
 make check-fmt             # fail if any Go file isn't gofmt-clean
@@ -85,8 +87,9 @@ reading `os.Executable()` (which resolves to the test binary under
 same scaffolding — free port, throwaway workdir, generated config,
 readiness polling, cleanup on every exit path.
 
-That scaffolding lives in **`scripts/lib/harness.sh`**. `scripts/smoke.sh`
-and `scripts/restart.sh` both source it; a new subprocess test should too,
+That scaffolding lives in **`scripts/lib/harness.sh`**. `scripts/smoke.sh`,
+`scripts/restart.sh`, `scripts/migrate.sh` and
+`scripts/restart_machine.sh` all source it; a new subprocess test should too,
 rather than copying the setup a third time. Everything it defines is
 prefixed `harness_`, and it exports `BINARY`, `WORKDIR`, `PORT`, `BASE`,
 `CONFIG`, `SERVER_PID` and `SERVER_LOG`. The usage sketch is in the file's

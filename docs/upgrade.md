@@ -4,9 +4,11 @@ How blanket's database is versioned, backed up, and migrated, and what to
 do when something goes wrong in the middle of it.
 
 This page covers the storage half of [issue
-#23](https://github.com/turtlemonvh/blanket/issues/23). The restart state
-machine (phase 5) and `blanket upgrade` / `blanket rollback` (phase 6) are
-not built yet; this page grows to cover them when they are.
+#23](https://github.com/turtlemonvh/blanket/issues/23) and the restart
+state machine that drives an upgrade. `blanket upgrade` / `blanket
+rollback` (phase 6) are not built yet — until they are, the restart is
+driven by the `curl` recipe below, which is the same sequence that command
+will run.
 
 ## The short version
 
@@ -34,7 +36,7 @@ other facts about the installation rather than the work in it:
 | `serverInstance` | Which server process last owned this database, and when it started — the same `instanceId` a worker's heartbeat response carries. |
 | `lockHolderPid` | The process holding the database's exclusive lock. Written on open, cleared on a clean close, so a record left behind means the previous blanket crashed. |
 | `migrationMarker` | Set while a migration is in flight; see below. |
-| `restartRecord` | Reserved for the restart state machine (phase 5). Empty today. |
+| `restartRecord` | What the restart state machine is doing, and what the next process owes the workers. Absent when nothing is in flight. See [the restart state machine](#the-restart-state-machine). |
 
 The `meta` bucket is created on **every** open if it is missing, so an
 older database becomes a current one simply by being opened. A database
@@ -259,6 +261,217 @@ loss rather than as a compile error.
 `--yes` is required, and there is no interactive prompt: this runs in
 maintenance windows and from scripts, where a prompt is a hang.
 
+## The restart state machine
+
+Replacing a running blanket is a sequence, and the thing driving it is
+**outside the process**: `curl`, or (phase 6) `blanket upgrade`. Any step
+can be the last one, because a machine can lose power between any two of
+them. So the sequence is written down, one state at a time, every step is
+an HTTP call, and every state has a documented recovery.
+
+### Why the state lives in two places
+
+The driver cannot open the database. BoltDB's lock belongs to the server
+for as long as the server is up, and the interesting part of a restart is
+exactly the window where the server is going away and coming back. So:
+
+- the **restart record**, in the database's `meta` bucket, is what the
+  *next server process* reads on boot to find out what it is the
+  continuation of;
+- a **journal file** owned by the driver is what a *human* reads when the
+  server is down and did not come back.
+
+The journal is phase 6's, because nothing in the server reads it — the
+server learns everything it needs from the record plus the worker records,
+and a file format defined a phase before its only writer exists is a format
+defined by guesswork.
+
+### The states
+
+| State | Set by | What it means | Server behaviour |
+| ----- | ------ | ------------- | ---------------- |
+| `IDLE` | the absence of a record | Nothing in flight. | Normal. |
+| `STAGED` | `POST /ops/restart/begin` | A restart has been announced. Nothing has changed. | The [reaper](task_flow.md#the-reaper) stands down; the deadline watchdog is armed. |
+| `BACKED_UP` | `POST /ops/backup` while a record is at `STAGED` | A backup exists, and the record names it. | As `STAGED`. |
+| `PAUSED` | `POST /ops/restart/pause` | Worker spawn is refused with 409. | + no new workers. |
+| `SWAPPED` | `POST /ops/restart/swapped` | The caller reports the binary on disk is the new one. The only state the server cannot observe for itself. | As `PAUSED`. |
+| `DRAINING` | `POST /ops/restart/drain` | Every running worker has been stopped with a respawn intent — in **one transaction** with this state change. | + workers stopping. |
+| `EXECING` | `POST /ops/restart/exec` | The shutdown has begun. | Going away. |
+| `VERIFIED` | the next process's boot | The replacement found the record, brought back what the drain stopped, and cleared it. | Logged on the way back to `IDLE`; never left in the file. |
+
+Transitions are **forward-only**, and skipping ahead is the normal case: a
+routine restart takes no backup, swaps no binary and drains nothing —
+`begin` then `exec` is a complete, valid sequence. Going backwards, or
+repeating a state, is a 409. `abort` goes to `IDLE` from anywhere.
+
+### The one invariant
+
+Every transition is a single database transaction, and **two facts that
+must agree are never written in two of them**. The case that matters is the
+drain: "this restart is at `DRAINING`" and "these six workers are stopped
+and are to be brought back" commit together. Split in two, a crash between
+them would leave either six workers stopped that nothing will ever restart,
+or a promise to restart six workers that are still claiming tasks — and
+nothing on disk would say which.
+
+### What happens if the machine dies mid-restart
+
+Whatever state it was in, **the next server clears the record**. A boot is
+the strongest evidence obtainable that the process which wrote it is gone:
+it held the database lock, and this one has it. Keeping the record — staying
+paused because somebody paused you before the power went out — would leave
+an install unable to start a worker, permanently, with the only remedy
+being the restart that just failed.
+
+Clearing the record is not forgetting. The part that must survive is the
+obligation to *specific workers*, and that lives on the worker records as
+respawn intent, which the boot deliberately does not touch. The record is
+the plan; the intents are the debt.
+
+| Died at | What the next server does | What you do |
+| ------- | ------------------------- | ----------- |
+| `STAGED` | Clears the record. Nothing had changed. | Start again. |
+| `BACKED_UP` | Clears the record. The backup is still on disk, in `backups/`. | Start again; you can reuse the backup. |
+| `PAUSED` | Clears the record, so spawn works again. | Start again. |
+| `SWAPPED` | Clears the record. **The binary on disk may be the new one and the running server the old one** — but that is now simply "a server running an old image", which the next restart fixes. | Start again; it will be a very short one. |
+| `DRAINING` | Clears the record, then respawns every worker carrying an intent. | Nothing, unless a worker is missing — check its `stoppedReason`. |
+| `EXECING` | Same as `DRAINING`. The exec never happened; the debt to the workers did. | Nothing. |
+
+`scripts/restart_machine.sh` asserts every row of that table against a real
+process, by killing the server at each state in turn
+(`BLANKET_TEST_CRASH_AT`) and checking the replacement's behaviour.
+
+### Worker respawn, and the three storm guards
+
+A drain records a respawn intent on each worker it stops. The intent is
+cleared **after** a successful spawn, not before, which makes respawn
+at-least-once: losing a worker on an upgrade is a silent, lasting failure,
+while spawning one twice is loud and self-correcting. Three guards keep
+"at least once" from becoming "forever":
+
+1. **Pid liveness.** Before spawning, the server checks whether the worker
+   is already running (its pid paired with that pid's start time, so a
+   recycled pid cannot masquerade). If it is — the normal outcome when the
+   previous process died after forking but before clearing the intent — the
+   intent is settled by observation rather than by a second fork.
+2. **A generation cap.** Three attempts. Past that the intent is dropped
+   and the worker left stopped with `stoppedReason: "restart: gave up
+   respawning after N attempts"`. The attempt is counted *before* the fork,
+   so the cap converges even when the spawn is what kills the server.
+3. **A minimum interval.** 30s between two respawns of the same worker.
+   This is what stops a server crash-looping under a supervisor from
+   forking the whole fleet on every boot.
+
+### The deadline watchdog
+
+The driver is a separate process and can be `kill -9`ed. The record
+therefore carries a deadline, **every transition refreshes it** (it is a
+watchdog, not a budget: a driver still calling in is not the one this
+exists to notice), and a loop inside the server aborts the restart when it
+lapses — lifting the pause and bringing back anything the drain stopped.
+That is the same code `POST /ops/restart/abort` runs, so the recovery a
+human triggers is the one every timeout has already exercised.
+
+### Restarting by hand
+
+The full sequence, in the order `blanket upgrade` will run it. Every call
+needs the `X-Blanket-Restart` header and must come from loopback; see
+[the ops endpoints](#the-ops-endpoints).
+
+```bash
+BASE=http://localhost:8773
+OPS=(-H 'X-Blanket-Restart: 1')
+
+# 0. Where are we? (IDLE, unless a previous attempt is still open.)
+curl -sS "${OPS[@]}" $BASE/ops/restart/status
+
+# 1. Announce it. Nothing is paused or stopped yet.
+curl -sS "${OPS[@]}" -H 'Content-Type: application/json' \
+     -d '{"reason": "upgrade to 0.4.0"}' \
+     -X POST $BASE/ops/restart/begin
+
+# 2. Back up, while the server is still serving. This also advances the
+#    record to BACKED_UP and records the path.
+curl -sS "${OPS[@]}" -X POST $BASE/ops/backup
+
+# 3. Stop the server spawning workers, so none is forked from a binary
+#    that is about to be replaced. From here, POST /worker/ answers 409.
+curl -sS "${OPS[@]}" -X POST $BASE/ops/restart/pause
+
+# 4. Swap the binary. Not an API call — this is you, or your package
+#    manager. Then tell the server it happened.
+install -m 0755 ./blanket-new "$(command -v blanket)"
+curl -sS "${OPS[@]}" -X POST $BASE/ops/restart/swapped
+
+# 5. Drain — ONLY if the new binary changes worker behaviour. A routine
+#    restart skips this: a worker rides out a server restart by design.
+#    Waits up to restart.drainTimeout; answers `drained: false` with a
+#    list if something is still running.
+curl -sS "${OPS[@]}" -X POST $BASE/ops/restart/drain
+
+# 6. Go. 202, then the server tears down and either re-execs in place or
+#    exits 75 for its supervisor — see --exec-mode below.
+curl -sS "${OPS[@]}" -X POST $BASE/ops/restart/exec
+
+# 7. Verify. A different instanceId means a different process came back.
+until curl -fsS $BASE/version >/dev/null 2>&1; do sleep 0.5; done
+curl -sS "${OPS[@]}" $BASE/ops/restart/status   # -> IDLE
+curl -sS $BASE/config/ | grep instanceId
+```
+
+Changed your mind at any point before step 6:
+
+```bash
+curl -sS "${OPS[@]}" -X POST $BASE/ops/restart/abort
+```
+
+### `--exec-mode`: how the server is replaced
+
+| Value | What `exec` does |
+| ----- | ---------------- |
+| `auto` (default) | Under a supervisor, **exit**; unsupervised, **re-exec in place**. |
+| `exec` | Always re-exec in place: `syscall.Exec` over the binary at `os.Executable()`, same argv, same environment. The pid is preserved, so a server started under `nohup` or in tmux keeps its terminal and its logs. |
+| `exit` | Always drain and exit **75**, leaving the restart to whatever started this process. |
+
+A supervised process that re-execs itself is invisible to the thing that is
+supposed to be managing it, and escapes whatever that thing would have done
+about a bad new binary. That is why `auto` exits under one.
+
+"Supervised" is a **heuristic**: systemd's `INVOCATION_ID` / `JOURNAL_STREAM`
+/ `NOTIFY_SOCKET` / `LISTEN_PID`, or launchd's `XPC_SERVICE_NAME`. Set
+`BLANKET_SUPERVISED=1` (or `=0`) for a deployment it cannot recognise, or
+just say what you mean with `--exec-mode`. `GET /ops/restart/status` reports
+both the configured mode and the resolved one.
+
+The exit code is **75** (`EX_TEMPFAIL`) and not 0, which is not a detail:
+the systemd unit blanket's installer writes says `Restart=on-failure`, so a
+clean exit is precisely the one thing a supervised server must not do when
+it wants to come back.
+
+**Windows never self-restarts.** A detached replacement escapes a service's
+job object, so `sc stop blanket` cannot reach it and it holds the database
+lock invisibly — the worst failure mode in the system. There, `exec`
+degrades to `exit` and you (or the upgrade CLI) start the server again:
+
+```powershell
+sc start blanket    # or: blanket
+```
+
+### `--drain-mode`: whether a restart stops its workers
+
+| Value | Behaviour |
+| ----- | --------- |
+| `auto` (default) | Drain only when the caller asks, by calling `POST /ops/restart/drain`. |
+| `always` | `exec` drains first, whether or not the caller asked. |
+| `never` | `POST /ops/restart/drain` is refused with 409. |
+
+Routine restarts do not drain, on purpose: a worker rides out a server
+outage by design (it retries with backoff and keeps its task running), so
+stopping the fleet for a config change would cost real work for nothing.
+Drain when the *worker* code changes — an upgrade — which is what phase 6's
+`blanket upgrade` will do, and what `always` makes unconditional for an
+install that would rather be certain than quick.
+
 ## Config keys
 
 | Key | Default | What it does |
@@ -266,11 +479,15 @@ maintenance windows and from scripts, where a prompt is a hang.
 | `storage.openTimeout` | `5s` | How long to wait for the database's exclusive lock before giving up. It was 1s before, which is shorter than a normal shutdown — under `Restart=always` the supervisor starts the replacement immediately, and a budget shorter than the old process's drain-and-teardown turns a routine restart into a crash loop. |
 | `storage.backupDir` | `""` | Where backups go. Empty means `<database dir>/backups`. |
 | `storage.backupRetention` | `3` | How many backups to keep. |
+| `restart.execMode` | `auto` | How a requested restart replaces the process: `auto`, `exec`, `exit`. Also `--exec-mode`. |
+| `restart.drainMode` | `auto` | Whether a restart stops its workers: `auto`, `always`, `never`. Also `--drain-mode`. |
+| `restart.drainTimeout` | `60s` | How long a drain waits for stopped workers to exit before reporting the stragglers. A bound on the *wait*, never on the task — a worker finishes what it is running first. Also `--drain-timeout`. |
+| `restart.deadline` | `5m` | How long the watchdog gives the restart's driver between transitions before aborting. Generous: the steps it spans include a human swapping a binary by hand. |
 
 ## The ops endpoints
 
-`POST /ops/backup` is the first of a small group of privileged, local-only
-endpoints (`/ops/restart*` joins it in phase 5). All of them are:
+`POST /ops/backup` and the seven `/ops/restart/*` routes are a small group
+of privileged, local-only endpoints. All of them are:
 
 1. **loopback only**, decided from the socket's own address and never from
    `X-Forwarded-For`, which the caller writes and could simply lie in;
@@ -308,3 +525,16 @@ before the upgrade.
 **"migration vX→vY in progress; this vX binary is exiting"** — an older
 binary is starting while a newer one is mid-migration. Finish the binary
 swap; nothing is wrong with the database.
+
+**"a server restart is in flight; worker spawn is paused"** (409 on
+`POST /worker/`) — somebody called `POST /ops/restart/pause` and has not
+finished. `GET /ops/restart/status` says who and when; `POST
+/ops/restart/abort` ends it. It also ends itself, after
+`restart.deadline`, and it never survives a restart of the server.
+
+**A worker did not come back after an upgrade** — check its
+`stoppedReason`. `restart: gave up respawning after 3 attempts` means the
+server tried and the worker would not start; its own logfile
+(`GET /worker/:id/logs`) says why. An empty reason with `stopped: true`
+and no `respawnIntent` means somebody stopped it explicitly during the
+restart, which is a decision that outranks the respawn.

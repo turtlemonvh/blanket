@@ -5,11 +5,11 @@ package server
 The ops surface: privileged, local-only endpoints (turtlemonvh/blanket#23
 phase 4; decision row 6 of the design brief).
 
-`POST /ops/backup` is the first of these. Phase 5's `/ops/restart*` is the
-reason the guard below is a reusable middleware rather than four lines
-inlined into one handler — a security control that has to be remembered
-and re-typed at each new call site is one that will eventually be
-forgotten at one of them.
+`POST /ops/backup` was the first of these; phase 5's `/ops/restart/*` are
+the rest, and are the reason the guard below is a reusable middleware
+rather than four lines inlined into one handler — a security control that
+has to be remembered and re-typed at each new call site is one that will
+eventually be forgotten at one of them.
 
 ## The threat this closes
 
@@ -142,6 +142,12 @@ func (s *ServerConfig) opsBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Advance an in-flight restart to BACKED_UP. Done here rather than
+	// through a route of its own so the state records a backup the server
+	// watched itself take, with the path it actually wrote, instead of a
+	// claim the caller made afterwards (turtlemonvh/blanket#23 phase 5).
+	s.noteBackupForRestart(path)
 
 	version, err := s.DB.SchemaVersion()
 	if err != nil {

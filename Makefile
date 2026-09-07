@@ -89,6 +89,16 @@ test-restart:
 test-migrate:
 	bash scripts/migrate.sh
 
+# Restart state-machine tests for the built binary (turtlemonvh/blanket#23
+# phase 5). Its claim is not "each transition works" -- that is a Go test --
+# but "a machine that loses power between any two transitions comes back to
+# a documented place", which needs a real process killed at a point no
+# wall-clock `kill -9` could reliably hit. The binary carries a
+# crash-injection hook (BLANKET_TEST_CRASH_AT) and this parametrizes over
+# every state with it. Shares scripts/lib/harness.sh with the other three.
+test-restart-machine:
+	bash scripts/restart_machine.sh
+
 install-playwright:
 	cd tests/e2e && npm install && npx playwright install --with-deps chromium
 
@@ -159,7 +169,7 @@ docker-test-browser: docker-image
 	$(DOCKER_RUN) make linux test-browser
 
 docker-test-smoke: docker-image
-	$(DOCKER_RUN) make linux test-smoke test-restart test-migrate
+	$(DOCKER_RUN) make linux test-smoke test-restart test-migrate test-restart-machine
 
 docker-build: docker-image
 	$(DOCKER_RUN) make linux darwin windows VERSION=$(VERSION)
@@ -179,4 +189,4 @@ docker-shell: docker-image
 docker-clean:
 	-docker volume rm blanket-dev-cache blanket-npm-cache
 
-.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-shell docker-clean
+.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine install-playwright vet fmt check-fmt clean docker-image docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-shell docker-clean

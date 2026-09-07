@@ -18,6 +18,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/queue"
+	"github.com/turtlemonvh/blanket/worker"
 	"net/http"
 	"strings"
 	"sync"
@@ -104,6 +105,35 @@ type ServerConfig struct {
 	// (bolt.DefaultBackupDir). turtlemonvh/blanket#23 phase 4.
 	BackupDir string
 
+	// The restart state machine's knobs (turtlemonvh/blanket#23 phase 5).
+	// All four are read once, by command/serve.go, from `restart.*` config
+	// keys and their matching flags; see server/restart.go for what they
+	// mean and docs/upgrade.md for the operator's version.
+	//
+	// ExecMode is auto|exec|exit (brief decision row 2). DrainMode is
+	// auto|always|never (row 3). Empty means the documented default in
+	// both cases, so a hand-built ServerConfig behaves like a configured
+	// one rather than like a broken one.
+	ExecMode  string
+	DrainMode string
+	// DrainTimeout bounds how long a drain waits for stopped workers to
+	// exit; RestartDeadline is how long the watchdog gives the driver
+	// between transitions. Both unscaled — timing.Scale is applied at use
+	// — and both fall back to the Default* constants when zero.
+	DrainTimeout    time.Duration
+	RestartDeadline time.Duration
+
+	// restartExecFn performs the exec step for POST /ops/restart/exec. Set
+	// by Serve to the running BlanketServer's restart trigger; nil in a
+	// router built without one, which is what the handler reports as 503
+	// rather than pretending to restart something that isn't listening.
+	restartExecFn func(mode string)
+
+	// spawnWorkerFn replaces the real daemon fork on the respawn path.
+	// Tests only: the real one resolves os.Executable(), which under
+	// `go test` is the test binary. See spawnRespawnedWorker.
+	spawnWorkerFn func(*worker.WorkerConf) (worker.WorkerConf, error)
+
 	// instanceMu guards the two facts a restarting server has to be able
 	// to tell a worker about: which process it is, and when that process
 	// started. Both are generated lazily on first use so a hand-built
@@ -115,14 +145,27 @@ type ServerConfig struct {
 	instanceId      string
 	instanceStarted int64
 
-	// restartMu guards restartPendingFlag, the third of the reaper's grace
-	// layers: while a restart is in flight, every worker is about to look
-	// stale through no fault of its own, so no pass runs at all. Phase 5
-	// drives this from the restart state machine; the hook exists now so
-	// the reaper's suppression logic ships (and is tested) with the reaper
-	// rather than being bolted on later.
+	// restartMu guards the in-memory projection of the restart record —
+	// the three facts derived from it that are read on hot paths. All
+	// three are written together by applyRestartRecord
+	// (server/restart.go), from the record, so they cannot drift from it
+	// or from each other.
+	//
+	// restartPendingFlag is the third of the reaper's grace layers: while
+	// a restart is in flight, every worker is about to look stale through
+	// no fault of its own, so no pass runs at all.
+	//
+	// spawnPaused refuses worker spawn from PAUSED onward, closing the
+	// window in which this server could fork a worker out of a binary
+	// that has already been swapped underneath it.
+	//
+	// restartDeadlineTs is the watchdog's copy of the record's deadline,
+	// so the loop's common case — no restart at all — costs a mutex and
+	// a comparison rather than a database read.
 	restartMu          sync.Mutex
 	restartPendingFlag bool
+	spawnPaused        bool
+	restartDeadlineTs  int64
 
 	// shutdownCh is closed once the server starts shutting down. Every
 	// streaming (SSE) handler selects on it and returns promptly -- without
@@ -335,9 +378,23 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 
 	r.GET("/ops/status/", MetricsHandler)
 	// Mutating ops endpoints are loopback-only and require the
-	// X-Blanket-Restart header; phase 5's /ops/restart* joins this group.
-	// See server/serve_ops.go for why all three layers are needed.
+	// X-Blanket-Restart header. See server/serve_ops.go for why all three
+	// layers are needed, and server/serve_restart.go for why the restart
+	// machine is one route per transition.
+	//
+	// GET /ops/restart/status is behind the same guard as the mutating
+	// ones, unlike GET /ops/status/. It reports the pid, the resolved exec
+	// mode, and whether the process thinks it is supervised — a map of how
+	// to interfere with this server, which is not something to hand to any
+	// page the user happens to have open.
 	r.POST("/ops/backup", opsGuard(), s.opsBackup)
+	r.GET("/ops/restart/status", opsGuard(), s.opsRestartStatus)
+	r.POST("/ops/restart/begin", opsGuard(), s.opsRestartBegin)
+	r.POST("/ops/restart/pause", opsGuard(), s.opsRestartPause)
+	r.POST("/ops/restart/swapped", opsGuard(), s.opsRestartSwapped)
+	r.POST("/ops/restart/drain", opsGuard(), s.opsRestartDrain)
+	r.POST("/ops/restart/exec", opsGuard(), s.opsRestartExec)
+	r.POST("/ops/restart/abort", opsGuard(), s.opsRestartAbort)
 	r.GET("/config/", s.getConfigProcessed)
 
 	r.GET("/task_type/", s.getTaskTypes)
