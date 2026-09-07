@@ -15,6 +15,8 @@
 package timing
 
 import (
+	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/viper"
@@ -25,13 +27,47 @@ import (
 // and turn timers into hot loops.
 const DefaultMultiplier = 1.0
 
+// multiplierBits holds the current multiplier as the bit pattern of a
+// float64 (atomic.Value would work too, but a fixed-width atomic avoids
+// the boxing/interface-type-mismatch footguns that come with storing
+// arbitrary values). Scale/ScaleSeconds/Multiplier are called from every
+// scheduler, worker-poll, and stream-idle goroutine in the system, so
+// this needs to be a plain atomic load, not a viper.GetFloat64 -- viper's
+// global instance is not safe for concurrent Set/Get, and tests calling
+// viper.Set concurrently with a leftover server's background goroutines
+// is exactly what turtlemonvh/blanket#128 is about.
+var multiplierBits atomic.Uint64
+
+func init() {
+	multiplierBits.Store(math.Float64bits(DefaultMultiplier))
+}
+
+// SetMultiplier sets the effective time multiplier directly, bypassing
+// viper entirely. This is the path tests should use instead of
+// viper.Set("timeMultiplier", ...): it's race-free against concurrent
+// Multiplier()/Scale() calls from other goroutines, unlike viper's global
+// Set/Get pair. A value <= 0 falls back to DefaultMultiplier, matching
+// Multiplier()'s historical behavior for an unset or nonsensical config
+// value.
+func SetMultiplier(f float64) {
+	if f <= 0 {
+		f = DefaultMultiplier
+	}
+	multiplierBits.Store(math.Float64bits(f))
+}
+
+// LoadFromConfig reads the `timeMultiplier` config key via viper and
+// stores it as the effective multiplier. Call this once, at startup,
+// after viper has read config files/env/flags (see command/root.go's
+// InitializeConfig) -- everywhere else, including every hot path in this
+// package, reads the atomic value instead of touching viper.
+func LoadFromConfig() {
+	SetMultiplier(viper.GetFloat64("timeMultiplier"))
+}
+
 // Multiplier returns the effective time multiplier.
 func Multiplier() float64 {
-	m := viper.GetFloat64("timeMultiplier")
-	if m <= 0 {
-		return DefaultMultiplier
-	}
-	return m
+	return math.Float64frombits(multiplierBits.Load())
 }
 
 // Scale converts an unscaled duration constant into the duration that
