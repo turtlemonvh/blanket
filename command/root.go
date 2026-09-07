@@ -48,7 +48,13 @@ func init() {
 	log.SetLevel(log.WarnLevel)
 }
 
-func InitializeConfig() {
+// SetConfigDefaults registers every built-in default.
+//
+// Split out of InitializeConfig so it can be exercised without a config
+// file on disk (InitializeConfig log.Fatals when it can't find one), which
+// is what lets command/root_test.go assert that the defaults don't shadow
+// each other -- see the note on the storage.* keys below.
+func SetConfigDefaults() {
 	// Add reloads for select config values
 	// https://github.com/spf13/viper#watching-and-re-reading-config-files
 	viper.SetDefault("port", 8773)
@@ -137,8 +143,40 @@ func InitializeConfig() {
 	// worker that claimed it died before starting it.
 	viper.SetDefault("reaper.maxRequeues", 3)
 
+	// Database schema, backups, and the file lock
+	// (turtlemonvh/blanket#23 phase 4). See docs/upgrade.md.
+	//
+	// These are `storage.*` and not `database.*`, which is what they
+	// obviously should have been called, because viper stores defaults in
+	// a nested map: setting `database.openTimeout` turns `database` into a
+	// map and silently blanks the `database` *path* set above it. The
+	// server then starts with an empty database path and dies with
+	// `open : no such file or directory`. A scalar key and a subtree
+	// cannot share a name, and `database` has been the path since blanket
+	// was written. root_test.go pins this down so the trap can only be
+	// walked into once.
+	//
+	// openTimeout is how long to wait for bolt's exclusive lock before
+	// giving up. It was hardcoded at 1s, which is shorter than a normal
+	// shutdown: under `Restart=always` a supervisor starts the
+	// replacement immediately, and it has to outwait the old process's
+	// drain-and-teardown or a routine restart becomes a crash loop.
+	viper.SetDefault("storage.openTimeout", "5s")
+	// Where backups go. Empty means <database dir>/backups -- beside the
+	// database, which is where somebody restoring at 2am will look.
+	viper.SetDefault("storage.backupDir", "")
+	// How many backups to keep. Three, matching the three rollback slots
+	// phase 6's `blanket rollback` keeps: the database half of a slot is
+	// exactly one of these files. A count rather than a size cap, with a
+	// free-space warning instead of a hard budget (brief decision row 9).
+	viper.SetDefault("storage.backupRetention", 3)
+
 	// Time multiplier can be used in tests to speed up tests
 	viper.SetDefault("timeMultiplier", "1.0")
+}
+
+func InitializeConfig() {
+	SetConfigDefaults()
 
 	viper.SetConfigName("config")
 	if runtime.GOOS == "windows" {

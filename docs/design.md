@@ -56,10 +56,14 @@ some Windows users to install. Go was chosen for the rewrite since:
 **separate processes**, and only the server process touches storage.
 `command/serve.go` is the only place that calls
 `bolt.MustOpenBoltDatabase()`, wiring the resulting `*bolt.DB` handle into
-both `bolt.NewBlanketBoltDB` (the `tasks`/`workers` buckets) and
+both `bolt.OpenBlanketBoltDB` (the `tasks`/`workers`/`meta` buckets) and
 `bolt.NewBlanketBoltQueue` (the queue bucket) — one `.db` file, one
 process holding the lock (see the BoltDB single-writer gotcha in
-[`CLAUDE.md`](../CLAUDE.md)). A worker process never opens that file; it
+[`CLAUDE.md`](../CLAUDE.md)). `meta` is the odd one out: it describes the
+*installation* rather than the work in it — schema version, lock holder,
+server instance, migration marker — and it is what
+`bolt.OpenBlanketBoltDB` reads before anything else is allowed to touch
+the file. See [`upgrade.md`](upgrade.md). A worker process never opens that file; it
 talks to the server exclusively over `localhost` HTTP (`tasks/task_client.go`,
 `worker/worker.go`), the same API a browser or `curl` client uses. This
 matters when reading the diagram below: "worker → server" is a real
@@ -75,7 +79,7 @@ flowchart LR
         tf["tailed_file collection<br/>(lib/tailed_file)"]
     end
 
-    db[("BoltDB — single .db file<br/>tasks + workers buckets (lib/bolt)<br/>queue bucket (lib/bolt/queue.go)")]
+    db[("BoltDB — single .db file<br/>tasks + workers buckets (lib/bolt)<br/>queue bucket (lib/bolt/queue.go)<br/>meta bucket: schema version, lock holder (lib/bolt/meta.go)")]
 
     subgraph workerproc["blanket worker (worker process, one per worker)"]
         claimloop["Claim loop<br/>(worker.ProcessTasks)"]

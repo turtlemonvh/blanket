@@ -19,6 +19,7 @@ import (
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/queue"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -97,12 +98,19 @@ type ServerConfig struct {
 	ReaperTaskStaleAfter   time.Duration
 	ReaperMaxRequeues      int
 
+	// BackupDir is where POST /ops/backup writes when the request names
+	// no directory. Backed by the `storage.backupDir` config key; empty
+	// means the database's own backups/ subdirectory
+	// (bolt.DefaultBackupDir). turtlemonvh/blanket#23 phase 4.
+	BackupDir string
+
 	// instanceMu guards the two facts a restarting server has to be able
 	// to tell a worker about: which process it is, and when that process
 	// started. Both are generated lazily on first use so a hand-built
 	// ServerConfig needs no extra setup, and both are stable for the life
-	// of the process. Phase 4 persists the instance id in the meta bucket;
-	// until then it lives only here.
+	// of the process. Phase 4 additionally persists the pair into the
+	// meta bucket at startup (persistInstance, called from Serve), so the
+	// identity a worker last saw outlives the process that had it.
 	instanceMu      sync.Mutex
 	instanceId      string
 	instanceStarted int64
@@ -156,6 +164,32 @@ func (s *ServerConfig) StartedTs() int64 {
 	s.instanceMu.Lock()
 	defer s.instanceMu.Unlock()
 	return s.instanceStarted
+}
+
+// persistInstance writes this process's instance id and start time into
+// the meta bucket (turtlemonvh/blanket#23 phase 4). Called once from
+// Serve.
+//
+// Phase 3 kept the pair in memory only, which answered "did the server
+// restart?" for anyone holding a connection across the restart, but
+// nothing at all for anyone arriving afterwards. Persisting it means the
+// last identity is readable from the file, which is what phase 5's restart
+// verification and phase 6's upgrade check need: "is the server that came
+// back a different process from the one I stopped?" is otherwise
+// unanswerable from outside.
+//
+// A failure here is logged and swallowed. The in-memory pair is the one
+// every live code path reads; the persisted copy is for the next process.
+func (s *ServerConfig) persistInstance() {
+	if s.DB == nil {
+		return
+	}
+	if err := s.DB.SetServerInstance(database.ServerInstance{
+		InstanceId: s.InstanceId(),
+		StartedTs:  s.StartedTs(),
+	}); err != nil {
+		log.WithField("err", err).Warn("could not persist this server instance's identity")
+	}
 }
 
 // SetRestartPending suppresses the reaper while a restart is in flight, and
@@ -217,8 +251,19 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	})
 
 	// If we don't return early from handler function we get a 404 for the options request
+	//
+	// /ops/ is carved out of this entirely (turtlemonvh/blanket#23 phase
+	// 4). The wildcard policy above would otherwise approve the CORS
+	// preflight that the ops endpoints' required X-Blanket-Restart header
+	// exists to *provoke*, which would let any page the user visits drive
+	// them from their browser. With no Access-Control-Allow-Origin header
+	// written, the preflight falls through to a 404 and the browser
+	// refuses to send the real request. See server/serve_ops.go.
 	makeCorsHandler := func(c *cors.Cors) func(http.ResponseWriter, *http.Request) {
 		return func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, OpsPathPrefix) {
+				return
+			}
 			c.HandlerFunc(w, r)
 			// Allow it to return to avoid a 404
 			if r.Method == "OPTIONS" && w.Header().Get("Access-Control-Allow-Origin") == r.Header.Get("Origin") {
@@ -294,6 +339,10 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	})
 
 	r.GET("/ops/status/", MetricsHandler)
+	// Mutating ops endpoints are loopback-only and require the
+	// X-Blanket-Restart header; phase 5's /ops/restart* joins this group.
+	// See server/serve_ops.go for why all three layers are needed.
+	r.POST("/ops/backup", opsGuard(), s.opsBackup)
 	r.GET("/config/", s.getConfigProcessed)
 
 	r.GET("/task_type/", s.getTaskTypes)
