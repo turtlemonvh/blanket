@@ -1,6 +1,9 @@
 package command
 
 import (
+	"errors"
+	"os"
+
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -17,7 +20,12 @@ var RootCmd = &cobra.Command{
 		InitializeConfig()
 		InitializeLogging()
 
-		// Connect to database
+		// Connect to database. MustOpenBoltDatabase only takes the file
+		// lock; everything about the database's *contents* -- the schema
+		// version, an in-flight migration marker, the mandatory
+		// pre-migration backup -- is settled below, because those checks
+		// can legitimately say "do not start" and a log.Fatal inside the
+		// open helper could not distinguish their exit semantics.
 		db := bolt.MustOpenBoltDatabase()
 		// Belt and braces: the server closes this itself as the last step
 		// of its shutdown sequence (ServerConfig.Cleanup below), which is
@@ -26,11 +34,38 @@ var RootCmd = &cobra.Command{
 		// covers paths that never reach the server at all.
 		defer db.Close()
 
+		// Schema check + auto-migrate (turtlemonvh/blanket#23 phase 4).
+		// Three of the failure shapes are not "the database is broken"
+		// but "a human has to act", and each has its own exit story:
+		//
+		//   *ErrMigrationInProgress  a newer binary is mid-migration.
+		//                            Exit non-zero and touch nothing --
+		//                            never retry, or two binaries race
+		//                            for the lock forever.
+		//   *ErrSchemaTooNew         the database is from a newer
+		//                            blanket. Nothing to do but say so.
+		//   *ErrMigrationIncomplete  a migration died mid-flight; the
+		//                            message carries the exact restore
+		//                            command.
+		//
+		// All three are fatal here. What they have in common is that
+		// starting anyway would be worse than not starting.
+		DB, err := bolt.OpenBlanketBoltDB(db, prepareOptionsFromConfig())
+		if err != nil {
+			var inProgress *bolt.ErrMigrationInProgress
+			if errors.As(err, &inProgress) {
+				log.Warn(err.Error())
+				db.Close()
+				os.Exit(1)
+			}
+			log.Fatal(err.Error())
+		}
+
 		// DB and Q initializers are fatal if they don't succeed
 		// Serve gracefully
 
 		c := server.ServerConfig{
-			DB:                    bolt.NewBlanketBoltDB(db),
+			DB:                    DB,
 			Q:                     bolt.NewBlanketBoltQueue(db),
 			Port:                  viper.GetInt("port"),
 			ResultsPath:           viper.GetString("tasks.resultsPath"),
@@ -47,6 +82,7 @@ var RootCmd = &cobra.Command{
 			ReaperWorkerDeadAfter:  viper.GetDuration("reaper.workerDeadAfter"),
 			ReaperTaskStaleAfter:   viper.GetDuration("reaper.taskStaleAfter"),
 			ReaperMaxRequeues:      viper.GetInt("reaper.maxRequeues"),
+			BackupDir:              viper.GetString("database.backupDir"),
 			Cleanup: func() {
 				if err := db.Close(); err != nil {
 					log.WithField("err", err).Warn("error closing database at shutdown")

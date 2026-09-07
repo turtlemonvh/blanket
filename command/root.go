@@ -122,6 +122,24 @@ func InitializeConfig() {
 	// worker that claimed it died before starting it.
 	viper.SetDefault("reaper.maxRequeues", 3)
 
+	// Database schema, backups, and the file lock
+	// (turtlemonvh/blanket#23 phase 4). See docs/upgrade.md.
+	//
+	// openTimeout is how long to wait for bolt's exclusive lock before
+	// giving up. It was hardcoded at 1s, which is shorter than a normal
+	// shutdown: under `Restart=always` a supervisor starts the
+	// replacement immediately, and it has to outwait the old process's
+	// drain-and-teardown or a routine restart becomes a crash loop.
+	viper.SetDefault("database.openTimeout", "5s")
+	// Where backups go. Empty means <database dir>/backups -- beside the
+	// database, which is where somebody restoring at 2am will look.
+	viper.SetDefault("database.backupDir", "")
+	// How many backups to keep. Three, matching the three rollback slots
+	// phase 6's `blanket rollback` keeps: the database half of a slot is
+	// exactly one of these files. A count rather than a size cap, with a
+	// free-space warning instead of a hard budget (brief decision row 9).
+	viper.SetDefault("database.backupRetention", 3)
+
 	// Time multiplier can be used in tests to speed up tests
 	viper.SetDefault("timeMultiplier", "1.0")
 
