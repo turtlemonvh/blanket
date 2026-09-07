@@ -13,7 +13,10 @@ package server
 //     into one pane only makes sense if each line says which stream it
 //     came from. That route (GET /ui/sse/tasks/:id/log) is UI-only and
 //     emits pre-rendered, escaped HTML fragments, which is why it isn't a
-//     second shape of the public log API.
+//     second shape of the public log API. It replays what both files
+//     already hold before it starts following them, so switching views on
+//     a running task shows its output from the start rather than from the
+//     moment you switched.
 //
 //   - the parsed `result_file` artifact and its resultError, read through
 //     the same reader POST /task/?wait uses (readTaskResult in
@@ -34,6 +37,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/manucorporat/sse"
 	log "github.com/sirupsen/logrus"
+	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/tasks"
 )
 
@@ -62,9 +66,16 @@ const (
 // TaskLogLine is one stored log line rendered into the pane. Stream is
 // LogStreamStdout or LogStreamStderr; it is only shown as a badge in the
 // `both` view, where the two are mixed together.
+//
+// Meta marks the entry as a note *about* the output rather than a line of
+// it -- the "earlier lines omitted" marker that heads a truncated block.
+// It carries its own text and Stream/Text are then empty, so the note can
+// sit inside the sequence it describes instead of only at the top of the
+// pane.
 type TaskLogLine struct {
 	Stream string
 	Text   string
+	Meta   string
 }
 
 // TaskLogOption is one button of the stdout / stderr / both toggle.
@@ -96,14 +107,12 @@ type TaskLogView struct {
 	// Badged means each line is prefixed with its stream name -- true only
 	// in the `both` view, where lines from the two files are mixed.
 	Badged bool
-	// Grouped means the `both` view is showing all of stdout and then all
-	// of stderr rather than a true interleaving. The two files carry no
-	// shared ordering once written, so a finished task's `both` view can
-	// only group; a live one interleaves by arrival.
+	// Grouped means the `both` view groups by stream rather than showing a
+	// true interleaving. The two files carry no shared ordering once
+	// written, so history can only ever be grouped: a finished task's
+	// whole pane is, and a running one's replayed backlog is, after which
+	// new lines interleave by arrival.
 	Grouped bool
-	// Truncated means at least one file had earlier lines than the tail
-	// shown here.
-	Truncated bool
 }
 
 // Empty reports whether there is nothing to print. Used by the template
@@ -157,6 +166,10 @@ func buildTaskLogView(task tasks.Task, rawStream string) TaskLogView {
 		switch stream {
 		case LogStreamBoth:
 			v.SseUrl = fmt.Sprintf("/ui/sse/tasks/%s/log", idHex)
+			// The stream replays each file's backlog before it starts
+			// following, and a backlog can only be grouped by stream --
+			// same reason, and same grouping, as a finished task's pane.
+			v.Grouped = true
 		case LogStreamStderr:
 			v.SseUrl = fmt.Sprintf("/task/%s/log?stream=stderr", idHex)
 		default:
@@ -167,14 +180,10 @@ func buildTaskLogView(task tasks.Task, rawStream string) TaskLogView {
 
 	var stdoutLines, stderrLines []TaskLogLine
 	if stream != LogStreamStderr {
-		lines, truncated := storedLogLines(task, TaskStdoutLogFile, LogStreamStdout)
-		stdoutLines = lines
-		v.Truncated = v.Truncated || truncated
+		stdoutLines = storedLogLines(task, TaskStdoutLogFile, LogStreamStdout)
 	}
 	if stream != LogStreamStdout {
-		lines, truncated := storedLogLines(task, TaskStderrLogFile, LogStreamStderr)
-		stderrLines = lines
-		v.Truncated = v.Truncated || truncated
+		stderrLines = storedLogLines(task, TaskStderrLogFile, LogStreamStderr)
 	}
 	v.Lines = append(append([]TaskLogLine{}, stdoutLines...), stderrLines...)
 	v.Grouped = stream == LogStreamBoth && len(stdoutLines) > 0 && len(stderrLines) > 0
@@ -182,20 +191,35 @@ func buildTaskLogView(task tasks.Task, rawStream string) TaskLogView {
 	return v
 }
 
-// storedLogLines reads the tail of one of a task's log files. A missing
-// file is not an error -- a task that never ran, or one that wrote to only
-// one of the two streams, is a normal case.
-func storedLogLines(task tasks.Task, filename, stream string) ([]TaskLogLine, bool) {
-	content, truncated, err := tailLinesTruncated(path.Join(task.ResultDir, filename), DEFAULT_LOG_TAIL_LINES)
+// storedLogLines reads the tail of one of a task's log files, headed by an
+// "earlier lines omitted" note when the file held more than the cap. A
+// missing file is not an error -- a task that never ran, or one that wrote
+// to only one of the two streams, is a normal case.
+//
+// The cap is the same one the live combined stream replays with
+// (uiLogHistoryLines), so a task's pane shows the same window of output
+// whether it is still running or already finished.
+func storedLogLines(task tasks.Task, filename, stream string) []TaskLogLine {
+	content, truncated, err := tailLinesTruncated(path.Join(task.ResultDir, filename), uiLogHistoryLines)
 	if err != nil || content == "" {
-		return nil, false
+		return nil
 	}
 	raw := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
-	lines := make([]TaskLogLine, 0, len(raw))
+	lines := make([]TaskLogLine, 0, len(raw)+1)
+	if truncated {
+		lines = append(lines, TaskLogLine{Meta: logTruncationNote(stream)})
+	}
 	for _, l := range raw {
 		lines = append(lines, TaskLogLine{Stream: stream, Text: l})
 	}
-	return lines, truncated
+	return lines
+}
+
+// logTruncationNote is the pane's marker for output older than the window
+// it prints. Worded per stream because the combined view prints two
+// windows, and only one of them may have been cut.
+func logTruncationNote(stream string) string {
+	return fmt.Sprintf("… earlier %s lines omitted …", stream)
 }
 
 // uiTaskLogPartial answers GET /ui/partials/task-log?id=<hex>&stream=<view>
@@ -234,9 +258,52 @@ func renderLogLineHTML(stream, line string) string {
 		stream, stream, template.HTMLEscapeString(line))
 }
 
+// renderLogMetaHTML is the streamed form of a note about the output -- the
+// truncation marker -- matching what task_log.html renders for a stored
+// pane so the two look the same.
+func renderLogMetaHTML(text string) string {
+	return fmt.Sprintf(`<span class="log-meta">%s</span>`+"\n", template.HTMLEscapeString(text))
+}
+
+// uiLogHistoryLines is how much of each log file the combined stream
+// replays to a client on connect, and how much of it a stored pane prints.
+// One constant because switching a task's log view must not change what
+// window of its output you can see.
+const uiLogHistoryLines = DEFAULT_LOG_TAIL_LINES
+
+// uiLogSource is one of the two files the combined stream follows.
+//
+// `done` exists to keep a closed tailer from being re-opened: attach runs
+// on every wake, and re-attaching after the tailer went away would replay
+// the whole backlog a second time -- duplicating exactly the history this
+// route now exists to deliver once.
+type uiLogSource struct {
+	stream string
+	file   string
+	tail   *tailed_file.ReplayTail
+	done   bool
+}
+
+// lines is the channel to select on, or nil when there is nothing to read
+// from. A nil channel blocks forever, which is what a select wants for an
+// absent case.
+func (u *uiLogSource) lines() <-chan string {
+	if u.tail == nil || u.done {
+		return nil
+	}
+	return u.tail.Lines
+}
+
+func (u *uiLogSource) stop() {
+	if u.tail != nil {
+		u.tail.Stop()
+	}
+}
+
 // uiTaskLogStream answers GET /ui/sse/tasks/:id/log: both of a running
-// task's log files, interleaved in arrival order, as `message` SSE frames
-// carrying one pre-rendered line each.
+// task's log files as `message` SSE frames carrying one pre-rendered line
+// each -- the output already on disk when the client connected, then
+// everything written after it, interleaved in arrival order.
 //
 // This is the UI's counterpart to the structured NDJSON stream (whose log
 // events carry the same stdout/stderr discriminator as a JSON field). The
@@ -244,10 +311,26 @@ func renderLogLineHTML(stream, line string) string {
 // point of this UI is that there isn't one -- so the discriminator is
 // rendered server-side into a badge instead.
 //
-// Shaped like streamLog (serve_logs.go): same idle window, same
+// The backlog is replayed as a stdout block and then a stderr block. The
+// two files carry no shared ordering once written -- there is no recorded
+// interleaving to recover, only two independent byte streams -- so
+// grouping is the honest rendering, and it is the same grouping a finished
+// task's pane uses. Only lines that arrive while the client is connected
+// have an ordering worth showing, and those are interleaved as they come.
+//
+// The replay comes from tailed_file.ReplayAndFollow, which reads the file
+// itself and starts its tailer at the byte offset the read stopped at, so
+// the seam neither drops nor duplicates a line. It does *not* come from
+// tailed_file.Follow: a TailedFile is shared between subscribers, and what
+// history a late subscriber gets is an accident of who else is already
+// watching (see the comment on ReplayAndFollow). That accident is the bug
+// this route had -- toggling stdout / stderr / both keeps both files warm,
+// so coming back to the combined view replayed a ring buffer's worth of
+// stderr, or none at all.
+//
+// Otherwise shaped like streamLog (serve_logs.go): same idle window, same
 // shutdown frame, same "stop once the task is terminal and the lines have
-// stopped coming" rule. It differs only in following two files at once,
-// which is why it isn't a call into that helper.
+// stopped coming" rule.
 func (s *ServerConfig) uiTaskLogStream(c *gin.Context) {
 	taskId, err := SafeObjectId(c.Param("id"))
 	if err != nil {
@@ -259,10 +342,15 @@ func (s *ServerConfig) uiTaskLogStream(c *gin.Context) {
 		return
 	}
 
-	var stdout, stderr *logTail
+	// Ordered: stdout's backlog is replayed before stderr's.
+	sources := []*uiLogSource{
+		{stream: LogStreamStdout, file: TaskStdoutLogFile},
+		{stream: LogStreamStderr, file: TaskStderrLogFile},
+	}
 	defer func() {
-		stopTail(stdout)
-		stopTail(stderr)
+		for _, src := range sources {
+			src.stop()
+		}
 	}()
 
 	shutdown := s.shutdownChan()
@@ -270,45 +358,63 @@ func (s *ServerConfig) uiTaskLogStream(c *gin.Context) {
 	idle := time.Duration(float64(time.Second*LOGLINE_WAIT_DURATION) * mult)
 
 	lineno := 0
-	emit := func(stream, line string) {
+	emit := func(html string) {
 		lineno++
 		c.Writer.Header()["Content-Type"] = []string{ContentTypeSSE}
 		sse.Encode(c.Writer, sse.Event{
 			Id:    strconv.Itoa(lineno),
 			Event: "message",
-			Data:  renderLogLineHTML(stream, line),
+			Data:  html,
 		})
 	}
 
 	// The worker creates both files in SetupExecutionDirectory, so a task
 	// that hasn't been claimed yet has neither: attaching is retried on
 	// every wake until it works, exactly as the structured stream does.
+	// A file's backlog goes out the moment that file attaches.
 	attach := func() bool {
 		cur, err := s.DB.GetTask(taskId)
 		if err != nil {
 			return true
 		}
 		if tailAttachable(cur.State) {
-			if stdout == nil {
-				stdout = followTail(cur, TaskStdoutLogFile, LogStreamStdout)
+			replayed := false
+			for _, src := range sources {
+				if src.tail != nil || src.done {
+					continue
+				}
+				rt, terr := tailed_file.ReplayAndFollow(
+					path.Join(cur.ResultDir, src.file), uiLogHistoryLines)
+				if terr != nil {
+					continue
+				}
+				src.tail = rt
+				if rt.Truncated {
+					emit(renderLogMetaHTML(logTruncationNote(src.stream)))
+					replayed = true
+				}
+				for _, line := range rt.History {
+					emit(renderLogLineHTML(src.stream, line))
+					replayed = true
+				}
 			}
-			if stderr == nil {
-				stderr = followTail(cur, TaskStderrLogFile, LogStreamStderr)
+			// Push the backlog out now. c.Stream only flushes once its
+			// step returns, and this step is about to block for a whole
+			// idle window waiting for a live line -- on a quiet task that
+			// would leave the pane empty for five seconds after
+			// connecting, which reads as exactly the missing history the
+			// replay exists to fix.
+			if replayed {
+				c.Writer.Flush()
 			}
 		}
 		return tasks.IsTerminalState(cur.State)
 	}
 
+	stdout, stderr := sources[0], sources[1]
+
 	c.Stream(func(w io.Writer) bool {
 		terminal := attach()
-
-		var outCh, errCh <-chan string
-		if stdout != nil {
-			outCh = stdout.sub.NewLines
-		}
-		if stderr != nil {
-			errCh = stderr.sub.NewLines
-		}
 
 		timer := time.NewTimer(idle)
 		defer timer.Stop()
@@ -318,19 +424,19 @@ func (s *ServerConfig) uiTaskLogStream(c *gin.Context) {
 			c.Writer.Header()["Content-Type"] = []string{ContentTypeSSE}
 			writeServerRestarting(w)
 			return false
-		case line, ok := <-outCh:
+		case line, ok := <-stdout.lines():
 			if !ok {
-				stdout = nil
+				stdout.done = true
 				return true
 			}
-			emit(LogStreamStdout, line)
+			emit(renderLogLineHTML(stdout.stream, line))
 			return true
-		case line, ok := <-errCh:
+		case line, ok := <-stderr.lines():
 			if !ok {
-				stderr = nil
+				stderr.done = true
 				return true
 			}
-			emit(LogStreamStderr, line)
+			emit(renderLogLineHTML(stderr.stream, line))
 			return true
 		case <-timer.C:
 			// Nothing arrived for a full idle window. If the task is done

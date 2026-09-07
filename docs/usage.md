@@ -276,12 +276,15 @@ result artifact, and its log.
 - **Log** has a **stdout / stderr / both** toggle. `stdout` is the
   default and is the raw live stream blanket has always shown; `stderr`
   is the same thing pointed at the other file; `both` mixes the two with
-  a per-line badge saying which stream each line came from. A running
-  task streams into the pane as it goes (interleaved by arrival in the
-  combined view); a finished one shows the stored tail, and the combined
-  view then groups stdout before stderr, because the two files carry no
-  shared ordering once written. **Pin to bottom** keeps the newest line
-  in view.
+  a per-line badge saying which stream each line came from. Whichever
+  view you pick, and whether the task is still running or finished, you
+  see the last 500 lines of each file it covers: the combined view of a
+  running task replays what both files already hold before it starts
+  following them, so switching views doesn't cost you the output from
+  before the switch. Replayed output is grouped — all of stdout, then all
+  of stderr — because the two files carry no shared ordering once
+  written; lines that arrive while you're watching are interleaved as
+  they come. **Pin to bottom** keeps the newest line in view.
 
 ### Upcoming
 

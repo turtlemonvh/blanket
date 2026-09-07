@@ -536,7 +536,9 @@ GET /ui/sse/workers             # `workers-changed`, likewise
 GET /ui/sse/tasks/:id/log       # UI-only: both of a task's log files on
                                  # one connection, each `message` event
                                  # carrying one line pre-rendered as an
-                                 # HTML fragment with a stream badge
+                                 # HTML fragment with a stream badge. On
+                                 # connect it replays what both files
+                                 # already hold, then follows them.
 ```
 
 All five also emit a **`server-restarting`** event, and only that event,
@@ -600,11 +602,19 @@ GET /ui/partials/task-log?id=<task id>&stream=stdout|stderr|both
                                 # stdout rather than erroring — this is a
                                 # toggle, not an API.
 GET /ui/sse/tasks/:id/log       # the "both" view's stream: stdout and
-                                # stderr of one task interleaved in
-                                # arrival order, each `message` event
-                                # carrying one HTML-escaped line wrapped
-                                # in a span with its stream badge. UI-only
-                                # on purpose: GET /task/:id/log emits the
+                                # stderr of one task on one connection,
+                                # each `message` event carrying one
+                                # HTML-escaped line wrapped in a span with
+                                # its stream badge. On connect it replays
+                                # the last 500 lines of each file — all of
+                                # stdout, then all of stderr, since the two
+                                # files carry no shared ordering once
+                                # written — and then follows both from the
+                                # byte offset the replay stopped at, so
+                                # nothing is dropped or repeated at the
+                                # seam. Lines arriving after that are
+                                # interleaved as they come. UI-only on
+                                # purpose: GET /task/:id/log emits the
                                 # bytes the task wrote, and must not start
                                 # emitting markup. Clients wanting both
                                 # streams as data use the structured

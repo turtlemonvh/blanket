@@ -271,3 +271,136 @@ test.describe('Log view toggle', () => {
     await expect(logPane(page)).toContainText('No stderr recorded for this task.');
   });
 });
+
+// ---------------------------------------------------------------------------
+// The combined view of a *running* task
+// ---------------------------------------------------------------------------
+
+/**
+ * Submit a task with the files a worker would have written, then walk it
+ * to RUNNING through the worker-facing API so its log pane streams.
+ * Returns the task and worker ids.
+ */
+async function seedRunningTask(
+  apiRequest: Api,
+  opts: { stdout: string; stderr: string },
+): Promise<{ id: string; workerId: string }> {
+  const workerId = require('crypto').randomBytes(12).toString('hex');
+  const registered = await apiRequest.put(`/worker/${workerId}`, {
+    data: {
+      id: workerId,
+      tags: ['exec:bash', 'os:unix'],
+      pid: 99999,
+      stopped: false,
+      checkInterval: 2,
+      logfile: '/tmp/test-worker.log',
+      startedTs: Math.floor(Date.now() / 1000),
+    },
+  });
+  expect(registered.status()).toBe(200);
+
+  const created = await apiRequest.post('/task/', {
+    multipart: {
+      data: JSON.stringify({ type: 'echo_task' }),
+      'blanket.stdout.log': textFile('blanket.stdout.log', opts.stdout),
+      'blanket.stderr.log': textFile('blanket.stderr.log', opts.stderr),
+    } as never,
+  });
+  expect(created.status()).toBe(201);
+  const id = (await created.json()).id as string;
+
+  const claimed = await apiRequest.post(`/task/claim/${workerId}`);
+  expect(claimed.status()).toBe(200);
+  expect((await claimed.json()).id).toBe(id);
+
+  const running = await apiRequest.put(`/task/${id}/run`);
+  expect(running.status()).toBe(200);
+
+  return { id, workerId };
+}
+
+test.describe('Log view toggle on a running task', () => {
+  test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
+
+  let workerId = '';
+
+  test.beforeEach(async ({ request }) => {
+    await purgeTasks(request);
+  });
+
+  test.afterEach(async ({ request }) => {
+    // A RUNNING task has to be finished before it can be deleted.
+    const res = await request.get('/task/');
+    if (res.ok()) {
+      const tasks = (await res.json()) as Array<{ id: string; state: string }>;
+      for (const t of tasks) {
+        if (t.state === 'RUNNING' || t.state === 'CLAIMED') {
+          await request.put(`/task/${t.id}/finish?state=SUCCESS&exitCode=0`);
+        }
+      }
+    }
+    await purgeTasks(request);
+    if (workerId) {
+      await request.put(`/worker/${workerId}/stop`);
+      await request.delete(`/worker/${workerId}`);
+      workerId = '';
+    }
+  });
+
+  // The regression from the #104 review: sitting on `both` filled the pane,
+  // but the history was lost every time you navigated away and back -- the
+  // combined stream started tailing from wherever the two files happened to
+  // be rather than replaying what they already held. It now replays both
+  // files on connect, so coming back shows what staying put would have.
+  test('coming back to both still shows the stderr history', async ({
+    page,
+    request,
+  }) => {
+    const seeded = await seedRunningTask(request, { stdout: STDOUT, stderr: STDERR });
+    workerId = seeded.workerId;
+
+    await page.goto(`/ui/tasks/${seeded.id}`);
+
+    // A running task streams rather than printing a stored tail.
+    await expect(logPane(page)).toHaveAttribute(
+      'sse-connect',
+      `/task/${seeded.id}/log`,
+    );
+
+    await logToggle(page, 'both').click();
+    await expect(logPane(page)).toHaveAttribute(
+      'sse-connect',
+      `/ui/sse/tasks/${seeded.id}/log`,
+    );
+    await expect(
+      logPane(page).locator('.log-line-stdout', { hasText: 'stdout line one' }),
+    ).toBeVisible();
+    await expect(
+      logPane(page).locator('.log-line-stderr', { hasText: 'stderr line one' }),
+    ).toBeVisible();
+
+    // Away to each single-stream view...
+    await logToggle(page, 'stdout').click();
+    await expect(logPane(page)).toContainText('stdout line two');
+
+    await logToggle(page, 'stderr').click();
+    await expect(logPane(page)).toContainText('stderr line one');
+
+    // ...and back. This is what used to come back with no stderr in it.
+    await logToggle(page, 'both').click();
+    await expect(
+      logPane(page).locator('.log-line-stderr', { hasText: 'stderr line one' }),
+    ).toBeVisible();
+    await expect(
+      logPane(page).locator('.log-line-stdout', { hasText: 'stdout line one' }),
+    ).toBeVisible();
+
+    // Replayed once, not once per reconnect.
+    await expect(
+      logPane(page).locator('.log-line', { hasText: 'stderr line one' }),
+    ).toHaveCount(1);
+    await expect(
+      logPane(page).locator('.log-line', { hasText: 'stdout line two' }),
+    ).toHaveCount(1);
+  });
+});

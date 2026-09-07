@@ -33,8 +33,9 @@ stdout", so the default view is not merely equivalent but identical.
 {{if .Grouped}}
 <p class="muted log-note">
     stdout first, then stderr: the two files carry no shared ordering once
-    written, so a finished task's combined view groups them. A running
-    task's combined view interleaves them as they arrive.
+    written, so output already recorded when this view opened is grouped by
+    stream.{{if .Live}} Lines arriving from now on are interleaved as they
+    arrive.{{end}}
 </p>
 {{end}}
 
@@ -50,10 +51,8 @@ stdout", so the default view is not merely equivalent but identical.
 <pre id="task-log"
      class="log-pane{{if .Badged}} log-pane-badged{{end}}"
      aria-label="task log output ({{.Stream}})">
-{{- if .Truncated}}<span class="log-meta">… earlier lines omitted …</span>
-{{end -}}
 {{- range .Lines -}}
-{{if $.Badged}}<span class="log-line log-line-{{.Stream}}"><span class="log-tag">{{.Stream}}</span>{{.Text}}</span>{{else}}{{.Text}}{{end}}
+{{if .Meta}}<span class="log-meta">{{.Meta}}</span>{{else if $.Badged}}<span class="log-line log-line-{{.Stream}}"><span class="log-tag">{{.Stream}}</span>{{.Text}}</span>{{else}}{{.Text}}{{end}}
 {{end -}}
 {{- if .Empty}}<span class="log-meta">No {{if eq .Stream "both"}}output{{else}}{{.Stream}}{{end}} recorded for this task.</span>{{end -}}
 </pre>
