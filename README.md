@@ -22,10 +22,11 @@ curl -sSfL https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/
 irm https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/install.ps1 | iex
 ```
 
-The installers download the binary, create config/data directories,
-write a default config file, and fetch the example task types. Set
-`INSTALL_DIR` to override the binary location, or `VERSION=v0.1.0`
-to pin a release. If Claude Code is on your `$PATH`, they'll also
+The installers download the binary (verified against the release's
+`SHA256SUMS`, then renamed into place so a failed download never leaves a
+half-written binary behind), create config/data directories, write a
+default config file, and fetch the example task types. Set `INSTALL_DIR`
+to override the binary location, or `VERSION=v0.1.0` to pin a release. If Claude Code is on your `$PATH`, they'll also
 offer to install the `blanket-task-type` authoring skill — set
 `INSTALL_SKILLS=1` (or `0`) to decide without being prompted.
 
@@ -44,9 +45,26 @@ installer updates that block in place instead of duplicating it. Set
 `INSTALL_SHELL_INTEGRATION=1` (or `0`) to decide without being
 prompted; `0` also removes a block a previous run added.
 
-No internet access, or only local-user permissions? See
-[**offline install**](docs/offline_install.md) for downloading
-assets manually and pointing the installers at local files.
+No internet access, or only local-user permissions? Each release
+attaches `blanket-bundle-<version>.tar.gz` — binaries, checksums,
+example task types and the install scripts in one file. See
+[**offline install**](docs/offline_install.md).
+
+### Upgrading
+
+```bash
+blanket upgrade --check      # is a newer release available?
+blanket upgrade --yes        # install it and restart the server onto it
+blanket rollback --yes       # change your mind
+```
+
+`blanket upgrade` verifies the download against the release's
+`SHA256SUMS`, keeps the binary it replaces so `blanket rollback` can put
+it back, takes a database backup first, and restarts the running server
+onto the new binary without losing the work in flight. `--print-plan`
+shows the exact steps, `--bundle` installs from an offline bundle, and
+`--stage-only` / `--no-restart` split it up. See
+[**upgrading**](docs/upgrade.md).
 
 | | Binary | Config | Data |
 |---|---|---|---|
@@ -82,7 +100,8 @@ types, and the full REST API, see the [docs](docs/README.md):
 - [**Autostart**](docs/autostart.md) — running blanket as a background
   service that starts on login/boot, and `blanket uninstall`
 - [**Task flow**](docs/task_flow.md) — task and worker state machines
-- [**Upgrading**](docs/upgrade.md) — schema versions, backups,
+- [**Upgrading**](docs/upgrade.md) — `blanket upgrade` / `blanket
+  rollback`, checksums and offline bundles, schema versions, backups,
   `blanket backup` / `blanket migrate`
 - [**MCP interface**](docs/mcp.md) — expose blanket to MCP clients (agents),
   security considerations, and setup

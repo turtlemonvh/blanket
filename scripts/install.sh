@@ -117,19 +117,67 @@ echo
 # Install binary
 mkdir -p "$INSTALL_DIR"
 
+# Download to a temp file beside the target, verify it, and only then
+# rename it into place (turtlemonvh/blanket#23 phase 6). This used to
+# `curl -o "$INSTALL_DIR/blanket"` directly, which means a download that
+# dies half-way leaves an unrunnable binary where a working one used to be
+# -- and the user's next move ("run blanket") is the one thing that cannot
+# help them. Rename within a directory is atomic, so the installed path
+# only ever holds a complete file. `blanket upgrade` does the same thing;
+# see lib/upgrade/stage.go.
+TMP_BINARY="$INSTALL_DIR/.blanket.download.$$"
+cleanup_tmp() { rm -f "$TMP_BINARY" "$TMP_BINARY.sums"; }
+trap cleanup_tmp EXIT
+
 if [ -n "$BINARY_PATH" ]; then
-  cp "$BINARY_PATH" "$INSTALL_DIR/blanket"
+  cp "$BINARY_PATH" "$TMP_BINARY"
 else
-  HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$INSTALL_DIR/blanket" "$URL") || HTTP_CODE="000"
+  HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "$TMP_BINARY" "$URL") || HTTP_CODE="000"
   if [ "$HTTP_CODE" -ne 200 ]; then
-    rm -f "$INSTALL_DIR/blanket"
+    cleanup_tmp
     echo "Error: download failed (HTTP $HTTP_CODE). Check that release $VERSION exists:"
     echo "  https://github.com/$REPO/releases"
     exit 1
   fi
+
+  # Verify against the release's SHA256SUMS. Releases from v0.4.0 onward
+  # publish one; older ones do not and never will, so a missing file is a
+  # loud warning rather than a failure -- refusing would make every
+  # existing release uninstallable.
+  SUMS_CODE=$(curl -sSL -w "%{http_code}" -o "$TMP_BINARY.sums" \
+    "https://github.com/$REPO/releases/download/$VERSION/SHA256SUMS") || SUMS_CODE="000"
+  if [ "$SUMS_CODE" = "200" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      GOT=$(sha256sum "$TMP_BINARY" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+      GOT=$(shasum -a 256 "$TMP_BINARY" | awk '{print $1}')
+    else
+      GOT=""
+    fi
+    WANT=$(grep -E "[[:space:]][*]?(\./)?$BINARY\$" "$TMP_BINARY.sums" | awk '{print $1}' | head -1)
+    if [ -z "$GOT" ]; then
+      echo "  warn: no sha256sum/shasum on this machine; skipping checksum verification"
+    elif [ -z "$WANT" ]; then
+      echo "  warn: SHA256SUMS does not cover $BINARY; skipping checksum verification"
+    elif [ "$GOT" != "$WANT" ]; then
+      cleanup_tmp
+      echo "Error: checksum mismatch for $BINARY."
+      echo "  expected $WANT"
+      echo "  got      $GOT"
+      echo "Nothing was installed. Re-run, or download from https://github.com/$REPO/releases"
+      exit 1
+    else
+      echo "  verified $BINARY against SHA256SUMS"
+    fi
+  else
+    echo "  warn: release $VERSION publishes no SHA256SUMS; the download was not verified"
+  fi
 fi
 
-chmod +x "$INSTALL_DIR/blanket"
+chmod +x "$TMP_BINARY"
+mv "$TMP_BINARY" "$INSTALL_DIR/blanket"
+trap - EXIT
+rm -f "$TMP_BINARY.sums"
 
 # Create config and data directories
 mkdir -p "$CONFIG_DIR" "$DATA_DIR/types" "$DATA_DIR/results"

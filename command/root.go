@@ -21,10 +21,20 @@ var blanketCmdV *cobra.Command
 var (
 	CfgFile  string
 	LogLevel string
-	Version  string
+	// Version is the human-facing banner ("blanket v0.5.0 (built ...)").
+	Version string
+	// RawVersion is the bare tag the binary was built from ("v0.5.0"), or
+	// "" for a development build.
+	//
+	// Split out of Version for turtlemonvh/blanket#23 phase 6: `blanket
+	// upgrade` has to compare what is installed against what a release
+	// publishes, and a banner with a build date in it is not a thing you
+	// can compare. Nothing else should read it -- print Version.
+	RawVersion string
 )
 
 func Run(VERSION string, BRANCH string, COMMIT string, BUILD_DATE string) {
+	RawVersion = VERSION
 	if VERSION != "" {
 		Version = fmt.Sprintf("blanket %s (built %s)", VERSION, BUILD_DATE)
 	} else {
@@ -207,6 +217,36 @@ func SetConfigDefaults() {
 	// transitions before deciding it is gone and aborting. Generous: the
 	// steps it spans include a human swapping a binary by hand.
 	viper.SetDefault("restart.deadline", "5m")
+
+	// `blanket upgrade` / `blanket rollback` (turtlemonvh/blanket#23
+	// phase 6). See docs/upgrade.md.
+	//
+	// `upgrade.*` for the same reason storage.* and restart.* are what
+	// they are: viper stores defaults in a nested map, so a subtree can
+	// never share a name with a scalar key. Nothing is called `upgrade`
+	// today and nothing should be.
+	//
+	// checkForUpdates is the opt-out for the update notice. It ships on
+	// because the notice costs nothing on the path that prints it -- it
+	// reads a cache an earlier run left behind and never the network (see
+	// lib/upgrade/notice.go) -- and off is one config line for an install
+	// that would rather not have its CLI mention the internet at all.
+	viper.SetDefault("upgrade.checkForUpdates", true)
+	// Where the journal, the rollback slots and the notice cache live.
+	// Empty means <database dir>/upgrade, beside the backups the slots
+	// pair with.
+	viper.SetDefault("upgrade.stateDir", "")
+	// How many rollback slots to keep (brief decision row 9). Three,
+	// matching storage.backupRetention -- the database half of a slot is
+	// one of those backup files, so a fourth slot would be one whose
+	// backup had already been pruned out from under it.
+	viper.SetDefault("upgrade.slots", 3)
+	// Which repository releases come from, and the Releases API root.
+	// The base URL is overridable so scripts/upgrade.sh can serve a fake
+	// releases API off localhost; a test suite that reached
+	// api.github.com would fail whenever GitHub rate-limited CI.
+	viper.SetDefault("upgrade.repo", "turtlemonvh/blanket")
+	viper.SetDefault("upgrade.releasesBaseURL", "https://api.github.com")
 
 	// Time multiplier can be used in tests to speed up tests
 	viper.SetDefault("timeMultiplier", "1.0")

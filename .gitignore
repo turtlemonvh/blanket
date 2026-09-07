@@ -13,6 +13,10 @@ blanket.yml
 blanket.yaml
 worker.*.log
 tests.xml
+# Release artifacts: `make checksums` writes SHA256SUMS beside the
+# cross-compiled binaries, and `make bundle` writes dist/ (#23 phase 6).
+/SHA256SUMS
+/dist
 tests/e2e/node_modules
 tests/e2e/test-results
 tests/e2e/blanket.db

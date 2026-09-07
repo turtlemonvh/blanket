@@ -93,17 +93,59 @@ foreach ($dir in @($InstallDir, $TypesDir, $ResultsDir)) {
     }
 }
 
+# Download to a temp file beside the target, verify it, and only then move
+# it into place (turtlemonvh/blanket#23 phase 6). Downloading straight onto
+# blanket.exe means a download that dies half-way leaves an unrunnable
+# binary where a working one used to be. `blanket upgrade` does the same
+# thing; see lib/upgrade/stage.go.
+$TmpFile = Join-Path $InstallDir ".blanket.download.$PID"
+$SumsFile = "$TmpFile.sums"
+
 if ($env:BINARY_PATH) {
-    Copy-Item -Path $env:BINARY_PATH -Destination $OutFile -Force
+    Copy-Item -Path $env:BINARY_PATH -Destination $TmpFile -Force
 } else {
     try {
-        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
+        Invoke-WebRequest -Uri $Url -OutFile $TmpFile -UseBasicParsing
     } catch {
-        Remove-Item -Path $OutFile -ErrorAction SilentlyContinue
+        Remove-Item -Path $TmpFile -ErrorAction SilentlyContinue
         Write-Error "Download failed. Check that release $Version exists: https://github.com/$Repo/releases"
         exit 1
     }
+
+    # Verify against the release's SHA256SUMS. Releases from v0.4.0 onward
+    # publish one; older ones do not and never will, so a missing file is a
+    # loud warning rather than a failure.
+    $SumsUrl = "https://github.com/$Repo/releases/download/$Version/SHA256SUMS"
+    try {
+        Invoke-WebRequest -Uri $SumsUrl -OutFile $SumsFile -UseBasicParsing
+        $want = $null
+        foreach ($line in (Get-Content $SumsFile)) {
+            $parts = $line -split '\s+', 2
+            if ($parts.Count -eq 2 -and ($parts[1].TrimStart('*', '.', '/') -eq $Binary)) {
+                $want = $parts[0].ToLower()
+                break
+            }
+        }
+        if (-not $want) {
+            Write-Host "  warn: SHA256SUMS does not cover $Binary; skipping checksum verification"
+        } else {
+            $got = (Get-FileHash -Path $TmpFile -Algorithm SHA256).Hash.ToLower()
+            if ($got -ne $want) {
+                Remove-Item -Path $TmpFile, $SumsFile -ErrorAction SilentlyContinue
+                Write-Error "Checksum mismatch for $Binary (expected $want, got $got). Nothing was installed."
+                exit 1
+            }
+            Write-Host "  verified $Binary against SHA256SUMS"
+        }
+    } catch {
+        Write-Host "  warn: release $Version publishes no SHA256SUMS; the download was not verified"
+    }
+    Remove-Item -Path $SumsFile -ErrorAction SilentlyContinue
 }
+
+# Move-Item -Force replaces the target atomically enough for an install:
+# either the old file or the new one is there, never a partial download.
+Move-Item -Path $TmpFile -Destination $OutFile -Force
 
 # Write default config if not present
 $ConfigFile = Join-Path $ConfigDir "config.json"
