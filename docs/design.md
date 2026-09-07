@@ -86,7 +86,7 @@ flowchart LR
         subcmd["Task subprocess<br/>(exec.Cmd)"]
     end
 
-    logs[/"Result dir: blanket.stdout.log / blanket.stderr.log"/]
+    logs[/"Result dir: blanket.stdout.log / blanket.stderr.log<br/>+ blanket.combined.ndjson (stream interleaving)"/]
 
     client -- "HTTP: submit/list/cancel tasks,<br/>SSE log/event streams" --> router
     router -- "direct calls: DB.*, Q.*" --> db
@@ -95,7 +95,8 @@ flowchart LR
 
     claimloop -- "HTTP: POST /task/claim/:workerId,<br/>PUT /task/:id/run|progress|finish" --> router
     claimloop -- "starts, monitors" --> subcmd
-    subcmd -- "writes" --> logs
+    subcmd -- "writes stdout/stderr directly" --> logs
+    claimloop -- "tails both, records the interleaving" --> logs
 ```
 
 ### Shutdown sequence

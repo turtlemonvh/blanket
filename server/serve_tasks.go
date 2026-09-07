@@ -799,6 +799,11 @@ func (s *ServerConfig) removeTask(c *gin.Context) {
 // asking for `application/x-ndjson` (or passing ?format=ndjson) gets the
 // structured state/log/result event stream instead, from the same
 // encoder the synchronous submit uses. See server/serve_stream.go.
+//
+// The raw shape also takes `?stream=stdout|stderr` (turtlemonvh/blanket#104),
+// which picks which of the task's two log files it follows. Absent means
+// stdout, so the UI's default log pane -- and every existing caller --
+// sees exactly what it always did.
 func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 	var err error
 	var taskId objectid.ObjectId
@@ -821,8 +826,12 @@ func (s *ServerConfig) streamTaskLog(c *gin.Context) {
 		return
 	}
 
-	stdoutPath := path.Join(task.ResultDir, fmt.Sprintf("blanket.stdout.log"))
-	sub, err := tailed_file.Follow(stdoutPath)
+	logFile, _, ok := rawLogStreamFor(c)
+	if !ok {
+		return
+	}
+
+	sub, err := tailed_file.Follow(path.Join(task.ResultDir, logFile))
 	if err != nil {
 		c.String(http.StatusInternalServerError, "Error opening logfile stream")
 		return

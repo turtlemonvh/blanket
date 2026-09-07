@@ -23,6 +23,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
@@ -1273,6 +1274,291 @@ func TestUI_TasksRows_SeriesBacklink(t *testing.T) {
 	body := rows.Body.String()
 	assert.Contains(t, body, "part of series "+tmpl.Id.Hex()[:8])
 	assert.Contains(t, body, `href="/ui/tasks/`+tmpl.Id.Hex()+`"`)
+}
+
+// ---------------------------------------------------------------------------
+// Exit code, result artifact, and the log-view toggle (turtlemonvh/blanket#104)
+// ---------------------------------------------------------------------------
+
+// seedUIResultTask builds a task whose type declares result_file, saves it,
+// and drives it to a terminal state with the given exit code. Reuses
+// resultFileTaskType (serve_sync_test.go) so the UI tests read the artifact
+// through exactly the same task-type fixture the ?wait tests do.
+//
+// Pass resultFile "" for a type that declares no artifact at all, and state
+// "" to leave the task WAITING.
+func seedUIResultTask(t *testing.T, s *ServerConfig, resultFile, state string, exitCode *int) tasks.Task {
+	t.Helper()
+
+	tsk := resultFileTaskType(t, resultFile)
+	require.NoError(t, s.DB.SaveTask(&tsk))
+	if state == "" {
+		return tsk
+	}
+	require.NoError(t, s.DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: state, ExitCode: exitCode}))
+	updated, err := s.DB.GetTask(tsk.Id)
+	require.NoError(t, err)
+	return updated
+}
+
+// (The stdout/stderr log files these tests need are written by
+// writeTaskLogs, shared with the stream tests in serve_stream_test.go.)
+
+// A finished task's exit code shows in its row; a task that hasn't finished
+// shows a dash, not a zero.
+func TestUI_TasksRows_ExitCode(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	seedUIResultTask(t, s, "", "ERROR", intPtr(3))
+	// Same fixture, left WAITING: no exit status to report yet.
+	seedUIResultTask(t, s, "", "", nil)
+
+	rows := getUI(r, "/ui/partials/tasks-rows")
+	assert.Equal(t, http.StatusOK, rows.Code)
+	body := rows.Body.String()
+	assert.Contains(t, body, `<span class="exit-code exit-bad">3</span>`,
+		"a finished task's exit code should render in its row")
+	assert.Contains(t, body, `<span class="muted">&mdash;</span>`,
+		"a task with no exit code should render a dash")
+
+	// And the column exists on the page that renders the rows.
+	page := getUI(r, "/ui/")
+	assert.Equal(t, http.StatusOK, page.Code)
+	assert.Contains(t, page.Body.String(), "<th>Exit</th>")
+}
+
+// A zero exit code is a real value, not an absent one -- it must not render
+// as the dash a null does.
+func TestUI_TasksRows_ExitCodeZero(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	seedUIResultTask(t, s, "", "SUCCESS", intPtr(0))
+
+	body := getUI(r, "/ui/partials/tasks-rows").Body.String()
+	assert.Contains(t, body, `<span class="exit-code exit-ok">0</span>`)
+}
+
+func TestUI_TaskDetail_ExitCode(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	finished := seedUIResultTask(t, s, "", "ERROR", intPtr(3))
+	body := getUI(r, "/ui/tasks/"+finished.Id.Hex()).Body.String()
+	assert.Contains(t, body, "<td>Exit Code</td>")
+	assert.Contains(t, body, `<span class="exit-code exit-bad">3</span>`)
+
+	// STOPPED/TIMEDOUT and never-started tasks report no exit status.
+	unfinished := seedUIResultTask(t, s, "", "", nil)
+	body = getUI(r, "/ui/tasks/"+unfinished.Id.Hex()).Body.String()
+	assert.Contains(t, body, "<td>Exit Code</td>")
+	assert.Contains(t, body, `<td><span class="muted">&mdash;</span></td>`)
+	assert.NotContains(t, body, "exit-code")
+}
+
+func TestUI_TaskDetail_RendersResult(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tsk := seedUIResultTask(t, s, "result.json", "SUCCESS", intPtr(0))
+	require.NoError(t, os.WriteFile(filepath.Join(tsk.ResultDir, "result.json"),
+		[]byte(`{"answer":42}`), 0644))
+
+	body := getUI(r, "/ui/tasks/"+tsk.Id.Hex()).Body.String()
+	assert.Contains(t, body, "<h3>Result</h3>")
+	assert.Contains(t, body, "<code>result.json</code>")
+	assert.Contains(t, body, "/results/"+tsk.Id.Hex()+"/result.json")
+	// Pretty-printed, and HTML-escaped by the template.
+	assert.Contains(t, body, "&#34;answer&#34;: 42")
+	// Short artifacts open by default rather than hiding behind a click.
+	assert.Contains(t, body, `<details class="result-details" open>`)
+}
+
+// A declared artifact that can't be parsed reports why, and doesn't quietly
+// look like a task that wrote nothing.
+func TestUI_TaskDetail_RendersResultError(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tsk := seedUIResultTask(t, s, "result.json", "SUCCESS", intPtr(0))
+	require.NoError(t, os.WriteFile(filepath.Join(tsk.ResultDir, "result.json"),
+		[]byte("not json at all"), 0644))
+
+	body := getUI(r, "/ui/tasks/"+tsk.Id.Hex()).Body.String()
+	assert.Contains(t, body, "<h3>Result</h3>")
+	assert.Contains(t, body, "could not parse result_file")
+	assert.Contains(t, body, `class="inline-error"`)
+	assert.NotContains(t, body, "Parsed JSON")
+}
+
+// A finished task whose type declares an artifact it never wrote says so --
+// that usually means it failed before getting there.
+func TestUI_TaskDetail_ResultMissing(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tsk := seedUIResultTask(t, s, "result.json", "ERROR", intPtr(1))
+	body := getUI(r, "/ui/tasks/"+tsk.Id.Hex()).Body.String()
+	assert.Contains(t, body, "<h3>Result</h3>")
+	assert.Contains(t, body, "finished without writing this file")
+	// Nothing to link: /results/ would 404 on it.
+	assert.NotContains(t, body, "/results/"+tsk.Id.Hex()+"/result.json")
+}
+
+// The common case: a type with no result_file gets no result block at all.
+func TestUI_TaskDetail_NoResultFileDeclared(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tsk := seedUIResultTask(t, s, "", "SUCCESS", intPtr(0))
+	body := getUI(r, "/ui/tasks/"+tsk.Id.Hex()).Body.String()
+	assert.NotContains(t, body, "<h3>Result</h3>")
+	assert.NotContains(t, body, "result-details")
+	// The log pane is still there.
+	assert.Contains(t, body, `id="task-log-view"`)
+}
+
+// The three views of a finished task's log: stdout only, stderr only, and
+// both with a per-line stream badge.
+func TestUI_TaskLogPartial_Views(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tsk := seedUIResultTask(t, s, "", "ERROR", intPtr(2))
+	writeTaskLogs(t, tsk, "out one\nout two\n", "err one\n")
+
+	base := "/ui/partials/task-log?id=" + tsk.Id.Hex()
+
+	stdout := getUI(r, base)
+	assert.Equal(t, http.StatusOK, stdout.Code)
+	assert.Contains(t, stdout.Body.String(), "out one")
+	assert.NotContains(t, stdout.Body.String(), "err one")
+
+	stderr := getUI(r, base+"&stream=stderr")
+	assert.Equal(t, http.StatusOK, stderr.Code)
+	assert.Contains(t, stderr.Body.String(), "err one")
+	assert.NotContains(t, stderr.Body.String(), "out one")
+
+	both := getUI(r, base+"&stream=both")
+	assert.Equal(t, http.StatusOK, both.Code)
+	bothBody := both.Body.String()
+	assert.Contains(t, bothBody, `<span class="log-tag">stdout</span>out one`)
+	assert.Contains(t, bothBody, `<span class="log-tag">stderr</span>err one`)
+	// Two separate files: the combined view groups rather than pretending
+	// to know an interleaving that was never recorded.
+	assert.Contains(t, bothBody, "stdout first, then stderr")
+
+	// Whichever view is showing, all three buttons are offered and the
+	// current one is marked.
+	for _, label := range []string{"stdout", "stderr", "both"} {
+		assert.Contains(t, bothBody, `aria-label="show `+label+`"`)
+	}
+	assert.Contains(t, bothBody, `class="log-toggle-btn active"`)
+	assert.Equal(t, 1, strings.Count(bothBody, `aria-pressed="true"`),
+		"exactly one toggle button should be marked as the current view")
+}
+
+// A task that wrote nothing to the selected stream says so rather than
+// showing an empty black box.
+func TestUI_TaskLogPartial_EmptyStream(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tsk := seedUIResultTask(t, s, "", "SUCCESS", intPtr(0))
+	writeTaskLogs(t, tsk, "only stdout here\n", "")
+
+	body := getUI(r, "/ui/partials/task-log?id="+tsk.Id.Hex()+"&stream=stderr").Body.String()
+	assert.Contains(t, body, "No stderr recorded for this task.")
+}
+
+// A running task streams. The stdout view's URL is the raw log route,
+// unchanged -- that is the whole point of the maintainer's "keep raw
+// stdout" call on #104 -- and only the combined view needs the UI's own
+// interleaving stream.
+func TestUI_TaskLogPartial_LiveStreamUrls(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tsk := resultFileTaskType(t, "")
+	tsk.State = "RUNNING"
+	require.NoError(t, s.DB.SaveTask(&tsk))
+
+	id := tsk.Id.Hex()
+	base := "/ui/partials/task-log?id=" + id
+
+	assert.Contains(t, getUI(r, base).Body.String(),
+		`sse-connect="/task/`+id+`/log"`)
+	assert.Contains(t, getUI(r, base+"&stream=stderr").Body.String(),
+		`sse-connect="/task/`+id+`/log?stream=stderr"`)
+	assert.Contains(t, getUI(r, base+"&stream=both").Body.String(),
+		`sse-connect="/ui/sse/tasks/`+id+`/log"`)
+
+	// The page's own first render is the stdout view, inline -- no extra
+	// request for what the page always showed.
+	assert.Contains(t, getUI(r, "/ui/tasks/"+id).Body.String(),
+		`sse-connect="/task/`+id+`/log"`)
+}
+
+// An unknown ?stream on the UI partial falls back to the default view: a
+// toggle is not an API, and the worst outcome is showing stdout.
+func TestUI_TaskLogPartial_UnknownStreamFallsBack(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tsk := seedUIResultTask(t, s, "", "SUCCESS", intPtr(0))
+	writeTaskLogs(t, tsk, "out one\n", "err one\n")
+
+	body := getUI(r, "/ui/partials/task-log?id="+tsk.Id.Hex()+"&stream=bogus").Body.String()
+	assert.Contains(t, body, "out one")
+	assert.NotContains(t, body, "err one")
+}
+
+// The raw tail route grew the same ?stream parameter as the raw log stream,
+// so a client tailing stderr doesn't have to fall back to the static file
+// under /results/. `both` is rejected on both: an undecorated byte stream
+// can't say which file a line came from.
+func TestTailTaskLog_StreamParam(t *testing.T) {
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	tsk := seedUIResultTask(t, s, "", "SUCCESS", intPtr(0))
+	writeTaskLogs(t, tsk, "out one\n", "err one\n")
+
+	base := "/task/" + tsk.Id.Hex() + "/log/tail"
+
+	assert.Equal(t, "out one\n", getUI(r, base).Body.String())
+	assert.Equal(t, "out one\n", getUI(r, base+"?stream=stdout").Body.String())
+	assert.Equal(t, "err one\n", getUI(r, base+"?stream=stderr").Body.String())
+
+	bad := getUI(r, base+"?stream=both")
+	assert.Equal(t, http.StatusBadRequest, bad.Code)
+	assert.Contains(t, bad.Body.String(), "must be 'stdout' or 'stderr'")
+
+	badStream := getUI(r, "/task/"+tsk.Id.Hex()+"/log?stream=nope")
+	assert.Equal(t, http.StatusBadRequest, badStream.Code)
+}
+
+// The UI's combined stream renders each line into an escaped, badged
+// fragment -- htmx swaps event data in as HTML, so a task that prints a tag
+// must not be able to inject one.
+func TestRenderLogLineHTML_Escapes(t *testing.T) {
+	out := renderLogLineHTML(LogStreamStderr, `<img src=x onerror="alert(1)">`)
+	assert.Contains(t, out, `<span class="log-tag">stderr</span>`)
+	assert.Contains(t, out, "&lt;img src=x onerror=")
+	assert.NotContains(t, out, "<img")
 }
 
 // --- worker state in the UI (turtlemonvh/blanket#23 phase 3) ---

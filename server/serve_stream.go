@@ -443,10 +443,10 @@ func (s *ServerConfig) runTaskEventStream(c *gin.Context, enc *StreamEncoder, ta
 
 			if tailAttachable(cur.State) {
 				if stdout == nil && !stdoutClosed {
-					stdout = followTail(cur, "blanket.stdout.log", LogStreamStdout)
+					stdout = followTail(cur, TaskStdoutLogFile, LogStreamStdout)
 				}
 				if stderr == nil && !stderrClosed {
-					stderr = followTail(cur, "blanket.stderr.log", LogStreamStderr)
+					stderr = followTail(cur, TaskStderrLogFile, LogStreamStderr)
 				}
 			}
 

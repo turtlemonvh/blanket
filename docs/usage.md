@@ -250,11 +250,47 @@ server-rendered htmx UI baked into the binary, no separate deploy.
 
 | Page | What it's for |
 | ---- | ------------- |
-| **Tasks** (`/ui/`) | Every task record: filter by state/type/tags/date, submit a new one, cancel or delete. |
+| **Tasks** (`/ui/`) | Every task record: filter by state/type/tags/date, submit a new one, cancel or delete. An **Exit** column shows each finished task's exit code. |
 | **Upcoming** (`/ui/upcoming`) | What hasn't run yet — see below. |
 | **Workers** (`/ui/workers`) | Launch, stop, restart workers; tail their logs. |
 | **Task Types** (`/ui/task-types`) | The loaded TOML types and their settings. |
 | **About** (`/ui/about`) | Version, config file, effective settings. |
+
+### Task detail
+
+`/ui/tasks/<id>` is one task's page: its metadata, its environment, its
+result artifact, and its log.
+
+- **Exit code** sits next to the state, and also has its own column in the
+  Tasks list. A dash means *no exit status*, not zero: a task that hasn't
+  finished, one killed by a signal (`STOPPED` / `TIMEDOUT`), and one that
+  never started all report none. Only a `0` badge means the process
+  exited 0.
+- **Result** appears only when the task's type declares a
+  [`result_file`](task_type_definitions.md#result_file). It shows the parsed artifact as
+  pretty-printed JSON — collapsed behind a disclosure if it's long — next
+  to a link to the raw file, and says so instead if the file couldn't be
+  parsed or the finished task never wrote it. It is read through exactly
+  the same code path as `POST /task/?wait`'s `result` / `resultError`
+  fields, so the page and the API always agree.
+- **Log** has a **stdout / stderr / both** toggle. `stdout` is the
+  default and is the raw live stream blanket has always shown; `stderr`
+  is the same thing pointed at the other file; `both` mixes the two with
+  a per-line badge saying which stream each line came from. Whichever
+  view you pick, and whether the task is still running or finished, you
+  see the last 500 lines of what it covers: the combined view of a
+  running task replays what the task has already written before it starts
+  following, so switching views doesn't cost you the output from before
+  the switch — and it replays it **in the order the task produced it**,
+  the same order live lines arrive in. That comes from the worker's
+  combined record (`blanket.combined.ndjson`, linked from the metadata
+  table); a task without one — run before blanket recorded it, or by a
+  worker with `workers.combinedLog = false` — shows its history grouped
+  by stream instead and says so above the pane. The one gap: that record
+  stops a fraction of a second after the task itself exits, so if the
+  task left something running behind it, that process's later output
+  shows up under `stdout` / `stderr` but not under `both`. **Pin to
+  bottom** keeps the newest line in view.
 
 ### Upcoming
 
@@ -372,6 +408,29 @@ blanket task-validate
 
 You can also launch and manage workers from the web UI or via the
 `/worker/` REST endpoints.
+
+Worker config keys (defaults shown):
+
+```
+workers.logfileNameTemplate  "worker.{{.Id.Hex}}.log"   # worker's own log file
+workers.combinedLog          true                       # record stream interleaving
+```
+
+`workers.combinedLog` is what lets a task's log views show its two streams
+in the order they were produced: the worker tails `blanket.stdout.log` and
+`blanket.stderr.log` as the task writes them and records each line, tagged
+and in order, into `blanket.combined.ndjson` alongside them (see
+[Task output files](task_flow.md#task-output-files)).
+
+The task's own two log files are written by the task itself, exactly as
+they always have been, whether the knob is on or off — nothing is piped
+through the worker, so a process a task leaves running behind it goes on
+appending to `blanket.stdout.log` for as long as it lives. The one thing
+the recording does not cover is that late output: the worker stops tailing
+a fraction of a second after the task exits, so an orphan's later lines
+are in the per-stream views and the raw result files but not in the `both`
+view. Turning the knob off just means no third file and no tailer per
+running task.
 
 ## Writing task types
 

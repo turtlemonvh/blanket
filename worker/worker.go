@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib"
+	"github.com/turtlemonvh/blanket/lib/combined_log"
 	"github.com/turtlemonvh/blanket/lib/httpx"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/proclive"
@@ -680,12 +681,14 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	resultDir := t.ResultDir
 	cmd.Env = append(cmd.Env, fmt.Sprintf("BLANKET_APP_TASK_RUN_ID=%s", runId))
 
-	var fileCloser func()
-	err, fileCloser = c.SetupExecutionDirectory(t, tt, cmd)
+	out, err := c.SetupExecutionDirectory(t, tt, cmd)
+	// Deferred unconditionally: SetupExecutionDirectory returns whatever
+	// it managed to open even when it fails partway, so this is also the
+	// error path's cleanup.
+	defer out.Close()
 	if err != nil {
 		return err
 	}
-	defer fileCloser()
 
 	err = cmd.Start()
 	if err != nil {
@@ -705,6 +708,13 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		}
 		return err
 	}
+
+	// The child is running and its two log files are already growing, so
+	// start recording how they interleave. Tailing the files (rather than
+	// standing between the child and them) is what keeps a process the
+	// task leaves behind writing into blanket.stdout.log for as long as
+	// it lives -- see ExecOutput.
+	out.StartTailing(taskId.Hex())
 
 	// The child exists now, so from here on there is something worth
 	// recovering if this worker dies. Write the journal before telling the
@@ -782,8 +792,6 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		// this goroutine started. In particular it refreshes its own copy
 		// of the task rather than the caller's.
 		snapshot := tasks.Task{Id: taskId}
-		stdout, _ := cmd.Stdout.(*os.File)
-		stderr, _ := cmd.Stderr.(*os.File)
 
 		for {
 			log.WithFields(log.Fields{
@@ -812,13 +820,10 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 				return
 			}
 
-			// Flush log files
-			if stdout != nil {
-				stdout.Sync()
-			}
-			if stderr != nil {
-				stderr.Sync()
-			}
+			// Flush log files. All of them: a reader following the
+			// combined record must not lag the two per-stream files it
+			// is meant to be the ordering of.
+			out.Sync()
 			log.WithFields(log.Fields{
 				"taskId": taskId,
 			}).Debug("Flushing logfiles for task")
@@ -866,6 +871,14 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	// reporting, so it can't race a TIMEDOUT in on top of the real outcome.
 	stopMonitor()
 	<-monitorDone
+
+	// Close the combined record before reporting anything: a task the UI
+	// shows as finished must not have a combined log that is still being
+	// written, or the `both` pane would show a truncated history that
+	// silently filled in later. Finish keeps tailing for a short grace
+	// window first, since the last lines of a task routinely land just
+	// after the process itself is gone.
+	out.Finish()
 
 	// One read of the child's exit status, shared by the journal and the
 	// finish report so the two can never disagree. processExitCode reports
@@ -959,7 +972,9 @@ func processExitCode(cmd *exec.Cmd) *int {
 
 // Create the execution directory for a task
 // Includes attaching log files to the cmd object
-func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) (error, func()) {
+func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, cmd *exec.Cmd) (*ExecOutput, error) {
+	out := &ExecOutput{}
+
 	// Set up output files and configure the task to run in the correct location
 	err := os.MkdirAll(t.ResultDir, os.ModePerm)
 	if err != nil {
@@ -967,40 +982,64 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("failed to create scratch directory for task")
-		return err, func() {}
+		return out, err
+	}
+
+	// The combined log is created *before* the two per-stream files, and
+	// deliberately so: a reader decides which shape of history it is
+	// looking at by whether this file is there (server/ui_logs.go), and
+	// creating it last would leave a window in which a task that does
+	// record interleaving looked like one that doesn't.
+	if combinedLogEnabled() {
+		combined, cerr := combined_log.Create(path.Join(t.ResultDir, combined_log.FileName))
+		if cerr != nil {
+			// Not fatal. This file is a supplementary record of ordering;
+			// losing it costs the combined log view its interleaving, not
+			// the task its output.
+			log.WithFields(log.Fields{
+				"err":    cerr.Error(),
+				"taskId": t.Id,
+			}).Warn("failed to create the combined log file for task; its log views will fall back to per-stream ordering")
+		} else {
+			out.combined = combined
+		}
 	}
 
 	// FIXME: Can set to the same file to get golang to combine streams
 	// https://golang.org/pkg/os/exec/#Cmd
-	stdoutPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stdout.log"))
-	stderrPath := path.Join(t.ResultDir, fmt.Sprintf("blanket.stderr.log"))
+	stdoutPath := path.Join(t.ResultDir, "blanket.stdout.log")
+	stderrPath := path.Join(t.ResultDir, "blanket.stderr.log")
+	out.stdoutPath = stdoutPath
+	out.stderrPath = stderrPath
 	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("failed to create stdout file for task")
-		return err, func() {}
+		return out, err
 	}
+	out.stdout = stdoutFile
 	stderrFile, err := os.Create(stderrPath)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("failed to create stderr file for task")
-		return err, func() {
-			stdoutFile.Close()
-		}
+		return out, err
 	}
+	out.stderr = stderrFile
 
+	// The child gets the files themselves, never a pipe. os/exec passes
+	// an *os.File straight to the child as its fd 1/2, so nothing the
+	// task starts is writing into something the worker owns and can take
+	// away -- which is what lets a backgrounded process go on appending
+	// to blanket.stdout.log after the task that started it has finished.
+	// The combined record is built by tailing these two files instead;
+	// see ExecOutput.
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
 	cmd.Dir = t.ResultDir
-
-	fileCloser := func() {
-		stdoutFile.Close()
-		stderrFile.Close()
-	}
 
 	// The copier should use the location of the task type as its starting point
 	// for relative path searches for files
@@ -1015,7 +1054,7 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 			"err":    err.Error(),
 			"taskId": t.Id,
 		}).Error("failed copy files for task")
-		return err, fileCloser
+		return out, err
 	} else {
 		log.WithFields(log.Fields{
 			"files":  filesToInclude,
@@ -1023,5 +1062,5 @@ func (c *WorkerConf) SetupExecutionDirectory(t *tasks.Task, tt *tasks.TaskType, 
 		}).Error("copied files for task")
 	}
 
-	return err, fileCloser
+	return out, err
 }

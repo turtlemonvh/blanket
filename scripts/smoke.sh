@@ -474,6 +474,17 @@ done
 [[ -s "$WORKDIR/results/$worker_task_id/blanket.stdout.log" ]] \
     || fail "task stdout log missing or empty at $WORKDIR/results/$worker_task_id"
 
+# ...including the combined record of how the two streams interleaved
+# (turtlemonvh/blanket#104), which is what the UI's `both` log view reads.
+# It is written by a real worker running a real child process, so this is
+# the only surface that covers the plumbing end to end — the unit tests
+# construct the file, this asserts the binary produces it.
+combined_log="$WORKDIR/results/$worker_task_id/blanket.combined.ndjson"
+[[ -s "$combined_log" ]] \
+    || fail "combined log missing or empty at $combined_log"
+grep -q '"stream":"stdout"' "$combined_log" \
+    || fail "combined log has no stdout record: $(cat "$combined_log")"
+
 kill "$WORKER_PID" 2>/dev/null || true
 wait "$WORKER_PID" 2>/dev/null || true
 WORKER_PID=""

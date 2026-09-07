@@ -56,8 +56,11 @@ PUT    /task/:id/schedule       # change a live series' schedule -- body
                                  # mismatch or an invalid value.
 GET    /task/:id/log            # stream stdout (SSE), or the structured
                                  # event stream with Accept:
-                                 # application/x-ndjson / ?format=ndjson
-GET    /task/:id/log/tail       # last N lines of stdout
+                                 # application/x-ndjson / ?format=ndjson.
+                                 # ?stream=stdout|stderr picks the file
+                                 # the raw form follows (default stdout)
+GET    /task/:id/log/tail       # last N lines of stdout; ?stream=stderr
+                                 # tails the other file instead
 ```
 
 `POST /task/` accepts a JSON body (or a multipart form with a `data`
@@ -134,7 +137,7 @@ The completion payload:
 | ----- | ------- |
 | `task` | The existing task JSON, verbatim — same fields `GET /task/:id` returns, including the new `exitCode`. |
 | `waitOutcome` | `"completed"`. (`"wait_timeout"` is the other value; it exists for the streaming variant, which cannot change its HTTP status once the body has started.) |
-| `stdout` / `stderr` | The last `tasks.sync.maxLogLines` lines of each stream, read from `blanket.stdout.log` / `blanket.stderr.log` under the task's result dir. Empty if the task wrote nothing. |
+| `stdout` / `stderr` | The last `tasks.sync.maxLogLines` lines of each stream, read from `blanket.stdout.log` / `blanket.stderr.log` under the task's result dir. Empty if the task wrote nothing. Two separate tails: how the streams interleaved is recorded in `blanket.combined.ndjson` (see [Task output files](task_flow.md#task-output-files)), which this payload does not read. |
 | `stdoutTruncated` / `stderrTruncated` | True when earlier lines were dropped from that tail. |
 | `result` | The parsed contents of the task type's declared [`result_file`](task_type_definitions.md#result_file), or `null` — a type that declares none, or a task that failed before writing it, both yield `null` without an error. |
 | `resultError` | Why `result` is `null` despite a declared `result_file` (unparseable, oversized, unreadable), so a malformed result never looks like an absent one. `null` when there was nothing wrong. |
@@ -229,9 +232,13 @@ Notes that matter in practice:
 * **`seq` is per stream, per connection.** `stdout` and `stderr` each
   count from 1. It is not a position in the file, and a reconnecting
   client sees it restart.
-* **Ordering between `stdout` and `stderr` is not the task's.** They are
-  two files tailed separately; blanket cannot reconstruct the
-  interleaving the task produced.
+* **Ordering between `stdout` and `stderr` is not the task's.** This
+  stream tails the two per-stream files separately, and nothing about
+  the order it emits their lines in is the order the task wrote them.
+  The interleaving *is* recorded, in `blanket.combined.ndjson` under the
+  task's result dir ([Task output files](task_flow.md#task-output-files)),
+  and the web UI's combined log view reads it — but these events do not
+  yet come from it (turtlemonvh/blanket#123).
 * Unknown event types should be skipped, not treated as errors — that's
   what lets a later blanket add one without breaking your client.
 
@@ -272,6 +279,43 @@ reaches a terminal state (ending with a `completed` result event) or the
 client goes away. Both variants now stay open while the task is live —
 before this they closed after the first five idle seconds regardless of
 the task's state.
+
+#### Picking a stream: `?stream=stdout|stderr`
+
+The raw form of both `GET /task/:id/log` and `GET /task/:id/log/tail`
+takes a `?stream` parameter naming which of the task's two log files
+(`blanket.stdout.log` / `blanket.stderr.log`, under its result dir) to
+follow. Omitted means `stdout`, so every existing caller is unaffected.
+
+```bash
+curl -sN 'localhost:8773/task/<id>/log?stream=stderr'
+curl -s  'localhost:8773/task/<id>/log/tail?stream=stderr&n=50'
+```
+
+`?stream=both` is **rejected with 400** on both routes. These emit the
+bytes the task wrote and nothing else, so an interleaving of the two
+would be ambiguous — there'd be no way to tell which file a line came
+from. A caller that wants both at once uses the structured stream above,
+whose `log` events carry a `stream` discriminator. (The web UI's combined
+log view has its own UI-only route for the same reason; see
+[Web UI](#web-ui) below.)
+
+A third file sits next to those two: `blanket.combined.ndjson`, the
+worker's record of how the streams interleaved — one JSON object per line
+of output, in the order the worker saw it land, tagged with the stream it
+came from. The worker builds it by *tailing* the two per-stream files, so
+they stay byte-for-byte what the task wrote and are unaffected by it. It
+is served like any other result-dir file
+(`GET /results/:taskId/blanket.combined.ndjson`) and is what the web UI's
+combined log view reads. `workers.combinedLog = false` turns the
+recording off, and tasks run before it existed don't have one.
+
+It covers a task's output up to a short grace window after the task
+exits, and no further: a process the task left running behind it keeps
+appending to `blanket.stdout.log` / `blanket.stderr.log`, and those late
+lines are in every route above but not in this record. Its shape and the
+trade-offs behind it are in
+[Task output files](task_flow.md#task-output-files).
 
 A `notBefore`-in-the-future or `cron` submission returns **429** with a
 JSON error body if accepting it would bring the count of live
@@ -742,18 +786,25 @@ exercised.
 
 ## Streaming endpoints (SSE)
 
-Four routes hold a `text/event-stream` connection open:
+Five routes hold a `text/event-stream` connection open:
 
 ```
 GET /task/:id/log               # stdout of a running task, line by line
-                                 # (`message` events)
+                                 # (`message` events); ?stream=stderr
+                                 # follows the other file instead
 GET /worker/:id/log             # a worker's logfile, same shape
 GET /ui/sse/tasks               # `tasks-changed` — a nudge to re-fetch;
                                  # carries no payload
 GET /ui/sse/workers             # `workers-changed`, likewise
+GET /ui/sse/tasks/:id/log       # UI-only: both of a task's log files on
+                                 # one connection, each `message` event
+                                 # carrying one line pre-rendered as an
+                                 # HTML fragment with a stream badge. On
+                                 # connect it replays what both files
+                                 # already hold, then follows them.
 ```
 
-All four also emit a **`server-restarting`** event, and only that event,
+All five also emit a **`server-restarting`** event, and only that event,
 as their final frame when the server is shutting down or restarting
 itself. It is preceded by a bare `retry:` field telling the browser how
 soon to reconnect (1000 ms), and the stream then closes:
@@ -805,6 +856,39 @@ GET /ui/partials/form-error?error=<message>
                                 # POST /ui/tasks returns the message on an
                                 # HX-Trigger event and the form fetches
                                 # this to display it.
+GET /ui/partials/task-log?id=<task id>&stream=stdout|stderr|both
+                                # the task detail page's log pane and its
+                                # stream toggle. A running task's pane is
+                                # an SSE-connected <pre>; anything else is
+                                # the stored tail, rendered inline. An
+                                # unrecognized `stream` falls back to
+                                # stdout rather than erroring — this is a
+                                # toggle, not an API.
+GET /ui/sse/tasks/:id/log       # the "both" view's stream: stdout and
+                                # stderr of one task on one connection,
+                                # each `message` event carrying one
+                                # HTML-escaped line wrapped in a span with
+                                # its stream badge. On connect it replays
+                                # the last 500 lines and then follows from
+                                # the byte offset the replay stopped at, so
+                                # nothing is dropped or repeated at the
+                                # seam. It reads blanket.combined.ndjson —
+                                # the worker's record of how the two
+                                # streams interleaved — so replayed history
+                                # is in the same time order as the lines
+                                # that arrive after it. A task with no such
+                                # record falls back to replaying the two
+                                # per-stream files grouped (all of stdout,
+                                # then all of stderr), which is all their
+                                # contents support; so does output written
+                                # by a process the task orphaned, which the
+                                # record stops covering shortly after the
+                                # task exits. UI-only on purpose:
+                                # GET /task/:id/log emits the bytes the
+                                # task wrote, and must not start emitting
+                                # markup. Clients wanting both streams as
+                                # data use the structured NDJSON stream
+                                # instead.
 ```
 
 `POST /ui/tasks` (the create form's submit) accepts the same scheduling

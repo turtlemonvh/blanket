@@ -1,0 +1,81 @@
+{{/*
+The task detail page's log pane (turtlemonvh/blanket#104).
+
+Rendered inline by task_detail.html for the default (stdout) view, and
+re-fetched from /ui/partials/task-log?id=…&stream=… when one of the
+toggle buttons is pressed. The buttons live inside the block they replace,
+so a swap re-renders the toggle with the new selection marked — there is
+no client-side state to keep in sync.
+
+A running task streams; anything else prints the tail already on disk.
+That split, and the stdout stream's URL, are exactly what this page did
+before the toggle existed: the maintainer's call on #104 was "keep raw
+stdout", so the default view is not merely equivalent but identical.
+*/}}
+{{define "task-log"}}
+<div class="log-toolbar">
+    <div class="log-toggle" role="group" aria-label="Log stream">
+        {{range .Options}}
+        <button type="button"
+                class="log-toggle-btn{{if .Active}} active{{end}}"
+                aria-pressed="{{if .Active}}true{{else}}false{{end}}"
+                aria-label="show {{.Label}}"
+                hx-get="/ui/partials/task-log?id={{$.TaskId}}&amp;stream={{.Value}}"
+                hx-target="#task-log-view"
+                hx-swap="innerHTML">{{.Label}}</button>
+        {{end}}
+    </div>
+    <label class="log-pin">
+        <input type="checkbox" id="pin-bottom" checked> Pin to bottom
+    </label>
+</div>
+
+{{/*
+The grouped note is the fallback case only: a task whose worker recorded
+how its two streams interleaved (blanket.combined.ndjson) shows real time
+order and says nothing, because there is nothing to warn about.
+*/}}
+{{if .Grouped}}
+<p class="muted log-note">
+    stdout first, then stderr: this task has no combined record of how its
+    two streams interleaved, so output already recorded when this view
+    opened is grouped by stream.{{if .Live}} Lines arriving from now on are
+    interleaved as they arrive.{{end}}
+</p>
+{{end}}
+
+{{if .Live}}
+<pre id="task-log"
+     class="log-pane{{if .Badged}} log-pane-badged{{end}}"
+     hx-ext="sse"
+     sse-connect="{{.SseUrl}}"
+     sse-swap="message"
+     hx-swap="beforeend"
+     aria-label="live task log ({{.Stream}})"></pre>
+{{else}}
+<pre id="task-log"
+     class="log-pane{{if .Badged}} log-pane-badged{{end}}"
+     aria-label="task log output ({{.Stream}})">
+{{- range .Lines -}}
+{{if .Meta}}<span class="log-meta">{{.Meta}}</span>{{else if $.Badged}}<span class="log-line log-line-{{.Stream}}"><span class="log-tag">{{.Stream}}</span>{{.Text}}</span>{{else}}{{.Text}}{{end}}
+{{end -}}
+{{- if .Empty}}<span class="log-meta">No {{if eq .Stream "both"}}output{{else}}{{.Stream}}{{end}} recorded for this task.</span>{{end -}}
+</pre>
+{{end}}
+
+<script>
+// Keep the pane pinned to its newest line while the "Pin to bottom" box is
+// checked. Runs on every swap of this partial (htmx executes scripts in
+// swapped-in content), and the listener dies with the <pre> it is bound to.
+(function () {
+  var el = document.getElementById('task-log');
+  var pin = document.getElementById('pin-bottom');
+  if (!el) return;
+  function toBottom() {
+    if (!pin || pin.checked) el.scrollTop = el.scrollHeight;
+  }
+  el.addEventListener('htmx:sseMessage', toBottom);
+  toBottom();
+})();
+</script>
+{{end}}

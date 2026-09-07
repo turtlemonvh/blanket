@@ -72,6 +72,20 @@ func SetConfigDefaults() {
 	// FIXME: Why is this a slice? It makes sending a target result dir to a client pretty tough.
 	viper.SetDefault("tasks.resultsPath", []string{"results"})
 	viper.SetDefault("workers.logfileNameTemplate", "worker.{{.Id.Hex}}.log")
+
+	// Whether a worker records how a task's two output streams
+	// interleaved, as blanket.combined.ndjson in the result dir
+	// (turtlemonvh/blanket#104). On by default: it is what lets the UI's
+	// combined log view show a finished task's output in the order it
+	// was produced rather than grouped by stream.
+	//
+	// The child writes straight into blanket.stdout.log /
+	// blanket.stderr.log either way -- the worker builds the record by
+	// tailing those two files, not by standing between the child and
+	// them -- so turning this off costs nothing but the file itself and
+	// the tailer per running task. See docs/task_flow.md's "Task output
+	// files" for why it is built that way.
+	viper.SetDefault("workers.combinedLog", true)
 	viper.SetDefault("mcp.enabled", true)
 	viper.SetDefault("mcp.mode", "all")
 	viper.SetDefault("mcp.writeTypesPath", "")
