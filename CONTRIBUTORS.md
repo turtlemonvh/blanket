@@ -141,6 +141,14 @@ Test adds must keep all three surfaces green. The suites overlap
 intentionally: unit tests hit handlers directly, smoke exercises the
 built binary over real HTTP, Playwright drives the UI.
 
+## Vendored third-party code
+
+`lib/tomb/` is a verbatim copy of `gopkg.in/tomb.v1` (BSD-3-Clause, one
+file, unchanged upstream since 2014), kept in-tree via a `replace`
+directive in `go.mod` so both `lib/tailed_file` and `hpcloud/tail`
+resolve to it (#147). It is a nested module: run its tests with
+`cd lib/tomb && go test ./...`. Don't edit `tomb.go`; see its README.
+
 ## Release Process
 
 1. Merge changes to `master` and ensure CI passes.
