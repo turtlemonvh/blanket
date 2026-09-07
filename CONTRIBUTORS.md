@@ -463,6 +463,29 @@ log: it stays open, is never assigned, and is the one exception to the
 "exactly one `status:` label" state machine below — it just carries
 `status: in-progress` so audits don't flag it.
 
+### Dependabot
+
+`.github/dependabot.yml` (#145) opens weekly PRs for three ecosystems —
+`gomod`, `github-actions`, and `npm` (`tests/e2e`). Patch and minor
+bumps are grouped per ecosystem into a single PR and are treated as
+`autonomy: ship-to-merge` + `risk: low`: merge on green CI, no per-PR
+label needed. Major bumps are left ungrouped (one PR each) and stay
+`pr-only`, since they can carry API breaks CI may not exercise — not
+for supply-chain reasons.
+
+The supply-chain controls, in place of per-PR manual review (which
+would not catch a compromised release either): each ecosystem's
+`cooldown: default-days: 7` so a version has been public a week before
+Dependabot proposes it (security-advisory updates bypass cooldown by
+design); the weekly govulncheck/grype job (#144) catching disclosures
+after the fact; Go's checksum database (`go.sum` / sum.golang.org)
+making tampering with an already-published version detectable; and
+every GitHub Action in `.github/workflows/*.yml` pinned to a commit SHA
+with its tag as a trailing comment (`uses: actions/checkout@<sha> #
+v4.4.0`) — Dependabot's `github-actions` ecosystem proposes the SHA
+bump when a pinned action moves, keeping the pins current without
+manual lookups.
+
 ### Ownership: assignee = whose turn
 
 Labels say what kind of work is needed; the assignee says who owns the

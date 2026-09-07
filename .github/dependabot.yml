@@ -1,0 +1,73 @@
+# Dependabot version-update configuration.
+#
+# Policy (issue #145, decided on #131 discussion carried over from #145's
+# comments): patch/minor updates are grouped per ecosystem so they land as
+# one weekly PR each, and are `autonomy: ship-to-merge` + `risk: low` per
+# CONTRIBUTORS.md's Issue Workflow section -- merge on green CI, no
+# per-PR label needed. Major updates are left ungrouped (one PR per major
+# bump) and stay `pr-only`, since they can carry API breaks CI may not
+# exercise -- not for supply-chain reasons.
+#
+# `cooldown` (default-days: 7) makes a new version sit publicly for a week
+# before Dependabot opens a PR for it -- the automated form of "wait a day
+# or so" applied per dependency, adopted after the 2025 npm/actions supply
+# chain incidents. Security-advisory updates bypass cooldown by design.
+# Combined with the weekly govulncheck/grype job (#144), Go's checksum
+# database (go.sum / sum.golang.org), and SHA-pinned GitHub Actions (this
+# same PR), that's the supply-chain control -- not per-PR manual review,
+# which would not catch a compromised release either.
+#
+# Schema reference: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+# (cooldown and groups sections in particular -- both are relatively
+# recent additions to the schema, so pin this comment as the source of
+# truth if GitHub's docs move again).
+
+version: 2
+
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # Majors are intentionally left out of any group -- each opens its own
+    # PR so a breaking bump doesn't hide inside a batch of routine ones.
+    open-pull-requests-limit: 5
+    labels:
+      - "status: in-review"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+    labels:
+      - "status: in-review"
+
+  - package-ecosystem: "npm"
+    directory: "/tests/e2e"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+    labels:
+      - "status: in-review"
