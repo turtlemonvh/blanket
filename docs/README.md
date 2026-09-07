@@ -20,17 +20,19 @@ here go deeper.
 - [**API**](api.md) — full list of REST endpoints.
 - [**MCP interface**](mcp.md) — tool list, setup (incl. Claude Code),
   permissions, and the default security posture.
-- [**Offline install**](offline_install.md) — installing on machines
-  with no internet access and only local-user permissions.
+- [**Offline install**](offline_install.md) — installing and upgrading on
+  machines with no internet access and only local-user permissions, via
+  the release bundle.
 - [**Autostart on login/boot**](autostart.md) — registering blanket as
   a background service (systemd user unit / launchd LaunchAgent /
   Task Scheduler entry), opting in at install time, and
   `blanket uninstall`.
-- [**Upgrading**](upgrade.md) — database schema versions, backups and
-  retention, `blanket backup` / `blanket migrate`, the restart state
-  machine and the `curl` recipe that drives it, `--exec-mode` /
-  `--drain-mode`, and what to do when a migration or a restart dies
-  half-way.
+- [**Upgrading**](upgrade.md) — `blanket upgrade` / `blanket rollback`,
+  checksum verification and offline bundles, rollback slots and the
+  upgrade journal, database schema versions, backups and retention,
+  `blanket backup` / `blanket migrate`, the restart state machine and the
+  `curl` recipe that drives it, `--exec-mode` / `--drain-mode`, and what
+  to do when a migration or a restart dies half-way.
 
 ## For maintainers
 
