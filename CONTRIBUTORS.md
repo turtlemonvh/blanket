@@ -186,6 +186,34 @@ path with a comment explaining why; never a blanket `--ignore` that
 could silently wave through something that isn't actually allowed. See
 issue #131 for the original audit and #143 for the CI gate.
 
+### Vulnerability scanning and SBOM
+
+`.github/workflows/vuln.yml` (issue #144, decisions on #131) runs weekly
+(Monday 03:17 UTC), on `workflow_dispatch`, and on any PR/push touching
+`go.mod`, `go.sum`, or `tests/e2e/package-lock.json`:
+
+- **`govulncheck`** (pinned via `go run golang.org/x/vuln/cmd/govulncheck@<tag>`
+  — pick the tag from `go list -m -versions golang.org/x/vuln`, not
+  golang/vuln's GitHub Releases page, which stopped publishing releases
+  after v1.1.4 even though the module keeps tagging new versions):
+  call-graph-aware Go stdlib and module vulnerability scanning.
+- **`syft`** generates an SPDX JSON SBOM of the repo (Go modules plus
+  `tests/e2e/package-lock.json`), then **`grype`** scans that SBOM. This
+  is what adds npm coverage govulncheck can't see — grype scans across
+  ecosystems, govulncheck only sees Go.
+- Both steps are **advisory**: `continue-on-error: true` on the job
+  (same posture as `race` above — promote once quiet for a while) and
+  grype runs with `fail-build: false`, so a finding never blocks a PR or
+  merge.
+- **Caveat that matters when reading a red run:** the e2e npm
+  dependencies and the Docker toolchain image used to build blanket
+  never ship inside the released binary. Findings scoped to those are
+  dev-environment signal, not a reason to scramble — see the dependency
+  audit issue #131 for the full reasoning.
+- The SBOM and the grype report are uploaded as workflow artifacts
+  (30-day retention); find them on the run's Summary page under
+  Artifacts.
+
 ## Vendored third-party code
 
 `lib/tomb/` is a verbatim copy of `gopkg.in/tomb.v1` (BSD-3-Clause, one
@@ -230,6 +258,11 @@ resolve to it (#147). It is a nested module: run its tests with
      `blanket-windows-amd64.exe`
    - Attaches `SHA256SUMS` over those three
    - Attaches `blanket-bundle-<tag>.tar.gz`
+   - Generates an SPDX JSON SBOM via `syft` (reading Go build info out of
+     `blanket-linux-amd64`, so it lists exactly the modules linked into
+     the release build) and attaches it as `blanket-<tag>.spdx.json`
+     (#144). It's a separate asset, not folded into `SHA256SUMS` — see
+     the load-bearing note on `SHA256SUMS` below.
 
 `make docker-release` is `docker-build` plus `make checksums bundle`
 (`scripts/bundle.sh`), so a maintainer can produce byte-identical
