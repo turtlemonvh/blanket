@@ -51,9 +51,25 @@ h2 { margin-top: 0; }
 }
 .list-header h2 { flex: 1; margin: 0; }
 
+/* One metric shared by every interactive control (turtlemonvh/blanket#124
+ * review). `font: inherit` alone picks up body's 1rem, but the page's
+ * working text size is 0.9rem -- tables, th, legends and the flash text
+ * all set it -- so controls rendered a step larger than everything
+ * around them. Labels are in here too: every <label> in the app sits
+ * beside a control, and sizing only the control just inverts the
+ * mismatch. Size and line-height are pinned once, and the vertical
+ * padding below is chosen so a button and the input beside it come out
+ * the same height (~29px). */
+button, .btn,
+input, select, textarea,
+label {
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
 button, .btn {
-  font: inherit;
-  padding: 0.35rem 0.75rem;
+  padding: 0.25rem 0.7rem;
   border: 1px solid var(--border);
   background: #fff;
   border-radius: 4px;
@@ -68,9 +84,9 @@ button.danger, .btn.danger { background: var(--danger); color: #fff; border-colo
  *
  * Browsers do NOT inherit font-family/size into form controls -- an
  * unstyled <input> renders in the UA's own 13.33px Arial regardless of
- * what body says. Buttons opted out of that above with `font: inherit`;
- * everything else on the page did not, which is why the tasks Filter
- * panel read as a different application than the table under it.
+ * what body says, which is why the tasks Filter panel read as a
+ * different application than the table under it. The shared control
+ * metric above fixes the type; what follows is the box around it.
  *
  * These rules are deliberately global (element selectors, not a class):
  * the filter panel, the new-task form, the new-worker form and the
@@ -80,8 +96,6 @@ button.danger, .btn.danger { background: var(--danger); color: #fff; border-colo
  * UA-drawn widgets, not text fields -- but still get the site accent.
  * ------------------------------------------------------------------- */
 
-input, select, textarea { font: inherit; }
-
 input[type="text"],
 input[type="search"],
 input[type="number"],
@@ -90,12 +104,11 @@ input[type="date"],
 input[type="time"],
 select,
 textarea {
-  padding: 0.3rem 0.4rem;
+  padding: 0.25rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg);
   color: var(--fg);
-  line-height: 1.35;
 }
 input[type="text"]:focus-visible,
 input[type="search"]:focus-visible,
@@ -148,7 +161,6 @@ summary { cursor: pointer; }
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  font-size: 0.9rem;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -482,11 +494,13 @@ tr:hover td { background: #fafbfc; }
   align-items: center;
   gap: 0.4rem;
   width: max-content;
-  padding: 0.35rem 0.75rem;
+  /* Same padding/metric as button above -- it is one, semantically. */
+  padding: 0.25rem 0.7rem;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg);
   font-size: 0.9rem;
+  line-height: 1.35;
   font-weight: 600;
   user-select: none;
   /* Drop the UA disclosure marker for one we can place and rotate. */
@@ -522,7 +536,7 @@ tr:hover td { background: #fafbfc; }
   gap: 0.4rem 0.6rem;
   margin-bottom: 0.75rem;
 }
-.filter-row label { font-size: 0.9rem; font-weight: 600; }
+.filter-row label { font-weight: 600; }
 .filter-row .muted { font-size: 0.9rem; }
 .filter-panel input[type="text"] { min-width: 16rem; }
 
