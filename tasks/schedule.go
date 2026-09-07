@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	cronhuman "github.com/lnquy/cron"
 	"github.com/robfig/cron/v3"
 )
 
@@ -73,34 +72,19 @@ func NextCronFires(expr string, after time.Time, n int) ([]time.Time, error) {
 	return out, nil
 }
 
-// cronDescriptor renders a standard 5-field cron expression as an
-// English sentence, e.g. "*/5 * * * *" -> "Every 5 minutes". Built once at
-// package init with no options (English-only, 12-hour clock, Sunday=0 --
-// cron-expression-descriptor's own defaults); NewDescriptor only errors on
-// bad *options*, never on input expressions, so a package-level error here
-// would mean a real bug in this call, not user input.
-//
-// github.com/lnquy/cron is a maintained Go port of the widely used
-// cron-expression-descriptor / cRonstrue libraries (used across .NET, JS,
-// Python, Go, ...); chosen over hand-rolling this since natural-language
-// cron descriptions have a lot of small-expression edge cases (step
-// values, ranges, day-of-week names, "L"/"W"/"#") that a mature port
-// already covers.
-var cronDescriptor, cronDescriptorErr = cronhuman.NewDescriptor()
-
 // DescribeCron returns a short, human-friendly English description of a
 // standard 5-field cron expression (e.g. "Every 5 minutes"), or an error
 // with the parser's message if expr is invalid. Validated with the same
 // *cron.Parser as NextCronFire first, so callers get one consistent error
-// message regardless of which check tripped.
+// message regardless of which check tripped. The description itself is
+// rendered by describeCron5 (cron_describe.go) -- see its doc comment for
+// what it covers and the attribution note on the fuller implementation it
+// replaces.
 func DescribeCron(expr string) (string, error) {
 	if _, err := cronParser.Parse(expr); err != nil {
 		return "", fmt.Errorf("invalid cron expression %q: %w", expr, err)
 	}
-	if cronDescriptorErr != nil {
-		return "", cronDescriptorErr
-	}
-	desc, err := cronDescriptor.ToDescription(expr, cronhuman.Locale_en)
+	desc, err := describeCron5(expr)
 	if err != nil {
 		return "", fmt.Errorf("invalid cron expression %q: %w", expr, err)
 	}
