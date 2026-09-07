@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kardianos/osext"
 	"github.com/manucorporat/sse"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
@@ -490,7 +489,7 @@ func (s *ServerConfig) uiAboutPage(c *gin.Context) {
 		settings = append(settings, SettingView{Key: k, Value: value})
 	}
 
-	binaryPath, err := osext.Executable()
+	binaryPath, err := os.Executable()
 	if err != nil {
 		log.WithField("err", err).Warn("ui: resolve binary path")
 		binaryPath = "(unknown)"
