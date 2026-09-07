@@ -1,0 +1,12 @@
+{
+  "queue_label": "status: ready",
+  "claim_label": "status: in-progress",
+  "review_label": "status: in-review",
+  "reviewer": "turtlemonvh",
+  "concurrency": 2,
+  "merge_when_all_labels": ["autonomy: ship-to-merge", "risk: low"],
+  "model_label": "model: opus",
+  "batch_skill": "blanket-ready-batch",
+  "summary_issue": 121,
+  "verify_commands": ["make docker-test", "make docker-test-smoke"]
+}
