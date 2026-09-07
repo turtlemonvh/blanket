@@ -14,7 +14,7 @@
         <thead><tr><th>Setting</th><th>Value</th></tr></thead>
         <tbody>
             <tr><td>ID</td><td>{{hex .Task.Id}}</td></tr>
-            <tr><td>Task Type</td><td><a href="/task_type/{{.Task.TypeId}}">{{.Task.TypeId}}</a></td></tr>
+            <tr><td>Task Type</td><td><a href="/ui/task-types/{{.Task.TypeId}}">{{.Task.TypeId}}</a></td></tr>
             <tr><td>State</td><td><span class="badge state-{{.Task.State}}">{{.Task.State}}</span></td></tr>
             {{/*
             exitCode is null until a worker reports one, and stays null for
