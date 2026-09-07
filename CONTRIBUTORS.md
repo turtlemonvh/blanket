@@ -39,6 +39,7 @@ make docker-test-browser   # Playwright suite
 make docker-shell          # interactive container for ad-hoc work
 make docker-build          # cross-compile linux/darwin/windows
 make docker-release        # cross-compile + SHA256SUMS + offline bundle
+make docker-licenses       # dependency license gate (see below)
 make docker-clean          # drop persisted Go + npm cache volumes
 ```
 
@@ -59,6 +60,7 @@ make bundle                # dist/blanket-bundle-<version>.tar.gz
 make test-browser          # run Playwright tests
 make fmt                   # gofmt all Go files
 make check-fmt             # fail if any Go file isn't gofmt-clean
+make licenses              # dependency license gate (see below)
 ```
 
 After bumping `go.sum` or `tests/e2e/package-lock.json`, run
@@ -131,15 +133,58 @@ header comment.
   week; promote it to a required check (drop `continue-on-error`, add to
   branch protection) once that holds.
 
+`.github/workflows/licenses.yml` runs the `licenses` job separately, and
+is `paths:`-gated to `go.mod`/`go.sum` changes on PRs and master pushes,
+plus `workflow_dispatch` for a manual run (issue #143). Not a required
+check — a `paths:`-filtered workflow simply doesn't run on PRs that
+don't touch those files, and a required check that never reports blocks
+merges forever. Blocking still happens *within* the job when it does run:
+see "Dependency licenses" below.
+
 Branch protection on master requires `test` green and up-to-date with
-master (`strict: true`); `windows` and `race` are not (yet) required
-checks — a red `windows` or `race` job is informational, not blocking.
-Admins can bypass branch protection; the normal workflow is PR → merge,
-not direct push.
+master (`strict: true`); `windows`, `race`, and `licenses` are not (yet)
+required checks — a red `windows` or `race` job is informational, not
+blocking (by design), and a red `licenses` job doesn't block merge
+either (it isn't required), though unlike `race` it isn't
+`continue-on-error`: when it runs, a disallowed license genuinely fails
+it, it just can't be a required check while it's `paths:`-gated. Admins
+can bypass branch protection; the normal workflow is PR → merge, not
+direct push.
 
 Test adds must keep all three surfaces green. The suites overlap
 intentionally: unit tests hit handlers directly, smoke exercises the
 built binary over real HTTP, Playwright drives the UI.
+
+### Dependency licenses
+
+An audit of every dependency's license (issue #131) found no copyleft
+licenses in the tree. `scripts/licenses.sh` (via `make licenses` /
+`make docker-licenses`, and `.github/workflows/licenses.yml` in CI —
+see "CI" above) keeps it that way with
+[`go-licenses`](https://github.com/google/go-licenses) `check`, gated
+against an explicit allowlist:
+
+```
+MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0, Unlicense
+```
+
+MPL-2.0 is deliberately on the list: it's file-level copyleft (only
+modifications to the MPL-licensed *file itself* have to stay open;
+linking or distributing alongside it is unaffected), so it's compatible
+with distributing blanket under MIT. Anything not on the allowlist fails
+the job. `scripts/licenses.sh` also runs `go-licenses report` and writes
+a CSV of every dependency's detected license and source; CI uploads it
+as the `go-licenses-report` workflow artifact so the current inventory
+is one click away.
+
+The allowlist lives in exactly one place — `scripts/licenses.sh` — so
+policy changes happen in a single diff instead of drifting between CI
+and a maintainer's local run. If `go-licenses` misclassifies a specific
+module (its classifier isn't perfect — vendored non-Go assets or unusual
+license file layouts can confuse it), use `--ignore` for that one module
+path with a comment explaining why; never a blanket `--ignore` that
+could silently wave through something that isn't actually allowed. See
+issue #131 for the original audit and #143 for the CI gate.
 
 ## Release Process
 
