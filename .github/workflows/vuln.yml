@@ -1,0 +1,109 @@
+name: Vulnerability scan
+
+# Weekly govulncheck (Go stdlib + module advisories, call-graph aware) plus
+# a syft SBOM of the repo scanned by grype for cross-ecosystem coverage
+# (turtlemonvh/blanket#144, decisions recorded on #131). Both advisory for
+# now: `continue-on-error: true` on the job, the same posture ci.yml's
+# `race` job uses (see CONTRIBUTORS.md's CI section) -- promote to a
+# required check once it's been green for a while.
+#
+# Caveat that matters when reading a red run: the SBOM covers
+# tests/e2e/package-lock.json (npm, dev-only) and this repo's own CI
+# workflow action pins, in addition to the Go module graph. Neither the
+# e2e npm deps nor the Docker toolchain image used to build blanket ship
+# inside the released binary -- findings scoped to those are
+# dev-environment signal, not something a release ships with. See #131.
+on:
+  schedule:
+    # 03:17 UTC Monday -- an off-hour, avoids the top-of-hour stampede.
+    - cron: '17 3 * * 1'
+  workflow_dispatch: {}
+  pull_request:
+    branches: [master]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'tests/e2e/package-lock.json'
+      - '.github/workflows/vuln.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'tests/e2e/package-lock.json'
+      - '.github/workflows/vuln.yml'
+
+concurrency:
+  group: vuln-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vuln:
+    name: govulncheck + grype (advisory)
+    runs-on: ubuntu-latest
+    # Advisory only -- see the header comment. Promote (drop
+    # continue-on-error, add to branch protection) once quiet for a while,
+    # mirroring the `race` job's promotion path.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Pinned via `go run …@<tag>` so nothing is left installed on PATH.
+      # Version picked from `go list -m -versions golang.org/x/vuln`:
+      # golang/vuln's GitHub Releases page stopped publishing after
+      # v1.1.4, but the module itself keeps tagging new versions (v1.7.0
+      # as of 2026-09) -- `go list -m -versions`, not "latest GitHub
+      # release", is the source of truth for what to pin here.
+      #
+      # continue-on-error at the step level (not just the job level) so a
+      # red govulncheck still lets the SBOM/grype steps below run and
+      # publish their artifacts on the weekly schedule.
+      - name: govulncheck
+        continue-on-error: true
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+      # SPDX JSON SBOM of the whole repo: Go modules (go.mod/go.sum) and
+      # tests/e2e's npm lockfile in one pass.
+      #
+      # SYFT_JAVASCRIPT_INCLUDE_DEV_DEPENDENCIES is required: syft's
+      # default excludes dev-only npm dependencies, and @playwright/test
+      # (plus its transitive deps) is declared under devDependencies in
+      # tests/e2e/package.json -- without this the npm side of the SBOM
+      # is silently empty (verified locally: 1 npm package without it,
+      # 5 with it, for tests/e2e/package-lock.json).
+      - name: Generate SBOM (syft)
+        uses: anchore/sbom-action@v0.24.2
+        env:
+          SYFT_JAVASCRIPT_INCLUDE_DEV_DEPENDENCIES: "true"
+        with:
+          path: .
+          format: spdx-json
+          output-file: blanket-repo.spdx.json
+          artifact-name: blanket-repo-sbom.spdx.json
+          upload-artifact: true
+          upload-artifact-retention: 30
+
+      # grype scans the SBOM rather than just the Go module graph, so it
+      # adds the npm (tests/e2e) coverage govulncheck can't see. Advisory:
+      # fail-build is off, so a finding never fails this step or blocks
+      # anything -- see the caveat in the header comment.
+      - name: Scan SBOM (grype)
+        uses: anchore/scan-action@v7.4.2
+        with:
+          sbom: blanket-repo.spdx.json
+          fail-build: false
+          output-format: table
+          output-file: grype-report.txt
+
+      - name: Upload grype report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-report
+          path: grype-report.txt
+          retention-days: 30
+          if-no-files-found: ignore
