@@ -171,3 +171,69 @@ func TestConcurrentCollectionAccessAgainstCleanup(t *testing.T) {
 
 	testTfc.StopAll()
 }
+
+// TestSubscriberStop_WhileNotReading is the regression test for
+// turtlemonvh/blanket#123's Stop deadlock: TailedFileSubscriber.Stop used
+// to hang forever when called by a handler that had already stopped
+// reading NewLines. StartTailedFile's inner goroutine holds tf.Lock() for
+// its entire per-line fan-out, including the blocking send itself
+// (`sub.NewLines <- nline.Text`); once nobody is left to receive that
+// send, the tailer is parked holding the lock forever, and the old Stop
+// -- which needed that same lock to remove the subscriber -- waited on
+// the very goroutine that was waiting on it.
+//
+// This reproduces exactly that: subscribe, never read NewLines, write a
+// line so the tailer picks it up and parks on the send, then call Stop
+// from a goroutine bounded by a timeout -- the ask in the issue for a
+// test that would have hung before the fix. A regression here fails the
+// test loudly instead of wedging the whole test binary.
+func TestSubscriberStop_WhileNotReading(t *testing.T) {
+	tmpfile, err := ioutil.TempFile("", "stop-deadlock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+	defer tmpfile.Close()
+
+	testTfc := NewTailedFileCollection()
+	sub, err := testTfc.Follow(tmpfile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// NewLines is unbuffered here: its buffer is sized to the file's
+	// offset at Subscribe time (bufSize in Subscribe), which is 0 for a
+	// file nothing has tailed yet. So the tailer blocks on the very first
+	// send once it polls the write below, and -- since this test never
+	// reads -- stays parked there until something breaks it out.
+	if _, err := tmpfile.WriteString("line one\n"); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Sync()
+
+	// Generous wait for hpcloud/tail's poller to notice the write and get
+	// the tailer goroutine parked on the blocking send -- once parked it
+	// stays parked (no timeout on that send), so this only needs to be
+	// long enough to make that virtually certain, not to win a narrow race.
+	time.Sleep(2 * time.Second)
+
+	stopped := make(chan struct{})
+	go func() {
+		sub.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("TailedFileSubscriber.Stop deadlocked against the tailer goroutine while nobody was reading NewLines")
+	}
+
+	assert.Equal(t, int64(0), testTfc.GetSubscriberCount())
+
+	// Idempotent: a second Stop from elsewhere (a deferred call racing a
+	// caller that already stopped it explicitly) must not double-close.
+	assert.NotPanics(t, sub.Stop)
+
+	testTfc.StopTailedFile(tmpfile.Name())
+}

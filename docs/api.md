@@ -226,19 +226,32 @@ Notes that matter in practice:
 * **`log` delivery is best-effort and lags.** The worker flushes
   `blanket.stdout.log` on its own poll interval, and the stream can't
   attach to the log files until the task reaches `CLAIMED` (they don't
-  exist before the worker sets the execution directory up). The
-  `result` event repeats both tails, so a client that reads to the end
-  always has the authoritative output even if it missed live lines.
+  exist before the worker sets the execution directory up). Once
+  attached, up to 500 lines of whatever the file already holds replay as
+  `log` events before any live one — the same cap `GET /task/:id/log`'s
+  raw form and `GET /task/:id/log/tail` use — so a client that connects
+  late still sees a defined window of history rather than whatever a
+  moment of bad luck left it. The `result` event repeats both tails on
+  top of that, so a client that reads to the end always has the
+  authoritative output even if it missed live lines.
 * **`seq` is per stream, per connection.** `stdout` and `stderr` each
-  count from 1. It is not a position in the file, and a reconnecting
+  count from 1, and the count runs straight through the seam between
+  replayed history and live lines — a connection's first `stdout` event,
+  whether it's history or (for a task with no history yet) live, is
+  always `seq: 1`. It is not a position in the file, and a reconnecting
   client sees it restart.
 * **Ordering between `stdout` and `stderr` is not the task's.** This
   stream tails the two per-stream files separately, and nothing about
   the order it emits their lines in is the order the task wrote them.
-  The interleaving *is* recorded, in `blanket.combined.ndjson` under the
-  task's result dir ([Task output files](task_flow.md#task-output-files)),
-  and the web UI's combined log view reads it — but these events do not
-  yet come from it (turtlemonvh/blanket#123).
+  On connect the history each file already holds replays as two blocks —
+  every buffered `stdout` line, then every buffered `stderr` line,
+  matching the grouped fallback the web UI uses when it has no combined
+  record — after which live lines from the two files interleave as they
+  arrive, which still isn't the task's real order. The interleaving *is*
+  recorded, in `blanket.combined.ndjson` under the task's result dir
+  ([Task output files](task_flow.md#task-output-files)), and the web
+  UI's combined log view reads it — but these events do not come from
+  it.
 * Unknown event types should be skipped, not treated as errors — that's
   what lets a later blanket add one without breaking your client.
 
@@ -280,12 +293,28 @@ client goes away. Both variants now stay open while the task is live —
 before this they closed after the first five idle seconds regardless of
 the task's state.
 
+Both variants also replay history on connect rather than starting from
+wherever a shared tailer happens to be: up to 500 lines already on disk
+for the raw form (the same cap `GET /task/:id/log/tail` uses), and up to
+500 lines per file — replayed as `log` events, stdout's block then
+stderr's — for the structured form (see `seq` above). Each connection
+takes its own read of the file and starts following live from the exact
+byte offset that read stopped at, so the history/live seam neither drops
+a line nor repeats one, and — unlike a plain tail subscription shared
+between every caller on the same path — a second connection to an
+already-open file gets the same window a first one would, not whatever a
+shared 100-line ring happens to still hold.
+
 #### Picking a stream: `?stream=stdout|stderr`
 
 The raw form of both `GET /task/:id/log` and `GET /task/:id/log/tail`
 takes a `?stream` parameter naming which of the task's two log files
 (`blanket.stdout.log` / `blanket.stderr.log`, under its result dir) to
 follow. Omitted means `stdout`, so every existing caller is unaffected.
+Either way, `GET /task/:id/log` opens by replaying up to 500 lines of
+that file's existing content as the same `event: message` frames a live
+line would produce, then follows it live from there — see the replay
+paragraph above, which applies equally to `?stream=stderr`.
 
 ```bash
 curl -sN 'localhost:8773/task/<id>/log?stream=stderr'
