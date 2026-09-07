@@ -13,6 +13,7 @@
 //     TestCancelTask_RunningWithoutForce
 //   - PUT /task/:id/cancel?force=true from RUNNING: TestCancelTask_RunningWithForce
 //   - cancelTaskById RUNNING force gate: TestCancelTaskById_RunningRequiresForce
+//   - cancelTaskById from CLAIMED (refused): TestCancelTaskById_Claimed
 //   - malformed/missing :id on task routes (#115), 400 vs. 404:
 //     TestGetTask_InvalidId/_MissingId, TestDeleteTask_InvalidId,
 //     TestCancelTask_InvalidId/_MissingTask, plus the cross-resource table
@@ -521,6 +522,56 @@ func TestCancelTaskById_AlreadyTerminal(t *testing.T) {
 
 	err = s.cancelTaskById(context.Background(), tsk.Id, false)
 	assert.ErrorIs(t, err, ErrTaskNotCancelable)
+}
+
+// TestCancelTaskById_Claimed pins a state this PR's reaper work makes easy
+// to misread: FinishTask now accepts CLAIMED as a source state (so the
+// reaper can resolve a task whose worker died between the claim and the
+// run), but *cancelling* still does not. A CLAIMED task belongs to a worker
+// that has already started, or is about to start, a subprocess for it; the
+// worker learns about a cancellation from the STOPPED tombstone via its
+// monitor goroutine, and that goroutine does not exist until the task is
+// RUNNING. So the tombstone would either be clobbered by the worker's own
+// MarkAsRunning or leave an orphaned child, and cancelling from CLAIMED
+// stays refused until the worker side can handle losing that race.
+//
+// The consequence for tests: a cancel is only meaningful once the *server*
+// reports RUNNING. See worker/outage_test.go's TestProcessOne_JournalLifecycle
+// and turtlemonvh/blanket#116.
+func TestCancelTaskById_Claimed(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+	r := s.GetRouter()
+
+	created := postTask(r, "echo_task")
+	var createdTask tasks.Task
+	json.Unmarshal(created.Body.Bytes(), &createdTask)
+
+	wconf := worker.WorkerConf{
+		Id:      objectid.NewObjectId(),
+		Tags:    []string{"bash", "unix"},
+		Stopped: false,
+	}
+	assert.NoError(t, s.DB.UpdateWorker(&wconf))
+
+	claimReq, _ := http.NewRequest("POST", fmt.Sprintf("/task/claim/%s", wconf.Id.Hex()), nil)
+	claimW := httptest.NewRecorder()
+	r.ServeHTTP(claimW, claimReq)
+	assert.Equal(t, http.StatusOK, claimW.Code)
+
+	claimed, err := s.DB.GetTask(createdTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "CLAIMED", claimed.State)
+
+	// Neither with nor without force.
+	assert.ErrorIs(t, s.cancelTaskById(context.Background(), createdTask.Id, false), ErrTaskNotCancelable)
+	assert.ErrorIs(t, s.cancelTaskById(context.Background(), createdTask.Id, true), ErrTaskNotCancelable)
+
+	still, err := s.DB.GetTask(createdTask.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "CLAIMED", still.State)
 }
 
 // putTaskInRunningState registers a worker matching echo_task's tags, claims
