@@ -99,7 +99,7 @@ type ServerConfig struct {
 	ReaperMaxRequeues      int
 
 	// BackupDir is where POST /ops/backup writes when the request names
-	// no directory. Backed by the `database.backupDir` config key; empty
+	// no directory. Backed by the `storage.backupDir` config key; empty
 	// means the database's own backups/ subdirectory
 	// (bolt.DefaultBackupDir). turtlemonvh/blanket#23 phase 4.
 	BackupDir string

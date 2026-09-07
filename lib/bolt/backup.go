@@ -19,7 +19,7 @@ those guarantees.
 ## Where it goes
 
 `<directory holding the database>/backups/`, overridable with the
-`database.backupDir` config key. Beside the database rather than in a
+`storage.backupDir` config key. Beside the database rather than in a
 separate configured tree, because the one property that matters when
 somebody is restoring at 2am is that the backup is where they will look for
 it, and everything else about a blanket install (results, logs, the db)

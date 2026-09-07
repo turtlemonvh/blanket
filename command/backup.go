@@ -60,7 +60,7 @@ taken by the server itself (bolt's MVCC makes it consistent without pausing
 anything), and with the server down it is taken directly.
 
 Backups land in <database dir>/backups/ unless --dir or the
-database.backupDir config key says otherwise, and the newest 3 are kept.`,
+storage.backupDir config key says otherwise, and the newest 3 are kept.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		InitializeConfig()
 		InitializeLogging()
@@ -76,7 +76,7 @@ func init() {
 func runBackup() int {
 	dir := backupConf.Dir
 	if dir == "" {
-		dir = viper.GetString("database.backupDir")
+		dir = viper.GetString("storage.backupDir")
 	}
 
 	// Path 1: ask the running server.

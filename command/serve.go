@@ -82,7 +82,7 @@ var RootCmd = &cobra.Command{
 			ReaperWorkerDeadAfter:  viper.GetDuration("reaper.workerDeadAfter"),
 			ReaperTaskStaleAfter:   viper.GetDuration("reaper.taskStaleAfter"),
 			ReaperMaxRequeues:      viper.GetInt("reaper.maxRequeues"),
-			BackupDir:              viper.GetString("database.backupDir"),
+			BackupDir:              viper.GetString("storage.backupDir"),
 			Cleanup: func() {
 				if err := db.Close(); err != nil {
 					log.WithField("err", err).Warn("error closing database at shutdown")

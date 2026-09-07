@@ -206,7 +206,7 @@ func runMigrateRestore() int {
 // differently.
 func prepareOptionsFromConfig() *boltlib.PrepareOptions {
 	return &boltlib.PrepareOptions{
-		BackupDir: viper.GetString("database.backupDir"),
-		Retention: viper.GetInt("database.backupRetention"),
+		BackupDir: viper.GetString("storage.backupDir"),
+		Retention: viper.GetInt("storage.backupRetention"),
 	}
 }

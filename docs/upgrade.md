@@ -141,7 +141,7 @@ Restore the pre-migration backup before starting blanket again:
 ### Where they go, and what they are called
 
 `<the directory holding your database>/backups/`, overridable with the
-`database.backupDir` config key. Beside the database rather than somewhere
+`storage.backupDir` config key. Beside the database rather than somewhere
 else, because the property that matters when you are restoring at 2am is
 that the backup is where you will look for it.
 
@@ -174,7 +174,7 @@ A backup momentarily doubles the database's footprint, so:
 ### Retention
 
 The **3 newest** backups are kept and older ones are pruned; the count is
-`database.backupRetention`. Three matches the three rollback slots phase 6
+`storage.backupRetention`. Three matches the three rollback slots phase 6
 will keep — the database half of a slot is exactly one of these files.
 There is no size cap, by design: a cap that silently stopped taking
 backups would defeat the purpose, so the policy is a count plus a warning.
@@ -263,9 +263,9 @@ maintenance windows and from scripts, where a prompt is a hang.
 
 | Key | Default | What it does |
 | --- | ------- | ------------ |
-| `database.openTimeout` | `5s` | How long to wait for the database's exclusive lock before giving up. It was 1s before, which is shorter than a normal shutdown — under `Restart=always` the supervisor starts the replacement immediately, and a budget shorter than the old process's drain-and-teardown turns a routine restart into a crash loop. |
-| `database.backupDir` | `""` | Where backups go. Empty means `<database dir>/backups`. |
-| `database.backupRetention` | `3` | How many backups to keep. |
+| `storage.openTimeout` | `5s` | How long to wait for the database's exclusive lock before giving up. It was 1s before, which is shorter than a normal shutdown — under `Restart=always` the supervisor starts the replacement immediately, and a budget shorter than the old process's drain-and-teardown turns a routine restart into a crash loop. |
+| `storage.backupDir` | `""` | Where backups go. Empty means `<database dir>/backups`. |
+| `storage.backupRetention` | `3` | How many backups to keep. |
 
 ## The ops endpoints
 

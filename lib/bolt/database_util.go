@@ -21,7 +21,7 @@ func MakeBucketDNEError(bucketName string) BucketDNEError {
 }
 
 // DefaultOpenTimeout is how long to wait for the database's exclusive
-// flock before giving up, and the default for the `database.openTimeout`
+// flock before giving up, and the default for the `storage.openTimeout`
 // config key.
 //
 // It was one second until turtlemonvh/blanket#23 phase 4. One second is
@@ -39,7 +39,7 @@ const DefaultOpenTimeout = 5 * time.Second
 
 // OpenTimeout returns the configured lock-acquisition timeout.
 func OpenTimeout() time.Duration {
-	if d := viper.GetDuration("database.openTimeout"); d > 0 {
+	if d := viper.GetDuration("storage.openTimeout"); d > 0 {
 		return d
 	}
 	return DefaultOpenTimeout

@@ -554,7 +554,7 @@ $ curl -X POST -H 'X-Blanket-Restart: 1' localhost:8773/ops/backup
 | 500 | The backup failed — most often the free-space precheck refusing (see [upgrade.md](upgrade.md#the-free-space-precheck)). |
 
 Backups land in `<database dir>/backups/` unless `?dir=` or the
-`database.backupDir` config key says otherwise, and the newest 3 are kept.
+`storage.backupDir` config key says otherwise, and the newest 3 are kept.
 See [**upgrade.md**](upgrade.md) for naming, retention, the precheck
 thresholds, and the `blanket backup` / `blanket migrate` CLI.
 
