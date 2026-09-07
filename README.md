@@ -110,3 +110,7 @@ types, and the full REST API, see the [docs](docs/README.md):
 
 See [CONTRIBUTORS.md](CONTRIBUTORS.md) for development setup, build
 instructions, CI details, and code conventions.
+
+## License
+
+[MIT](LICENSE.md).
