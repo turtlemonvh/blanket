@@ -120,11 +120,17 @@ header comment.
   (currently everything scheduling-related is Linux-only).
 - **`cross-compile`** (master pushes only): `make docker-build` —
   catches platform-only breakage without spending minutes on every PR.
+- **`race`**: builds the same toolchain image as `test`, then runs
+  `make docker-test-race` (issue #119). `continue-on-error: true` — a red
+  `race` run is informational, not blocking, until it's been green for a
+  week; promote it to a required check (drop `continue-on-error`, add to
+  branch protection) once that holds.
 
 Branch protection on master requires `test` green and up-to-date with
-master (`strict: true`); `windows` is not (yet) a required check — a red
-`windows` job is informational, not blocking. Admins can bypass branch
-protection; the normal workflow is PR → merge, not direct push.
+master (`strict: true`); `windows` and `race` are not (yet) required
+checks — a red `windows` or `race` job is informational, not blocking.
+Admins can bypass branch protection; the normal workflow is PR → merge,
+not direct push.
 
 Test adds must keep all three surfaces green. The suites overlap
 intentionally: unit tests hit handlers directly, smoke exercises the
