@@ -75,6 +75,42 @@ type BlanketDB interface {
 	// CleanupStalledTasks recovers or requeues tasks whose worker went
 	// away; see ReapOptions.
 	CleanupStalledTasks(opts *ReapOptions) (ReapReport, error)
+
+	// Meta functions (turtlemonvh/blanket#23 phase 4). These read and
+	// write the `meta` bucket, which describes the installation rather
+	// than the work in it; see lib/database/meta.go.
+	//
+	// SchemaVersion reports the schema the file on disk is written in.
+	// An unstamped database reads as InitialSchemaVersion.
+	SchemaVersion() (int, error)
+	// SetServerInstance records which server process currently owns this
+	// database and when it started.
+	SetServerInstance(ServerInstance) error
+	// ServerInstance returns the last recorded pair. A database no server
+	// has opened yet returns the zero value and no error.
+	ServerInstance() (ServerInstance, error)
+	// LockHolder returns the process recorded as holding the bolt lock.
+	// Note that reading this through an open handle can only ever return
+	// *your own* record: see bolt.ReadLockHolderSidecar for the one a
+	// process locked *out* has to use.
+	LockHolder() (LockHolder, error)
+	// ClearLockHolder is called on a clean close. A record left behind is
+	// how a crash is told from a shutdown.
+	ClearLockHolder() error
+	// MigrationMarker returns the in-flight migration marker, or nil when
+	// none is set.
+	MigrationMarker() (*MigrationMarker, error)
+	// RestartRecord / SetRestartRecord are phase 5's storage, defined now
+	// so phase 4 owns the whole bucket layout.
+	RestartRecord() (RestartRecord, error)
+	SetRestartRecord(RestartRecord) error
+
+	// Backup writes a consistent copy of the database into dir and
+	// returns the path written, after a free-space precheck and before
+	// pruning older backups down to the retention count. Consistent in
+	// the strong sense: it is taken inside a read transaction, so it is a
+	// point-in-time image even while the server is serving.
+	Backup(dir string) (string, error)
 }
 
 var (

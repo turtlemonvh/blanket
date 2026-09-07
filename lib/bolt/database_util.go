@@ -20,15 +20,47 @@ func MakeBucketDNEError(bucketName string) BucketDNEError {
 	return fmt.Errorf("Database format error: Bucket '%s' does not exist.", bucketName)
 }
 
+// DefaultOpenTimeout is how long to wait for the database's exclusive
+// flock before giving up, and the default for the `database.openTimeout`
+// config key.
+//
+// It was one second until turtlemonvh/blanket#23 phase 4. One second is
+// too short for the case that matters most: a supervisor restarting the
+// server has to wait for the old process to finish its shutdown sequence
+// (drain, stop the tailers, cancel the loops, close the database) before
+// the lock is released, and `Restart=always` starts the replacement
+// immediately. A budget shorter than a normal shutdown turns a routine
+// restart into a crash loop. Five seconds comfortably covers the 5s
+// shutdown drain deadline plus teardown.
+//
+// Raising it costs nothing in the genuinely-locked case, because that case
+// now ends in a message naming the holder rather than in a shrug.
+const DefaultOpenTimeout = 5 * time.Second
+
+// OpenTimeout returns the configured lock-acquisition timeout.
+func OpenTimeout() time.Duration {
+	if d := viper.GetDuration("database.openTimeout"); d > 0 {
+		return d
+	}
+	return DefaultOpenTimeout
+}
+
 // https://blog.golang.org/error-handling-and-go
 func MustOpenBoltDatabase() *bolt.DB {
 	path := viper.GetString("database")
-	db, err := bolt.Open(path, 0666, &bolt.Options{Timeout: 1 * time.Second})
+	timeout := OpenTimeout()
+	db, err := bolt.Open(path, 0666, &bolt.Options{Timeout: timeout})
 	if err != nil {
 		// bbolt returns a bare "timeout" error when another process holds
-		// the file lock. Surface an actionable hint instead.
+		// the file lock. Surface an actionable hint instead — including,
+		// when the sidecar lets us, *which* process to go and look at.
+		// See the header of lib/bolt/meta.go for why the holder cannot
+		// simply be read out of the database.
 		if err.Error() == "timeout" {
-			log.Fatalf("could not acquire lock on bolt database %q after 1s: is another blanket process already running?", path)
+			if who := DescribeLockHolder(path); who != "" {
+				log.Fatalf("could not acquire lock on bolt database %q after %s: %s", path, timeout, who)
+			}
+			log.Fatalf("could not acquire lock on bolt database %q after %s: is another blanket process already running?", path, timeout)
 		}
 		log.Fatalf("could not open bolt database %q: %v", path, err)
 	}

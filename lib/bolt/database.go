@@ -28,30 +28,36 @@ type BlanketBoltDB struct {
 	db *bolt.DB
 }
 
+// NewBlanketBoltDB wraps an open bolt handle, creating the buckets a
+// blanket database must have (`workers`, `tasks`, and — since
+// turtlemonvh/blanket#23 phase 4 — `meta`) if any are missing.
+//
+// It deliberately does *not* check the schema version or run migrations:
+// those can fail, and this signature cannot report that. Production goes
+// through OpenBlanketBoltDB below, which does both; this remains the entry
+// point for test fixtures and anything else holding a database it built
+// itself.
 func NewBlanketBoltDB(db *bolt.DB) database.BlanketDB {
-	// Ensure required buckets exist
-	db.Update(func(tx *bolt.Tx) error {
-		var err error
-
-		requiredBuckets := []string{
-			BOLTDB_WORKER_BUCKET,
-			BOLTDB_TASK_BUCKET,
-		}
-
-		for _, bucketName := range requiredBuckets {
-			b := tx.Bucket([]byte(bucketName))
-			if b == nil {
-				b, err = tx.CreateBucket([]byte(bucketName))
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-		}
-
-		return nil
-	})
-
+	if err := ensureBuckets(db); err != nil {
+		log.Fatal(err)
+	}
 	return &BlanketBoltDB{db}
+}
+
+// OpenBlanketBoltDB is the production entry point: it runs the whole
+// open-time sequence (buckets, schema version, migration marker, mandatory
+// backup, pending migrations, lock-holder record — see
+// lib/bolt/migrations.go) and only then hands back a usable database.
+//
+// The error is worth propagating rather than fataling on, because several
+// of its shapes have specific exit semantics: *ErrMigrationInProgress
+// means "exit non-zero and wait for the binary swap", *ErrSchemaTooNew and
+// *ErrMigrationIncomplete mean "stop and tell the operator what to run".
+func OpenBlanketBoltDB(db *bolt.DB, opts *PrepareOptions) (database.BlanketDB, error) {
+	if err := PrepareDatabase(db, opts); err != nil {
+		return nil, err
+	}
+	return &BlanketBoltDB{db}, nil
 }
 
 // WORKERS
