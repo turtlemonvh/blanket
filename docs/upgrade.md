@@ -341,6 +341,41 @@ The consequence is worth stating plainly:
 Upgrading *from* an old release is unaffected — what matters is which
 release you are upgrading to.
 
+### What "a server came back" has to mean
+
+The last step verifies the *restart*, and it takes two facts to do it: the
+server answering on the port reports an `instanceId` different from the one
+the CLI read before it started, **and** its version banner names the
+version that was installed. Neither half is enough alone.
+
+- The instance id alone would accept the process being replaced. The old
+  server keeps serving right up until its listener closes, so a check that
+  took the first `200` it saw would routinely "verify" the process it was
+  supposed to have replaced.
+- The version alone would accept a server that never restarted at all —
+  the case where the swap landed but the exec did not.
+
+And a *third* process can satisfy the first half on its own: an abandoned
+blanket parked on the [database lock](#config-keys), waiting for a
+port it should never get. It has an instance id of its own, and it wins the
+port the moment the real server lets go of it — but it is running the old
+binary, and the version is what catches it. The wait keeps waiting when
+something on the wrong version answers, for as long as its 90-second
+budget lasts; only if that runs out does it report the version it saw.
+
+The CLI is careful not to create such a process itself. When it has to
+start the replacement (`--exec-mode=exit` on an unsupervised box), it does
+so only if the port is quiet **and stays quiet** for a few seconds — a
+server re-execing in place stops answering for a moment, and one refused
+connection looks exactly like a server that exited for good. Symmetrically,
+"is there a server here at all?" is asked with a short retry rather than
+once, so an install is never read as *stopped* just because it was between
+process images at that instant.
+
+If the instance id could not be read before the restart — the server was
+between processes then too — the CLI says so in a warning and verifies on
+the version alone, which is the only evidence there is.
+
 ### Exit codes
 
 Five outcomes are distinguishable rather than collapsed into 0/1, because
@@ -498,7 +533,7 @@ sees.
 | `PLANNED` | Refuses. A partial download cannot be resumed — the only safe thing to do with an unverified file is throw it away. Run the upgrade again. | Removes the staging file. |
 | `STAGED` | Re-verifies the staged binary against the recorded digest, then continues from `begin`. | Removes it; nothing was installed. |
 | `BACKED_UP`, `PAUSED` | Continues, skipping the transitions the server has already made. | Clears the server-side restart (un-pausing worker spawn); nothing was installed. |
-| `SWAPPED`, `DRAINED`, `EXECED` | The new binary is already installed; finishes the restart. | Clears the server-side restart and **leaves the new binary in place**, naming `blanket rollback` as the way back. |
+| `SWAPPED`, `DRAINED`, `EXECED` | The new binary is already installed; finishes the restart. If a server answers, its own `resolvedExecMode` decides whether the CLI has to start the replacement or the server is bringing itself back. | Clears the server-side restart and **leaves the new binary in place**, naming `blanket rollback` as the way back. |
 
 `--abort` always tries `POST /ops/restart/abort` first, journal or no
 journal: a paused server is the failure mode that outlives everything else,
@@ -869,6 +904,15 @@ hand and compare them yourself before going any further.
 this one that is not this attempt) has the state machine. `blanket upgrade
 --abort` clears it, as does `POST /ops/restart/abort`; it also clears
 itself after `restart.deadline`.
+
+**"a server came back but reports <the old version>"** — something is
+serving the port that is neither the process that was replaced nor the one
+that was installed. The usual culprit is a second blanket that was started
+against this install and has been sitting on the database lock: check for
+another process running the same binary (`ps` for the installed path,
+`<state dir>/server.log` if the CLI started one), stop it, and run the
+command again. `blanket rollback --yes` puts the previous binary back if
+the install itself is what is wrong.
 
 **The upgrade exited 12 and the server did not come back** — the new binary
 *is* installed. Start it by hand to see what it says, or `blanket rollback
