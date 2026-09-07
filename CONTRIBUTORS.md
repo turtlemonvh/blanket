@@ -186,6 +186,14 @@ path with a comment explaining why; never a blanket `--ignore` that
 could silently wave through something that isn't actually allowed. See
 issue #131 for the original audit and #143 for the CI gate.
 
+## Vendored third-party code
+
+`lib/tomb/` is a verbatim copy of `gopkg.in/tomb.v1` (BSD-3-Clause, one
+file, unchanged upstream since 2014), kept in-tree via a `replace`
+directive in `go.mod` so both `lib/tailed_file` and `hpcloud/tail`
+resolve to it (#147). It is a nested module: run its tests with
+`cd lib/tomb && go test ./...`. Don't edit `tomb.go`; see its README.
+
 ### Vulnerability scanning and SBOM
 
 `.github/workflows/vuln.yml` (issue #144, decisions on #131) runs weekly
