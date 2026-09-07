@@ -314,6 +314,14 @@ func TestFollower_ReopensOnTruncate(t *testing.T) {
 // ReOpen follows the *name*: the file being renamed away and a new one
 // taking its place is a pause, not the end of the stream.
 func TestFollower_ReOpenFollowsTheName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows refuses to rename or delete a file another handle has open
+		// (Go opens without FILE_SHARE_DELETE), so the rename/remove this
+		// test performs fails before the follower gets a say. Blanket never
+		// renames or removes a log file it is following on Windows, and the
+		// Windows path polls anyway (tail_watch_windows.go).
+		t.Skip("rename/remove of an open file is refused on Windows")
+	}
 	dir := t.TempDir()
 	p := writeFile(t, dir, "log", "first\n")
 
@@ -343,6 +351,14 @@ func TestFollower_ReOpenFollowsTheName(t *testing.T) {
 // Without ReOpen, a file that goes away ends the stream -- and says so,
 // rather than closing Lines as if it had simply been stopped.
 func TestFollower_RemovedFileWithoutReOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows refuses to rename or delete a file another handle has open
+		// (Go opens without FILE_SHARE_DELETE), so the rename/remove this
+		// test performs fails before the follower gets a say. Blanket never
+		// renames or removes a log file it is following on Windows, and the
+		// Windows path polls anyway (tail_watch_windows.go).
+		t.Skip("rename/remove of an open file is refused on Windows")
+	}
 	dir := t.TempDir()
 	p := writeFile(t, dir, "log", "only\n")
 
