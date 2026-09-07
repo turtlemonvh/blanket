@@ -369,7 +369,7 @@ especially with worker restarts about to become routine
 (turtlemonvh/blanket#23).
 
 So the child gets the two files, exactly as before, and the worker opens
-a tailer per stream (`hpcloud/tail`; inotify on unix, polling on Windows)
+a tailer per stream (`lib/follow`; fsnotify on unix, polling on Windows)
 right after the process starts.
 
 #### The grace window, and the one thing it costs
@@ -837,7 +837,7 @@ or being stopped by the user, the worker will then:
 `GET /worker/:id/log` (`server/serve_workers.go`) streams a worker's log
 file to the browser over SSE by calling `tailed_file.Follow(path)`,
 which is backed by a single `TailedFileCollection`: the first subscriber
-for a given path starts a `TailedFile` — an `hpcloud/tail` goroutine that
+for a given path starts a `TailedFile` — a `lib/follow` goroutine that
 seeks to end-of-file minus `DefaultFileOffset` (5000 bytes, or the
 start of the file if it's smaller) and polls for new lines — and later
 subscribers on the same path reuse it. A `TailedFile` keeps the last
@@ -855,7 +855,7 @@ only the ring's last 100 lines warm. It now calls
 `tailed_file.ReplayAndFollow(path, n)` (`lib/tailed_file/replay.go`)
 instead: an unshared read of up to `n` (500, `DEFAULT_LOG_TAIL_LINES`)
 of the file's own complete lines, remembering the exact byte offset that
-read stopped at, followed by a private `hpcloud/tail` started at that
+read stopped at, followed by a private `lib/follow` follower started at that
 offset. Every connection gets the same defined window regardless of who
 else is tailing the same file, and nothing is replayed twice or dropped
 at the seam. The UI's `/ui/sse/tasks/:id/log` route
@@ -876,7 +876,7 @@ sequenceDiagram
     alt file not yet tailed
         TFC->>TF: StartTailedFile(path)
         TF->>Log: seek to EOF-5000B (or start if smaller)
-        Note over TF: hpcloud/tail, Poll:true, Follow:true
+        Note over TF: lib/follow, Poll:true
     else already tailed
         TFC-->>Srv: existing TailedFile
     end

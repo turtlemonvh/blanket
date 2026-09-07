@@ -130,11 +130,15 @@ jobs:
       # definition (and its paths_test.go has a %LOCALAPPDATA% branch that
       # only runs on windows), lib/proclive resolves pid liveness through
       # OpenProcess/GetProcessTimes (turtlemonvh/blanket#23 phase 3) and
-      # this is the only job that can execute that file at all. Not
-      # `go test ./...` — Docker- and browser-dependent surfaces are
-      # covered by the Linux `test` job.
+      # this is the only job that can execute that file at all, and
+      # lib/follow does its own file watching — Windows is the platform
+      # blanket polls on (worker/tail_watch_windows.go), and its
+      # follow_notify_test.go is `//go:build !windows` so what runs here
+      # is exactly the polling path the product uses
+      # (turtlemonvh/blanket#142). Not `go test ./...` — Docker- and
+      # browser-dependent surfaces are covered by the Linux `test` job.
       - name: Go tests (Windows-specific packages)
-        run: go test -v -count=1 ./worker/... ./command/... ./lib/service/... ./lib/proclive/...
+        run: go test -v -count=1 ./worker/... ./command/... ./lib/service/... ./lib/proclive/... ./lib/follow/...
 
       - name: Smoke test
         run: pwsh scripts/smoke.ps1 -Binary .\blanket-windows-amd64.exe
