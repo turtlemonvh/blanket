@@ -2,7 +2,6 @@ package lib
 
 import (
 	"fmt"
-	"github.com/mitchellh/go-homedir"
 	"io"
 	"os"
 	"path"
@@ -19,7 +18,7 @@ func (c *FileCopier) GetMatchingFiles(src string) ([]string, error) {
 	var err error
 
 	// Clean up source path
-	src, err = homedir.Expand(src)
+	src, err = ExpandHome(src)
 	if err != nil {
 		return filesToCopy, err
 	}

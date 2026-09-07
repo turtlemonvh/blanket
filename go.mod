@@ -14,7 +14,6 @@ require (
 	github.com/kardianos/osext v0.0.0-20190222173326-2bc1f35cddc0
 	github.com/lnquy/cron v1.1.1
 	github.com/manucorporat/sse v0.0.0-20160126180136-ee05b128a739
-	github.com/mitchellh/go-homedir v1.1.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rs/cors v1.11.1
