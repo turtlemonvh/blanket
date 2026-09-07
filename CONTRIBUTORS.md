@@ -300,7 +300,15 @@ proceeds on the proposed answer unless told otherwise.
 Unattended operation (the nightly `/night-crew` loop from the `core`
 plugin) reads `.claude/night-crew.json` in this repo for the queue label,
 concurrency, and merge policy, and injects the "Working unattended" rules
-at session start. See that plugin's `night-crew` skill.
+at session start. See that plugin's `night-crew` skill. The file is
+committed (it's the one exception to `.gitignore`'s `.claude/*` rule
+besides `skills/`) so every checkout runs the loop with the same policy.
+
+The loop's morning summary is one comment, edited in place, on the
+pinned issue named by `summary_issue` (#121). That issue is a standing
+log: it stays open, is never assigned, and is the one exception to the
+"exactly one `status:` label" state machine below — it just carries
+`status: in-progress` so audits don't flag it.
 
 ### Ownership: assignee = whose turn
 
