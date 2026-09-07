@@ -51,9 +51,25 @@ h2 { margin-top: 0; }
 }
 .list-header h2 { flex: 1; margin: 0; }
 
+/* One metric shared by every interactive control (turtlemonvh/blanket#124
+ * review). `font: inherit` alone picks up body's 1rem, but the page's
+ * working text size is 0.9rem -- tables, th, legends and the flash text
+ * all set it -- so controls rendered a step larger than everything
+ * around them. Labels are in here too: every <label> in the app sits
+ * beside a control, and sizing only the control just inverts the
+ * mismatch. Size and line-height are pinned once, and the vertical
+ * padding below is chosen so a button and the input beside it come out
+ * the same height (~29px). */
+button, .btn,
+input, select, textarea,
+label {
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
 button, .btn {
-  font: inherit;
-  padding: 0.35rem 0.75rem;
+  padding: 0.25rem 0.7rem;
   border: 1px solid var(--border);
   background: #fff;
   border-radius: 4px;
@@ -62,6 +78,92 @@ button, .btn {
 button:hover, .btn:hover { border-color: var(--accent); }
 button.primary, .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 button.danger, .btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+/* ---------------------------------------------------------------------
+ * Form controls (turtlemonvh/blanket#124).
+ *
+ * Browsers do NOT inherit font-family/size into form controls -- an
+ * unstyled <input> renders in the UA's own 13.33px Arial regardless of
+ * what body says, which is why the tasks Filter panel read as a
+ * different application than the table under it. The shared control
+ * metric above fixes the type; what follows is the box around it.
+ *
+ * These rules are deliberately global (element selectors, not a class):
+ * the filter panel, the new-task form, the new-worker form and the
+ * task-type env table all render the same handful of control types, and
+ * a shared definition is what keeps them from drifting apart again.
+ * Checkboxes and radios are excluded from the box treatment -- they are
+ * UA-drawn widgets, not text fields -- but still get the site accent.
+ * ------------------------------------------------------------------- */
+
+input[type="text"],
+input[type="search"],
+input[type="number"],
+input[type="datetime-local"],
+input[type="date"],
+input[type="time"],
+select,
+textarea {
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+input[type="text"]:focus-visible,
+input[type="search"]:focus-visible,
+input[type="number"]:focus-visible,
+input[type="datetime-local"]:focus-visible,
+input[type="date"]:focus-visible,
+input[type="time"]:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+
+/* Grouped controls. <fieldset>/<legend> ship with a notched border and a
+ * legend that punches through it -- a look that belongs to no other panel
+ * on the site. Render them the way .card and .schedule-modes already do:
+ * a panel-tinted box with the site's 6px radius and a small muted heading.
+ */
+fieldset {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+legend {
+  padding: 0 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+summary { cursor: pointer; }
+
+/* A wrapping row of checkbox/radio choices. inline-flex on the label is
+ * the load-bearing part: with plain inline labels the browser is free to
+ * break the line *between* the box and its text, which is how "TIMEDOUT"
+ * ended up orphaned from its checkbox on the tasks page.
+ */
+.checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+}
+.checkbox-grid label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
 
 table {
   width: 100%;
@@ -222,14 +324,9 @@ tr:hover td { background: #fafbfc; }
 .schedule-toggle:checked ~ .schedule-fields,
 .schedule-editor.schedule-open .schedule-fields { display: block; }
 
-.schedule-modes {
-  margin: 0.6rem 0 0;
-  padding: 0.6rem 0.75rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
-}
-.schedule-modes legend { padding: 0 0.35rem; font-weight: 600; }
+/* Box, radius, padding and legend now come from the global fieldset /
+ * legend rules above -- this only sets what differs from them. */
+.schedule-modes { margin: 0.6rem 0 0; }
 .schedule-modes > label { margin-right: 1rem; }
 
 .schedule-panel { display: none; margin-top: 0.75rem; }
@@ -237,15 +334,6 @@ tr:hover td { background: #fafbfc; }
 .schedule-mode-repeating:checked ~ .schedule-panel-repeating { display: block; }
 .schedule-panel > label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
 .schedule-panel input[type="text"] { min-width: 16rem; }
-.schedule-panel input[type="text"],
-.schedule-panel input[type="datetime-local"] {
-  font: inherit;
-  padding: 0.3rem 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--fg);
-}
 
 .schedule-preview {
   margin-top: 0.5rem;
@@ -388,4 +476,72 @@ tr:hover td { background: #fafbfc; }
   border-radius: 4px;
   font-size: 0.85rem;
   line-height: 1.4;
+}
+
+/* ---------------------------------------------------------------------
+ * The tasks page Filter panel (turtlemonvh/blanket#124).
+ *
+ * The controls themselves are styled by the global form rules near the
+ * top of this file; what is left here is the panel's own layout, and the
+ * <summary> toggle, which is rendered as a button so it reads as the
+ * control it is next to New / Refresh List rather than as a stray link.
+ * ------------------------------------------------------------------- */
+
+.filter-form { margin: 0.75rem 0; }
+
+.filter-form > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: max-content;
+  /* Same padding/metric as button above -- it is one, semantically. */
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 0.9rem;
+  line-height: 1.35;
+  font-weight: 600;
+  user-select: none;
+  /* Drop the UA disclosure marker for one we can place and rotate. */
+  list-style: none;
+}
+.filter-form > summary::-webkit-details-marker { display: none; }
+.filter-form > summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 0.32rem solid currentColor;
+  border-top: 0.28rem solid transparent;
+  border-bottom: 0.28rem solid transparent;
+  transition: transform 0.12s ease-in-out;
+}
+.filter-form[open] > summary::before { transform: rotate(90deg); }
+.filter-form > summary:hover { border-color: var(--accent); }
+
+.filter-panel {
+  margin-top: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+/* One line of the panel: a label, its control, and any trailing help
+ * text, aligned on a common centre line and free to wrap as a unit. */
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  margin-bottom: 0.75rem;
+}
+.filter-row label { font-weight: 600; }
+.filter-row .muted { font-size: 0.9rem; }
+.filter-panel input[type="text"] { min-width: 16rem; }
+
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }

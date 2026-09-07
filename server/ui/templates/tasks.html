@@ -19,53 +19,67 @@
 
     <div id="new-task-form"></div>
 
-    <details class="filter-form" style="margin:0.75rem 0;">
-        <summary style="cursor:pointer;">Filter</summary>
+    {{/*
+    The panel's look lives in app.css (.filter-form / .filter-panel /
+    .checkbox-grid and the global form-control rules) rather than in
+    inline styles, so it shares one definition with the other forms on
+    the site -- see turtlemonvh/blanket#124. Ids, names and the htmx
+    attributes below are what the server and the tests key off; only the
+    presentation moved.
+    */}}
+    <details class="filter-form">
+        <summary>Filter</summary>
         <form id="task-filter"
+              class="filter-panel"
               hx-get="/ui/partials/tasks-rows"
               hx-target="#tasks-rows"
               hx-swap="innerHTML"
-              hx-trigger="submit, change delay:400ms"
-              style="padding:0.75rem;border:1px solid var(--border);border-radius:6px;margin-top:0.5rem;">
-            <div style="margin-bottom:0.5rem;">
-                <label for="filterTags">Required Tags</label><br>
+              hx-trigger="submit, change delay:400ms">
+            <div class="filter-row">
+                <label for="filterTags">Required Tags</label>
                 <input id="filterTags" type="text" name="requiredTags" placeholder="bash,unix" aria-label="required tags">
-                <span class="muted" style="margin-left:0.5rem;">Comma-separated. Matching tasks must have all of these tags.</span>
+                <span class="muted">Comma-separated. Matching tasks must have all of these tags.</span>
             </div>
 
-            <fieldset style="margin-bottom:0.5rem;border:1px solid var(--border);padding:0.5rem;">
+            <fieldset>
                 <legend>States</legend>
-                {{range .TaskStates}}
-                <label style="margin-right:0.75rem;">
-                    <input type="checkbox" name="states" value="{{.}}"> {{.}}
-                </label>
-                {{end}}
+                <div class="checkbox-grid">
+                    {{range .TaskStates}}
+                    <label>
+                        <input type="checkbox" name="states" value="{{.}}"> {{.}}
+                    </label>
+                    {{end}}
+                </div>
             </fieldset>
 
-            <fieldset style="margin-bottom:0.5rem;border:1px solid var(--border);padding:0.5rem;">
+            <fieldset>
                 <legend>Task Types</legend>
-                {{range .TaskTypeNames}}
-                <label style="margin-right:0.75rem;">
-                    <input type="checkbox" name="types" value="{{.}}"> {{.}}
-                </label>
-                {{else}}
-                <span class="muted">No task types configured.</span>
-                {{end}}
+                <div class="checkbox-grid">
+                    {{range .TaskTypeNames}}
+                    <label>
+                        <input type="checkbox" name="types" value="{{.}}"> {{.}}
+                    </label>
+                    {{else}}
+                    <span class="muted">No task types configured.</span>
+                    {{end}}
+                </div>
             </fieldset>
 
-            <div style="margin-bottom:0.5rem;">
+            <div class="filter-row">
                 <label for="filterAfter">Earliest creation</label>
                 <input id="filterAfter" type="datetime-local" name="createdAfter" aria-label="earliest creation">
-                <label for="filterBefore" style="margin-left:0.75rem;">Latest creation</label>
+                <label for="filterBefore">Latest creation</label>
                 <input id="filterBefore" type="datetime-local" name="createdBefore" aria-label="latest creation">
             </div>
 
-            <button type="submit" class="primary" aria-label="apply filter">Apply</button>
-            <button type="button"
-                    aria-label="clear filter"
-                    onclick="this.form.reset(); htmx.trigger(this.form, 'submit');">
-                Clear
-            </button>
+            <div class="filter-actions">
+                <button type="submit" class="primary" aria-label="apply filter">Apply</button>
+                <button type="button"
+                        aria-label="clear filter"
+                        onclick="this.form.reset(); htmx.trigger(this.form, 'submit');">
+                    Clear
+                </button>
+            </div>
         </form>
     </details>
 
