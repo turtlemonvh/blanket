@@ -122,14 +122,19 @@ func (s *ServerConfig) heartbeatWorker(c *gin.Context) {
 // read/modify/write). The worker's own poll loop observes the Stopped flag
 // on its next Refetch and exits after its current task finishes.
 //
+// reason is passed through to the storage layer, where it decides the fate
+// of any pending respawn intent (turtlemonvh/blanket#23 phase 5): a
+// worker's own shutdown report keeps it, an operator's unattributed stop
+// clears it. See lib/bolt/database.go's StopWorker.
+//
 // If force is set, this also sends an immediate OS-level kill signal to
 // the worker's process (on platforms that support it — see
 // worker.ForceStopProcess) instead of waiting for the poll loop to notice.
 // A failure to deliver that signal (e.g. the process already exited, or a
 // stale/reused pid) is logged but does not fail the call: the DB record is
 // already correctly marked stopped, which is the primary contract here.
-func (s *ServerConfig) stopWorkerById(ctx context.Context, workerId objectid.ObjectId, force bool) error {
-	w, err := s.DB.StopWorker(workerId)
+func (s *ServerConfig) stopWorkerById(ctx context.Context, workerId objectid.ObjectId, reason string, force bool) error {
+	w, err := s.DB.StopWorker(workerId, reason)
 	if err != nil {
 		return err
 	}
@@ -151,6 +156,7 @@ func (s *ServerConfig) stopWorkerById(ctx context.Context, workerId objectid.Obj
 // The worker will poll for this state
 // A "force=true" query param additionally sends an immediate kill signal
 // to the worker's process rather than waiting for it to notice.
+// A "reason" query param attributes the stop; see stopWorkerById.
 func (s *ServerConfig) stopWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 
@@ -162,7 +168,13 @@ func (s *ServerConfig) stopWorker(c *gin.Context) {
 
 	force := c.Query("force") == "true"
 
-	if err := s.stopWorkerById(c.Request.Context(), workerId, force); err != nil {
+	// An absent reason means "an operator stopped this worker", which is
+	// the only kind of stop that cancels a restart's respawn intent. A
+	// worker stopping itself sends worker.StopReasonSelf; see
+	// worker.StopWorkerById.
+	reason := c.Query("reason")
+
+	if err := s.stopWorkerById(c.Request.Context(), workerId, reason, force); err != nil {
 		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
 		return
 	}
@@ -178,6 +190,13 @@ func (s *ServerConfig) restartWorker(c *gin.Context) {
 	workerId, err := s.getWorkerId(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
+		return
+	}
+
+	// Checked before StartWorker, not after: a 409 that had already
+	// cleared the Stopped flag would leave the record claiming a worker is
+	// running when no process was ever started for it.
+	if s.refuseSpawnWhilePaused(c) {
 		return
 	}
 
@@ -237,6 +256,9 @@ func (s *ServerConfig) deleteWorker(c *gin.Context) {
 
 func (s *ServerConfig) launchNewWorker(c *gin.Context) {
 	var err error
+	if s.refuseSpawnWhilePaused(c) {
+		return
+	}
 	w := worker.WorkerConf{}
 	err = c.BindJSON(&w)
 	if err != nil {
@@ -284,6 +306,41 @@ func (s *ServerConfig) launchWorkerAndWait(ctx context.Context, w *worker.Worker
 			continue
 		}
 	}
+}
+
+// refuseSpawnWhilePaused answers a worker-spawn request with 409 while a
+// restart holds the spawn pause, and reports whether it did
+// (turtlemonvh/blanket#23 phase 5).
+//
+// 409 rather than 503: the request is not wrong and the server is not
+// broken, the resource is simply in a state that does not accept it — and
+// the state, plus the fact that it clears on its own, is exactly what the
+// caller needs to decide whether to wait or to give up. The restart id is
+// in the body so an operator can tie the refusal to the upgrade that
+// caused it.
+//
+// This is only reachable from the two HTTP spawn routes. The respawn path
+// (server/restart.go) deliberately does not go through it: it runs at boot,
+// after the record has been cleared, and its whole purpose is to bring back
+// the workers the pause protected.
+func (s *ServerConfig) refuseSpawnWhilePaused(c *gin.Context) bool {
+	if !s.spawnIsPaused() {
+		return false
+	}
+	rr, _ := s.DB.RestartRecord()
+	log.WithFields(log.Fields{
+		"restartId": rr.Id,
+		"state":     rr.State,
+		"path":      c.Request.URL.Path,
+	}).Warn("refused a worker spawn: a restart is in flight")
+	c.JSON(http.StatusConflict, gin.H{
+		"error": "a server restart is in flight; worker spawn is paused until it completes or is aborted",
+		"restart": gin.H{
+			"id":    rr.Id,
+			"state": rr.State,
+		},
+	})
+	return true
 }
 
 // Called by other request handlers

@@ -110,7 +110,7 @@ func TestStopWorker(t *testing.T) {
 	assert.Zero(t, w.LastHeardTs)
 
 	before := time.Now().Unix()
-	updated, err := DB.StopWorker(w.Id)
+	updated, err := DB.StopWorker(w.Id, "")
 	assert.NoError(t, err)
 	assert.True(t, updated.Stopped)
 	assert.GreaterOrEqual(t, updated.LastHeardTs, before)
@@ -129,7 +129,7 @@ func TestStopWorker_UnknownId(t *testing.T) {
 	DB, closefn := NewTestDB()
 	defer closefn()
 
-	_, err := DB.StopWorker(objectid.NewObjectId())
+	_, err := DB.StopWorker(objectid.NewObjectId(), "")
 	assert.Error(t, err)
 }
 
@@ -326,7 +326,7 @@ func TestUpdateWorker_MergesServerOwnedFields(t *testing.T) {
 	}
 	assert.NoError(t, DB.UpdateWorker(w))
 
-	stopped, err := DB.StopWorker(w.Id)
+	stopped, err := DB.StopWorker(w.Id, "")
 	assert.NoError(t, err)
 	assert.True(t, stopped.Stopped)
 	assert.NotZero(t, stopped.LastHeardTs)
@@ -372,7 +372,7 @@ func TestStartWorker_ClearsStopped(t *testing.T) {
 
 	w := &worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}}
 	assert.NoError(t, DB.UpdateWorker(w))
-	_, err := DB.StopWorker(w.Id)
+	_, err := DB.StopWorker(w.Id, "")
 	assert.NoError(t, err)
 
 	started, err := DB.StartWorker(w.Id)

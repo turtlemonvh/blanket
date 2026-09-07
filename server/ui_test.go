@@ -1302,7 +1302,7 @@ func TestUI_WorkersRows_ShowsWorkerState(t *testing.T) {
 		WorkerDeadAfter:  time.Hour,
 	})
 	assert.NoError(t, err)
-	_, err = s.DB.StopWorker(stopped.Id)
+	_, err = s.DB.StopWorker(stopped.Id, "")
 	assert.NoError(t, err)
 	// The heartbeat clears Lost, so give the "active" one a fresh one.
 	_, err = s.DB.HeartbeatWorker(active.Id)

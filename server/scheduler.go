@@ -37,6 +37,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
+	"github.com/turtlemonvh/blanket/lib/timing"
 	"github.com/turtlemonvh/blanket/tasks"
 )
 
@@ -127,6 +128,19 @@ func (s *ServerConfig) startBackgroundLoops(ctx context.Context) func() {
 			s.reaperLoop(loopCtx, s.reaperInterval())
 		}()
 	}
+
+	// The restart deadline watchdog (turtlemonvh/blanket#23 phase 5).
+	// Unconditional, unlike the reaper: it only ever *ends* a state a
+	// caller of this server's own ops endpoints put it into, so a
+	// hand-built ServerConfig acquires nothing it did not ask for, and the
+	// failure it prevents — a killed upgrade CLI leaving the server unable
+	// to spawn workers, with no way out but the restart that just failed —
+	// has no acceptable alternative recovery.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.restartWatchdogLoop(loopCtx, timing.Scale(RestartWatchdogInterval))
+	}()
 
 	return func() {
 		cancel()
