@@ -11,17 +11,15 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build toolchain image
-        uses: docker/build-push-action@v5
+      # Same composite action the CI jobs use, so a release is cross-compiled
+      # in an image built exactly the way the tested one was -- one definition
+      # of blanket-dev:latest in the repo rather than two that can drift.
+      # A release is the one run with no sibling to share a cache write with,
+      # so it exports layers itself.
+      - uses: ./.github/actions/toolchain-image
         with:
-          context: .
-          tags: blanket-dev:latest
-          load: true
-          cache-from: type=gha
           cache-to: type=gha,mode=max
 
       # Cross-compile, then generate SHA256SUMS over the binaries and the
@@ -34,6 +32,26 @@ jobs:
       # release artifact only CI can build is one nobody can check.
       - name: Cross-compile, checksum, and bundle
         run: make docker-release VERSION=${{ github.ref_name }}
+
+      # SPDX JSON SBOM of the module graph actually linked into the
+      # release binary (turtlemonvh/blanket#144, decisions on #131).
+      # `file:` mode reads embedded Go build info straight out of the
+      # binary rather than walking the source tree, so it lists exactly
+      # what shipped -- no GitHub Actions pins, no tests/e2e npm
+      # devDependencies, none of the noise a `dir:.` scan of the repo
+      # would add. Read from blanket-linux-amd64 as the representative
+      # binary: verified locally that golang.org/x/sys (the only module
+      # imported from a Windows-only build-tagged file) is already part
+      # of the linux binary's module graph via other paths, so the three
+      # platform binaries don't actually diverge in practice.
+      - name: Generate SBOM (syft)
+        uses: anchore/sbom-action@v0.24.2
+        with:
+          file: blanket-linux-amd64
+          format: spdx-json
+          output-file: blanket-${{ github.ref_name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
 
       # Pull the tag's own section out of CHANGELOG.md ("## v0.3.0" up to
       # the next "## " heading) so the release body is the notes written
@@ -56,7 +74,7 @@ jobs:
           cat release-notes.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           # body_path supplies the hand-written notes; generate_release_notes
           # still appends GitHub's auto-generated PR/contributor list below
@@ -66,10 +84,14 @@ jobs:
           # SHA256SUMS is what `blanket upgrade` verifies every download
           # against (turtlemonvh/blanket#23 phase 6); a release without it
           # cannot be auto-upgraded to. The bundle is the offline-install
-          # artifact -- see docs/offline_install.md.
+          # artifact -- see docs/offline_install.md. The SBOM is a
+          # separate asset and deliberately NOT folded into SHA256SUMS --
+          # that file's contents stay exactly what scripts/bundle.sh
+          # produces (turtlemonvh/blanket#144).
           files: |
             blanket-linux-amd64
             blanket-darwin-amd64
             blanket-windows-amd64.exe
             SHA256SUMS
             dist/blanket-bundle-*.tar.gz
+            blanket-${{ github.ref_name }}.spdx.json

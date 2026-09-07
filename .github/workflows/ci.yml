@@ -23,10 +23,10 @@ concurrency:
 # wall-clock latency on a PR, and four concurrent 60s image builds cost 60s
 # of wall clock rather than 240s.
 #
-# Measured over 47 runs before the change: the `test` job averaged 265s
-# (max 350s) and was the blocking path on every PR. Fanned out, the longest
-# leaf is ~135s, and the blocking path becomes the native `windows` job at
-# ~136s -- see #155 for the full step-level breakdown.
+# Measured on the same commit, serial vs fanned out: the old `test` job took
+# 406s and was the blocking path on every PR; fanned out, the longest leaf is
+# ~200s and the blocking path is roughly halved. See #155 for the
+# step-by-step breakdown and the 47-run baseline behind it.
 #
 # The second benefit is diagnostic: a red `browser` next to a green `unit`
 # says what broke without opening a log, and one surface failing no longer
@@ -40,7 +40,7 @@ jobs:
     name: fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/toolchain-image
       - name: gofmt
         run: make docker-check-fmt
@@ -49,7 +49,7 @@ jobs:
     name: unit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The one job that publishes layers back to the GHA cache. Every other
       # docker job in this workflow reads from it; see the composite action's
@@ -65,7 +65,7 @@ jobs:
     name: smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/toolchain-image
       # docker-test-smoke chains smoke + restart + migrate + restart-machine
       # + upgrade — all of them cross-process tests against the built binary.
@@ -77,7 +77,7 @@ jobs:
     name: browser
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/toolchain-image
       - name: Browser tests
         run: make docker-test-browser
@@ -87,7 +87,7 @@ jobs:
       # downloadable artifact so PR authors can debug without log-scrubbing.
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report
           path: tests/e2e/playwright-report/
@@ -150,13 +150,13 @@ jobs:
   #
   # Note for whoever does that promotion: over the 36 runs sampled in #155
   # this job failed 11.1% of the time, the highest rate of any job, so the
-  # "green for a week" bar has demonstrably not been met yet.
+  # "green for a week" bar has demonstrably not been met yet. See #169.
   race:
     name: race
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/toolchain-image
       - name: Go tests (race detector)
         run: make docker-test-race
@@ -172,9 +172,9 @@ jobs:
   # both native Windows executors (cmd, powershell). See CONTRIBUTORS.md's
   # CI section for what this job does and deliberately doesn't cover.
   #
-  # Now the blocking path on a PR (~136s mean), since the docker surfaces
-  # fanned out beneath it. Its `setup-go` step averages 68s and peaks at
-  # 114s, which is where to look first if this needs to get faster (#155).
+  # Once the docker surfaces fanned out beneath it this became one of the
+  # two candidates for the blocking path, and its `setup-go` step alone
+  # averages 68s (peak 114s), which looks uncached. See #168.
   windows:
     name: windows
     runs-on: windows-latest
@@ -182,13 +182,13 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Reads the pinned toolchain version straight out of go.mod (the
       # `toolchain` directive) rather than a hardcoded version here — see
       # CLAUDE.md's "three Go version pins must stay in sync" gotcha. This
       # intentionally isn't a fourth pin.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
 
@@ -257,7 +257,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/toolchain-image
       - name: Cross-compile linux/darwin/windows
         run: make docker-build

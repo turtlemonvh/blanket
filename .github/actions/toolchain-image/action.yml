@@ -6,6 +6,18 @@
 # out into one job each (turtlemonvh/blanket#155), and every one of them
 # needs this same preamble. Keeping it in one file means a cache-strategy
 # change or an action version bump is a single edit rather than six.
+#
+# release.yml uses it too, so "how blanket-dev:latest gets built" has exactly
+# one definition in the repo. That matters ahead of #53 (publishing the image
+# to GHCR): switching the docker jobs from building to pulling should be an
+# edit to this file, not the same edit repeated across two workflows with an
+# opportunity to diverge each time.
+#
+# The action SHAs below are pinned the same way the workflows pin theirs
+# (see .github/dependabot.yml and the supply-chain rationale in its header).
+# Dependabot's `github-actions` ecosystem is configured at `directory: "/"`;
+# if a weekly run bumps the pins in .github/workflows but leaves these
+# behind, this file needs adding to that config explicitly.
 name: Build toolchain image
 description: Build blanket-dev:latest from the GHA layer cache and load it into the docker daemon.
 
@@ -24,13 +36,13 @@ runs:
   using: composite
   steps:
     # Buildx is required for the gha cache backend used below.
-    - uses: docker/setup-buildx-action@v3
+    - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
     # Cold builds take ~5m; cached builds settle to ~60s (mean 65s, p50 61s,
     # measured over 100 builds while investigating #155). mode=max on the
     # writer exports every layer for maximum hit rate -- fits inside GHA's
     # 10GB per-repo cache budget today.
-    - uses: docker/build-push-action@v5
+    - uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
       with:
         context: .
         tags: blanket-dev:latest
