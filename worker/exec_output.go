@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hpcloud/tail"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"github.com/turtlemonvh/blanket/lib/combined_log"
+	"github.com/turtlemonvh/blanket/lib/follow"
 	"github.com/turtlemonvh/blanket/lib/timing"
 )
 
@@ -74,7 +74,7 @@ type streamTail struct {
 	name   string
 	path   string
 	sink   io.Writer
-	tailer *tail.Tail
+	tailer *follow.Follower
 	done   chan struct{}
 	// consumed is how many bytes of complete lines have been recorded.
 	// Written only by the forwarding goroutine and read only after that
@@ -100,17 +100,13 @@ func (o *ExecOutput) StartTailing(taskId string) {
 		{combined_log.StreamStdout, o.stdoutPath},
 		{combined_log.StreamStderr, o.stderrPath},
 	} {
-		t, err := tail.TailFile(s.p, tail.Config{
+		t, err := follow.Open(s.p, follow.Options{
 			// From the first byte: the file was created empty moments
 			// ago, and anything the child managed to write before this
 			// call must still be recorded.
-			Location: &tail.SeekInfo{Offset: 0, Whence: io.SeekStart},
-			Follow:   true,
-			Poll:     tailUsesPolling,
-			// DiscardingLogger: a tailer per running task would
-			// otherwise narrate every reopen to the worker's stderr,
-			// outside logrus.
-			Logger: tail.DiscardingLogger,
+			Offset: 0,
+			Whence: io.SeekStart,
+			Poll:   tailUsesPolling,
 		})
 		if err != nil {
 			log.WithFields(log.Fields{
@@ -138,16 +134,20 @@ func (o *ExecOutput) StartTailing(taskId string) {
 // the live log view shows lines on.
 func (st *streamTail) forward() {
 	defer close(st.done)
-	for line := range st.tailer.Lines {
+	for line := range st.tailer.Lines() {
 		if line.Err != nil {
-			// Not file content (tail reports rate limiting this way), so
-			// it is neither recorded nor counted against the offset.
+			// Not file content, so it is neither recorded nor counted
+			// against the offset.
 			continue
 		}
-		// Put back the newline hpcloud/tail trimmed: the combined writer
+		// Put back the newline the follower trimmed: the combined writer
 		// splits on newlines, and its Write never reports an error.
 		st.sink.Write([]byte(line.Text + "\n"))
-		st.consumed += int64(len(line.Text)) + 1
+		// From the line's own start offset rather than by accumulating
+		// lengths, so the residual read below picks up at exactly the
+		// byte after the last line recorded even if the follower had to
+		// reopen the file underneath us.
+		st.consumed = line.Offset + int64(len(line.Text)) + 1
 	}
 }
 
@@ -257,8 +257,9 @@ func fileSize(p string) int64 {
 // consumed is final and nothing can still be appending to the combined
 // writer when the residual read runs.
 func (st *streamTail) stop() {
+	// Stop releases the follower's watch too -- the job hpcloud/tail
+	// split out into a separate Cleanup() call.
 	st.tailer.Stop()
-	st.tailer.Cleanup()
 	<-st.done
 }
 
@@ -269,9 +270,9 @@ func (st *streamTail) stop() {
 // tailer's last read and its stop — without this they would be in the
 // per-stream file but not the combined record, which is the sort of
 // silent gap this whole change exists to avoid. And the task's final
-// line when it ends without a newline: hpcloud/tail never delivers one
+// line when it ends without a newline: a follower never delivers one
 // while following (it seeks back and waits for a newline that, for a
-// finished task, is not coming), so the file's last fragment would
+// finished task, is not coming -- see lib/follow), so the file's last fragment would
 // otherwise be dropped. The combined writer buffers it and Close()
 // flushes it as a whole record.
 func (st *streamTail) drainResidual() {
