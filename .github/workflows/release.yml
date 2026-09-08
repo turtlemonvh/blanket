@@ -47,7 +47,7 @@ jobs:
       # of the linux binary's module graph via other paths, so the three
       # platform binaries don't actually diverge in practice.
       - name: Generate SBOM (syft)
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           file: blanket-linux-amd64
           format: spdx-json
