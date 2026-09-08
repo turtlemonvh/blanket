@@ -47,11 +47,11 @@ func mcpModeAllows(mode string, t mcpToolTier) bool {
 // nothing. Descriptions were trimmed first; the raise covers what was
 // left.
 //
-// If a future addition trips TestToolListFitsContextBudget, prefer moving
-// prose into blanket_docs over shaving wording that an agent actually
-// needs to call a tool correctly — see
-// docs/superpowers/plans/2026-09-01-blanket-mcp-interface.md's Context
-// budget section for the full lever ordering.
+// If a future addition trips TestToolListFitsContextBudget, apply the
+// levers in order — trim jsonschema arg descriptions, then tool
+// Description strings, then move prose into blanket_docs — and prefer
+// any of those over shaving wording that an agent actually needs to call
+// a tool correctly. See docs/mcp.md's "Context cost" section.
 const mcpContextBudgetChars = 5000
 
 const mcpInstructions = `blanket runs shell tasks defined by TOML task types. To author a new task type: call blanket_docs(page="authoring") for the guide, then blanket_write_task_type to save and validate it. To run it: blanket_run_task submits and waits, returning the output; blanket_submit_task queues without waiting. Either only runs once a worker is available whose tags are a superset of the type's tags -- use blanket_workers to check, blanket_launch_worker to start one. Check status and logs with blanket_tasks(id=...).`

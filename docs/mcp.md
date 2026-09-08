@@ -98,6 +98,14 @@ can cancel (turtlemonvh/blanket#61's pause/resume/schedule rework), and
 actually wants, and a tool it can't see is worth nothing. Descriptions
 were trimmed first; the raise covers what was left.
 
+When a new tool or argument trips that test, the levers are, in order:
+trim the `jsonschema:"..."` argument descriptions, then the tool
+`Description` strings, then move prose out of both and into
+`blanket_docs`. Every handler already returns plain text rather than
+JSON, which suppresses `outputSchema` generation — the single biggest
+saving, and not a lever to give back. Raising the constant is the last
+resort, and only for a tool surface that genuinely grew.
+
 If you're tight on context budget elsewhere, set `mcp.mode = "readonly"`
 to cut this further, or wait for the tool-search / dynamic-discovery
 mode tracked in issue #44 if the tool count grows.
