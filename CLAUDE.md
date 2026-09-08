@@ -37,11 +37,10 @@ binary invoked with different subcommands.
 - `examples/types/` — realistic task-type TOMLs users can copy.
 - `testdata/types/echo_task.toml` — the minimal smoke-test fixture.
   Kept tiny on purpose; don't add examples here.
-- `docs/` — user and maintainer docs, markdown only (plus the vendored
-  `docs/superpowers/` subtree). Filenames are `snake_case.md`. Index is
-  `docs/README.md`. Planned/backlog work lives as GitHub issues with
-  `status:` labels, not a docs file — there's no `docs/next_up.md`
-  anymore (see #43). See "Issue workflow" below.
+- `docs/` — user and maintainer docs, markdown only. Filenames are
+  `snake_case.md`. Index is `docs/README.md`. Planned/backlog work lives
+  as GitHub issues with `status:` labels, not a docs file — there's no
+  `docs/next_up.md` anymore (see #43). See "Issue workflow" below.
   - The `blanket_docs` MCP tool serves these pages from a `go:embed`
     of `docs/*.md` in `main.go` (the root package — the one place that
     can embed outside its own directory) via `lib/docs.SetFS`; the
