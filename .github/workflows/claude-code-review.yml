@@ -18,6 +18,10 @@ jobs:
     #   github.event.pull_request.user.login == 'new-developer' ||
     #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
 
+    # Dependabot PRs are version bumps; a Claude review adds nothing there
+    # and the action refuses bot authors anyway (its allowed_bots default is
+    # empty), which showed up as a red check on every Dependabot PR (#163).
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
