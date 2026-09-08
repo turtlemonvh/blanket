@@ -74,7 +74,7 @@ verify Windows-specific changes natively:
 
 ```powershell
 go build -o blanket-windows-amd64.exe .
-go test ./worker/... ./command/... ./lib/service/... ./lib/proclive/...
+go test ./worker/... ./command/... ./lib/service/... ./lib/proclive/... ./lib/follow/...
 pwsh scripts/smoke.ps1 -Binary .\blanket-windows-amd64.exe
 ```
 
@@ -117,7 +117,11 @@ header comment.
   toolchain pin everything else uses — see CLAUDE.md's "three Go version
   pins" gotcha), runs `go test` for the packages with Windows-specific
   code (`./worker/...`, `./command/...`, `./lib/service/...`,
-  `./lib/proclive/...`), then a
+  `./lib/proclive/...`) plus `./lib/follow/...`, whose file watching is
+  platform-specific in practice — Windows is the platform blanket polls
+  on, and `follow_notify_test.go` is `//go:build !windows` so this job
+  exercises exactly the polling path the product uses there (#142) —
+  then a
   PowerShell smoke pass (`scripts/smoke.ps1` — see below) and two runs of
   `scripts/install.ps1` against the just-built binary, asserting its
   `$PROFILE` shell-integration block is written idempotently. It does
@@ -177,6 +181,16 @@ a CSV of every dependency's detected license and source; CI uploads it
 as the `go-licenses-report` workflow artifact so the current inventory
 is one click away.
 
+There is no vendored third-party Go code in the tree. `lib/tomb/` (a
+verbatim copy of `gopkg.in/tomb.v1`, #147) used to be the exception; it
+existed only because `github.com/hpcloud/tail` needed it, and both went
+away with #142, which replaced that unmaintained tailer with `lib/follow`
+— blanket's own follower on the maintained `github.com/fsnotify/fsnotify`
+(BSD-3-Clause), with attribution to hpcloud/tail and nxadm/tail in its
+package doc. Prefer that shape — a small in-tree implementation of the
+part actually used — over vendoring, when a dependency stops being
+maintained.
+
 The allowlist lives in exactly one place — `scripts/licenses.sh` — so
 policy changes happen in a single diff instead of drifting between CI
 and a maintainer's local run. If `go-licenses` misclassifies a specific
@@ -213,14 +227,6 @@ issue #131 for the original audit and #143 for the CI gate.
 - The SBOM and the grype report are uploaded as workflow artifacts
   (30-day retention); find them on the run's Summary page under
   Artifacts.
-
-## Vendored third-party code
-
-`lib/tomb/` is a verbatim copy of `gopkg.in/tomb.v1` (BSD-3-Clause, one
-file, unchanged upstream since 2014), kept in-tree via a `replace`
-directive in `go.mod` so both `lib/tailed_file` and `hpcloud/tail`
-resolve to it (#147). It is a nested module: run its tests with
-`cd lib/tomb && go test ./...`. Don't edit `tomb.go`; see its README.
 
 ## Release Process
 

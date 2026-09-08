@@ -2,14 +2,15 @@ package tailed_file
 
 import (
 	"expvar"
-	"github.com/hpcloud/tail"
-	log "github.com/sirupsen/logrus"
-	"gopkg.in/tomb.v1"
+	"io"
 	"math/rand"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	log "github.com/sirupsen/logrus"
+	"github.com/turtlemonvh/blanket/lib/follow"
 )
 
 const (
@@ -73,10 +74,20 @@ type TailedFile struct {
 	Filepath        string
 	PastLines       []string
 	FileOffset      int64
-	Tailer          *tail.Tail
+	Tailer          *follow.Follower
 	Subscribers     map[int64]*TailedFileSubscriber
 	FilesContainer  *TailedFileCollection
 	subscriberCount int64
+
+	// stopped records that Stop has already run, so a second call
+	// doesn't close the subscriber channels twice. This used to be
+	// inferred from the tailer -- `Tailer.Err() != tomb.ErrStillAlive`,
+	// against the tomb hpcloud/tail embedded -- which conflated "someone
+	// already stopped this" with "the tailer died on its own" and left
+	// the subscribers of a tailer that hit an error hanging on a channel
+	// nobody would ever close. An explicit flag says only what is meant
+	// (turtlemonvh/blanket#142).
+	stopped bool
 	sync.Mutex
 }
 
@@ -243,25 +254,19 @@ func (tfc *TailedFileCollection) StartTailedFile(p string) (*TailedFile, error) 
 	}
 
 	// By default start at the start of the file
-	offsetConf := &tail.SeekInfo{
+	offsetConf := follow.Options{
 		Offset: 0,
-		Whence: os.SEEK_SET,
+		Whence: io.SeekStart,
+		Poll:   true, // better cross platform support than inotify
 	}
 	if finfo.Size() >= int64(DefaultFileOffset) {
 		// If the current size of the file is larger than the default offset, seek to a location in the file
-		offsetConf = &tail.SeekInfo{
-			Offset: -int64(DefaultFileOffset),
-			Whence: os.SEEK_END,
-		}
+		offsetConf.Offset = -int64(DefaultFileOffset)
+		offsetConf.Whence = io.SeekEnd
 	}
 
 	// FIXME: Runs in a goroutine so can be racey wrt fast growing files
-	// https://github.com/hpcloud/tail/blob/master/tail.go#L132
-	tailer, err := tail.TailFile(p, tail.Config{
-		Location: offsetConf,
-		Follow:   true,
-		Poll:     true, // better cross platform support than inotify
-	})
+	tailer, err := follow.Open(p, offsetConf)
 	if err != nil {
 		return nil, err
 	}
@@ -283,16 +288,17 @@ func (tfc *TailedFileCollection) StartTailedFile(p string) (*TailedFile, error) 
 
 	// Shuts down when channel closes
 	go func() {
-		// Log the path, never the *tail.Tail itself: logrus' TextFormatter
-		// fmt.Sprint()s field values, which reflects over every field of the
-		// struct — including the file handle, reader and tomb counters that
-		// hpcloud/tail's own goroutine mutates concurrently. That read is a
-		// data race we cannot synchronize from out here.
+		// Log the path, never the *follow.Follower itself: logrus'
+		// TextFormatter fmt.Sprint()s field values, which reflects over
+		// every field of the struct — including the file handle, reader and
+		// read position that the follower's own goroutine mutates
+		// concurrently. That read is a data race we cannot synchronize from
+		// out here.
 		log.WithFields(log.Fields{
 			"file": p,
 		}).Info("In tailedfile goroutine, starting loop over lines")
 
-		for nline := range tailer.Lines {
+		for nline := range tailer.Lines() {
 			log.WithFields(log.Fields{
 				"file": p,
 			}).Info("Read line in tailed logfile")
@@ -359,13 +365,14 @@ func (tf *TailedFile) Stop() error {
 	tf.Lock()
 	defer tf.Unlock()
 
-	if tf.Tailer.Err() != tomb.ErrStillAlive {
+	if tf.stopped {
 		// Check to see if this is already exiting to avoid panic when closing closed channel
 		log.WithFields(log.Fields{
 			"filepath": tf.Filepath,
 		}).Warn("Not stopping tailed file because already dying or dead")
 		return nil
 	}
+	tf.stopped = true
 
 	for _, sub := range tf.Subscribers {
 		delete(tf.Subscribers, sub.Id)
