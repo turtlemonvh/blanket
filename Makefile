@@ -45,10 +45,12 @@ test:
 # the supported way to run this.
 #
 # lib/tailed_file is in the list now that the race it used to report (a log
-# statement reflecting over hpcloud/tail's internals) is fixed — see the
-# comment in StartTailedFile.
+# statement reflecting over the tailer's internals) is fixed — see the
+# comment in StartTailedFile. lib/follow is in it because it *is*
+# concurrency: one goroutine per followed file, handing lines to a
+# consumer that may stop reading at any moment (#142).
 test-race:
-	CGO_ENABLED=1 go test -race -count=1 ./worker/... ./server/... ./lib/bolt/... ./lib/httpx/... ./lib/timing/... ./lib/tailed_file/... ./tasks/...
+	CGO_ENABLED=1 go test -race -count=1 ./worker/... ./server/... ./lib/bolt/... ./lib/httpx/... ./lib/timing/... ./lib/tailed_file/... ./lib/follow/... ./tasks/...
 
 # Integration tests spin up a real server + worker; skip with -short
 test-integration:

@@ -43,7 +43,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hpcloud/tail"
+	"github.com/turtlemonvh/blanket/lib/follow"
 )
 
 // liveLineBuffer is how many live lines ReplayAndFollow will hold for a
@@ -74,7 +74,7 @@ type ReplayTail struct {
 	// underlying tailer stops.
 	Lines <-chan string
 
-	tailer   *tail.Tail
+	tailer   *follow.Follower
 	done     chan struct{}
 	finished chan struct{}
 	stopOnce sync.Once
@@ -100,15 +100,16 @@ func ReplayAndFollow(p string, maxHistory int) (*ReplayTail, error) {
 		return nil, closeErr
 	}
 
-	// Poll rather than inotify, for the same cross-platform reason
-	// StartTailedFile polls. DiscardingLogger because a tailer per open
-	// log pane would otherwise narrate every reopen to the server's
-	// stderr, outside logrus.
-	tailer, err := tail.TailFile(p, tail.Config{
-		Location: &tail.SeekInfo{Offset: offset, Whence: io.SeekStart},
-		Follow:   true,
-		Poll:     true,
-		Logger:   tail.DiscardingLogger,
+	// Poll rather than fsnotify, for the same cross-platform reason
+	// StartTailedFile polls: a tailer per open log pane, on files that
+	// may not be local. lib/follow is silent either way -- it has no
+	// logger to discard, which is what hpcloud/tail needed
+	// DiscardingLogger for (a tailer per log pane would otherwise
+	// narrate every reopen to the server's stderr, outside logrus).
+	tailer, err := follow.Open(p, follow.Options{
+		Offset: offset,
+		Whence: io.SeekStart,
+		Poll:   true,
 	})
 	if err != nil {
 		return nil, err
@@ -127,19 +128,19 @@ func ReplayAndFollow(p string, maxHistory int) (*ReplayTail, error) {
 	nReplayTails.Add(1)
 
 	// Forwarding goroutine. The select on done is what keeps Stop from
-	// wedging: tail's Lines channel is unbuffered and its reader goroutine
-	// blocks on the send, so a consumer that walks away mid-line would
-	// otherwise leave tail.Stop()'s Wait() blocked forever. On done we
-	// keep draining until tail closes the channel, which is the only way
-	// its reader can finish.
+	// wedging: the follower's Lines channel is unbuffered and its
+	// goroutine blocks on the send, so a consumer that walks away
+	// mid-line would otherwise leave Stop waiting on it. On done we keep
+	// draining until the follower closes the channel, which is the only
+	// way its goroutine can finish.
 	go func() {
 		defer close(rt.finished)
 		defer close(lines)
-		for line := range tailer.Lines {
+		for line := range tailer.Lines() {
 			select {
 			case lines <- line.Text:
 			case <-rt.done:
-				for range tailer.Lines {
+				for range tailer.Lines() {
 				}
 				return
 			}
@@ -157,8 +158,9 @@ func (rt *ReplayTail) Stop() {
 	}
 	rt.stopOnce.Do(func() {
 		close(rt.done)
+		// Stop also releases the follower's watch -- the job
+		// hpcloud/tail split out into a separate Cleanup() call.
 		rt.tailer.Stop()
-		rt.tailer.Cleanup()
 		<-rt.finished
 		nReplayTails.Add(-1)
 	})
@@ -172,9 +174,10 @@ func (rt *ReplayTail) Stop() {
 // the task is still writing: it is neither returned nor counted, so the
 // tailer picks it up when the writer finishes it.
 //
-// Lines are trimmed the way hpcloud/tail trims them (TrimRight of "\n" and
-// nothing else) so a line's text is identical whether it arrived through
-// the history or through the live channel.
+// Lines are trimmed the way lib/follow trims them (TrimRight of "\n" and
+// nothing else -- the rule it inherited from hpcloud/tail) so a line's
+// text is identical whether it arrived through the history or through the
+// live channel.
 func readCompleteLines(f *os.File, maxHistory int) (lines []string, offset int64, truncated bool, err error) {
 	r := bufio.NewReader(f)
 	for {

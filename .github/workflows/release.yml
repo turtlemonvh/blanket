@@ -11,7 +11,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Same composite action the CI jobs use, so a release is cross-compiled
       # in an image built exactly the way the tested one was -- one definition
@@ -45,7 +45,7 @@ jobs:
       # of the linux binary's module graph via other paths, so the three
       # platform binaries don't actually diverge in practice.
       - name: Generate SBOM (syft)
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           file: blanket-linux-amd64
           format: spdx-json

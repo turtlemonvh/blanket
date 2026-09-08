@@ -20,8 +20,9 @@ import (
 )
 
 // textResult wraps s as a successful single-text-block tool result. Every
-// MCP tool handler in this file returns plain text, not JSON — see the
-// design plan's "Context budget" section for why.
+// MCP tool handler in this file returns plain text, not JSON: that
+// suppresses outputSchema generation, the single biggest lever on the
+// context budget — see docs/mcp.md's "Context cost" section.
 func textResult(s string) (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}, nil, nil
 }
