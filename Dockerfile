@@ -44,9 +44,6 @@ WORKDIR /src
 # Pre-warm the Go module cache. Rebuilt only when go.mod/go.sum change, so
 # cold `docker run make test` doesn't re-fetch every dependency.
 COPY go.mod go.sum ./
-# The vendored gopkg.in/tomb.v1 (lib/tomb) is a nested module that go.mod
-# `replace`s to; its go.mod must exist before `go mod download` can resolve it.
-COPY lib/tomb/go.mod ./lib/tomb/
 RUN go mod download
 
 # Pre-warm the Playwright npm deps. The base image already has the Chromium

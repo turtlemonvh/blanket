@@ -9,8 +9,8 @@ go 1.25.0
 toolchain go1.25.14
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gin-gonic/gin v1.12.0
-	github.com/hpcloud/tail v1.0.0
 	github.com/manucorporat/sse v0.0.0-20160126180136-ee05b128a739
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/robfig/cron/v3 v3.0.1
@@ -23,7 +23,6 @@ require (
 	go.etcd.io/bbolt v1.5.0
 	go.mongodb.org/mongo-driver/v2 v2.9.0
 	golang.org/x/sys v0.47.0
-	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7
 )
 
 require (
@@ -32,7 +31,6 @@ require (
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
@@ -71,7 +69,4 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
-	gopkg.in/fsnotify.v1 v1.4.7 // indirect
 )
-
-replace gopkg.in/tomb.v1 => ./lib/tomb

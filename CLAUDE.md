@@ -32,7 +32,10 @@ binary invoked with different subcommands.
 - `worker/` — claim loop, task exec, daemonization.
 - `tasks/` — `Task` + `TaskType` types and TOML loading.
 - `lib/` — `bolt/`, `database/`, `queue/`, `objectid/`, `tailed_file/`,
-  `httpx/`, `timing/`, `proclive/`, `docs/` (see below).
+  `follow/`, `httpx/`, `timing/`, `proclive/`, `docs/` (see below).
+  `follow/` is blanket's own file follower (fsnotify + a polling
+  fallback), written to replace `hpcloud/tail` (#142); `tailed_file/`
+  and `worker/exec_output.go` are its only callers.
 - `command/` — Cobra CLI subcommands (`submit`, `ps`, `rm`, `worker`).
 - `examples/types/` — realistic task-type TOMLs users can copy.
 - `testdata/types/echo_task.toml` — the minimal smoke-test fixture.

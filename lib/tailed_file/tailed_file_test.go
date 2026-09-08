@@ -211,7 +211,7 @@ func TestSubscriberStop_WhileNotReading(t *testing.T) {
 	}
 	tmpfile.Sync()
 
-	// Generous wait for hpcloud/tail's poller to notice the write and get
+	// Generous wait for the follower's poller to notice the write and get
 	// the tailer goroutine parked on the blocking send -- once parked it
 	// stays parked (no timeout on that send), so this only needs to be
 	// long enough to make that virtually certain, not to win a narrow race.
