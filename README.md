@@ -1,8 +1,9 @@
 # Blanket
 
-Blanket is a RESTy wrapper for long-running tasks. Define task types as
-TOML files, submit them via REST API or CLI, and let workers execute
-them — all from a single binary with a built-in web UI.
+Blanket is a RESTy wrapper for long-running tasks. With a simple
+single-binary cross-platform install and embedded UI, API, CLI, and MCP
+interfaces, Blanket helps your hard-to-manage compute jobs to settle
+down so you can focus on composing those tasks into broader solutions.
 
 ## Installation
 
