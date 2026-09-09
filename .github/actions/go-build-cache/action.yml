@@ -1,0 +1,71 @@
+# Share the Go *build* cache (GOCACHE) across the fanned-out CI jobs and
+# across runs (turtlemonvh/blanket#155).
+#
+# Why this exists: before the fan-out, ci.yml's four test targets ran as
+# sequential steps in one job and shared a warm GOCACHE through the
+# blanket-dev-cache docker volume -- `docker-test` compiled every package,
+# so the `make linux` inside `docker-test-smoke` and `docker-test-browser`
+# was nearly free. Fanned out, each job gets its own runner and its own cold
+# volume, so all of them recompile the same packages. Measured locally, that
+# is the difference between a 73s and a 38s `make docker-test`.
+#
+# The Makefile's GO_BUILD_CACHE variable moves GOCACHE out of the named
+# volume and onto the host path this action manages; see its comment for why
+# only the build cache moves and the module cache stays in the volume.
+#
+# Called twice in the writer job (mode: restore before the build, mode: save
+# after) and once as a reader everywhere else. The point of putting it in one
+# file is that the cache key is written once: a restore key that drifts from
+# the save key fails silently -- nothing errors, the cache just stops being
+# shared and the jobs quietly get slower again.
+name: Go build cache
+description: Restore or save the shared Go build cache for the docker test jobs.
+
+inputs:
+  mode:
+    description: >
+      "restore" (the default) pulls the cache and does not write one back.
+      "save" publishes the current cache under the exact key. Exactly one job
+      per workflow run should save, for the same reason only one job exports
+      docker layers -- the others would upload an identical ~300MB payload
+      for nothing.
+    required: false
+    default: restore
+
+outputs:
+  path:
+    description: Absolute host path of the build cache, to pass to the Makefile's GO_BUILD_CACHE.
+    value: ${{ steps.loc.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    # Kept out of the workspace on purpose: `make check-fmt` walks the tree
+    # with `find . -name '*.go'`, and several hundred megabytes of cache
+    # entries under it would be both slow and a source of false positives.
+    - id: loc
+      shell: bash
+      run: |
+        dir="$HOME/.cache/blanket-go-build"
+        mkdir -p "$dir"
+        echo "path=$dir" >> "$GITHUB_OUTPUT"
+
+    # go.mod is hashed alongside go.sum because it carries the `toolchain`
+    # directive -- GOCACHE entries are keyed to a Go version, so a toolchain
+    # bump must miss rather than restore entries the new compiler will
+    # discard anyway. The restore-keys ladder falls back to the newest cache
+    # for the same dependency set, then to any cache for this OS.
+    - if: inputs.mode == 'restore'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/blanket-go-build
+        key: go-build-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          go-build-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+          go-build-${{ runner.os }}-
+
+    - if: inputs.mode == 'save'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/blanket-go-build
+        key: go-build-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}

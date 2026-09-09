@@ -106,10 +106,67 @@ header comment.
 
 `.github/workflows/ci.yml` runs on PRs and master pushes.
 
-- **`test`** (required check): builds the image, then runs
-  `docker-check-fmt`, `docker-test`, `docker-test-smoke`,
-  `docker-test-browser` in sequence. Uploads Playwright HTML report
-  as an artifact on failure.
+- **`fmt`**, **`unit`**, **`smoke`**, **`browser`**: one job per test
+  surface, all running in parallel. Each builds the toolchain image via
+  the shared `.github/actions/toolchain-image` composite action, then
+  runs a single `make docker-*` target — `docker-check-fmt`,
+  `docker-test`, `docker-test-smoke`, `docker-test-browser`
+  respectively. `browser` uploads the Playwright HTML report as an
+  artifact on failure.
+
+  These were four sequential steps inside a single `test` job until
+  #155 fanned them out, cutting the blocking path from a 298s mean
+  (n=7, range 231-406s) to ~215s — roughly 25-30%. The old rationale
+  for keeping them serial was that "parallel jobs would each pay the
+  image build" — true, but that is an argument about billed minutes,
+  and this repo is public, so GitHub-hosted standard runners are free
+  and unmetered. Total runner minutes go up (~10 → ~17 per run); wall
+  clock goes down. On a public repo that is the right trade.
+
+  One effect of the split is worth understanding before tuning these
+  further. Serially, the four targets shared a warm Go build cache via
+  the `blanket-dev-cache` volume, so `docker-test-smoke` and
+  `docker-test-browser` each ran `make linux` against a populated
+  `GOCACHE`. Fanned out, each job gets its own runner and its own cold
+  volume, and every one of them recompiles the same packages — which
+  very nearly cancelled the parallelism win.
+
+  `.github/actions/go-build-cache` is the fix: it moves `GOCACHE` onto
+  a host path that `actions/cache` carries between jobs and between
+  runs, via the Makefile's `GO_BUILD_CACHE` variable. Measured locally,
+  cold vs warm: `docker-test` 73s → 38s, `docker-test-smoke` 75s → 50s,
+  `docker-test-browser` 82s → 66s. Only `unit` saves the cache, for the
+  same reason only `unit` exports docker layers. The cache a job
+  restores comes from the *previous* run, so the first run after a
+  `go.mod`/`go.sum` change gets no benefit. `race` deliberately opts
+  out — `-race` compiles into a separate `GOCACHE` namespace, so it
+  would download entries it cannot use.
+
+  Locally you need none of this: leave `GO_BUILD_CACHE` unset and the
+  build cache stays in the `blanket-dev-cache` volume, which already
+  persists between runs on your machine.
+
+  Exactly one of them (`unit`) passes `cache-to` to the composite
+  action and so publishes layers back to the GHA cache; the rest read
+  from it. Since they all build the same image concurrently, having
+  each export `mode=max` would upload the same layers N times for no
+  benefit.
+
+  `.github/actions/toolchain-image` is the single definition of how
+  `blanket-dev:latest` gets built — `release.yml` uses it too, so a
+  release is cross-compiled in an image built exactly the way the
+  tested one was. Ahead of #53 (publish the image to GHCR), switching
+  the jobs from building to pulling is then an edit to that one file
+  rather than the same edit repeated across two workflows.
+- **`test`** (required check): an aggregator, not a test runner. It
+  `needs` the four surfaces above and fails if any of them did not
+  succeed. It keeps that name so master's branch protection — which
+  lists `test` as its single required context — goes on working across
+  the fan-out with no settings change, and with no window in which
+  master merges against a check that no longer reports. The
+  `if: always()` plus the explicit result comparison is load-bearing: a
+  job whose `needs` failed is *skipped*, and a skipped required check
+  does **not** block a merge.
 - **`windows`**: runs natively on `windows-latest` — no Docker (Docker
   and Playwright are out of scope on Windows; see the issue #79
   discussion). Builds the binary with `go build` (Go version pinned via
@@ -131,11 +188,14 @@ header comment.
   (currently everything scheduling-related is Linux-only).
 - **`cross-compile`** (master pushes only): `make docker-build` —
   catches platform-only breakage without spending minutes on every PR.
-- **`race`**: builds the same toolchain image as `test`, then runs
-  `make docker-test-race` (issue #119). `continue-on-error: true` — a red
-  `race` run is informational, not blocking, until it's been green for a
-  week; promote it to a required check (drop `continue-on-error`, add to
-  branch protection) once that holds.
+- **`race`**: builds the same toolchain image as the surfaces above,
+  then runs `make docker-test-race` (issue #119). `continue-on-error:
+  true` — a red `race` run is informational, not blocking, until it's
+  been green for a week; promote it to a required check (drop
+  `continue-on-error`, add to branch protection) once that holds. As of
+  the #155 measurements that bar has demonstrably not been met: over 36
+  sampled runs `race` failed 11.1% of the time, the highest rate of any
+  job.
 
 `.github/workflows/licenses.yml` runs the `licenses` job separately, and
 is `paths:`-gated to `go.mod`/`go.sum` changes on PRs and master pushes,
