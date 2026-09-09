@@ -52,3 +52,20 @@ runs:
         load: true
         cache-from: type=gha
         cache-to: ${{ inputs.cache-to }}
+
+    # blanket-dev:latest is now in the local daemon. Tell every subsequent
+    # `make docker-*` in this job not to build it again
+    # (turtlemonvh/blanket#53 phase 1).
+    #
+    # Without this the step above was pure waste: `docker-image` is an
+    # unguarded `docker build` that every docker-* target depends on, so the
+    # first `make docker-*` rebuilt the image with the default dockerd
+    # builder -- zero layers CACHED, a different image id -- and the tests
+    # ran in that rebuild rather than in the image this action just loaded.
+    #
+    # $GITHUB_ENV, not a step output, because the consumer is `make` invoked
+    # from an arbitrary later step in the job, not a step that could read an
+    # output binding.
+    - name: Skip the redundant image rebuild in make
+      shell: bash
+      run: echo "BLANKET_SKIP_IMAGE_BUILD=1" >> "$GITHUB_ENV"

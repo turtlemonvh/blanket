@@ -158,6 +158,27 @@ header comment.
   tested one was. Ahead of #53 (publish the image to GHCR), switching
   the jobs from building to pulling is then an edit to that one file
   rather than the same edit repeated across two workflows.
+
+  That composite action ends by writing `BLANKET_SKIP_IMAGE_BUILD=1`
+  to `$GITHUB_ENV`, which makes the Makefile's `docker-image` target
+  verify the image exists instead of rebuilding it (#53 phase 1).
+  Without it the buildx step was very nearly pointless: every
+  `docker-*` target depends on `docker-image`, which was an unguarded
+  `docker build`, so the first `make docker-*` in a job rebuilt the
+  image with the default dockerd builder — zero layers `CACHED`, a
+  different image id — and **the tests ran in that rebuild, not in the
+  image the workflow had just built**. Measured on run 34158704850:
+  buildx 81s, then a 28s rebuild ending `writing image
+  sha256:b6701ff5…`. The rebuild only cost ~30s rather than a cold
+  ~5min because buildx's `load: true` had already put the base layers
+  in dockerd's content store — which is also why phase 1 guards the
+  rebuild rather than deleting the buildx step.
+
+  Locally the knob is unset and nothing changes: `make docker-test`
+  still builds. Set it by hand only if you have built the image
+  yourself and want to skip the rebuild; if the image is missing the
+  target fails with a clear message rather than a confusing
+  `docker run` error.
 - **`changes`**: classifies the run as docs-only or not (#184), by
   `git diff` against the PR base or the previous master commit. Paths
   under `docs/`, plus root-level `*.md` (`README.md`,
