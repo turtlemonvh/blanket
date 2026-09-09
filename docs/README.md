@@ -20,6 +20,9 @@ here go deeper.
 - [**API**](api.md) — full list of REST endpoints.
 - [**MCP interface**](mcp.md) — tool list, setup (incl. Claude Code),
   permissions, and the default security posture.
+- [**Installation**](install.md) — what the install scripts do, the
+  `INSTALL_*` environment variables, shell integration, where files
+  land, and why no `sudo` is needed.
 - [**Offline install**](offline_install.md) — installing and upgrading on
   machines with no internet access and only local-user permissions, via
   the release bundle.

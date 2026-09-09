@@ -86,7 +86,10 @@ characters (~1,250 tokens)** in the default `mcp.mode = "all"` — the
 worst case, since narrower modes register fewer tools. This is a
 test-enforced budget (`TestToolListFitsContextBudget`), not just a
 target; the actual measured size is logged by that test on every run.
-As of this writing that measured size is 4,958 characters.
+As of this writing that measured size is 4,976 characters -- 24 short
+of the budget, which is the tightest it has ever been. Adding another
+doc page means trimming something first; issue #44 tracks the wider
+fix (tool search / dynamic discovery).
 
 The budget has been raised twice, each time for a tool surface that grew
 rather than prose that sprawled: 4,000 → 4,400 when

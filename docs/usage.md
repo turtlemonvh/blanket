@@ -1,8 +1,8 @@
 # Usage
 
-Detailed examples for working with blanket. The
-[top-level README](../README.md) covers install and a 60-second
-start; this page goes deeper.
+Detailed examples for working with blanket. See
+[installation](install.md) to get set up; this page goes deeper on
+using it.
 
 ## Starting the server
 
