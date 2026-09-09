@@ -51,6 +51,71 @@ jobs:
   # Test surfaces. One job per `make docker-*` target, all in parallel.
   # ---------------------------------------------------------------------
 
+  # Classifies the push/PR as docs-only or not, so the expensive surfaces can
+  # sit this one out (turtlemonvh/blanket#184). Deliberately a plain `git
+  # diff` rather than a third-party paths-filter action: it is six lines, and
+  # a new action would be another SHA pin to keep current (see CONTRIBUTORS'
+  # Dependabot section, and #183 for what happens when one escapes coverage).
+  #
+  # `.github/**` and `.claude/**` are NOT docs, even when the change is all
+  # prose -- a workflow or skill edit can change what CI does, so it must run
+  # the full suite.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # A first push to a branch, or any case where the base is missing
+          # or unreachable, reports code=true. Failing towards "run
+          # everything" is the only safe direction here.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "base '$BASE' unavailable; running the full suite"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          files=$(git diff --name-only "$BASE" "$HEAD")
+          echo "changed files:"
+          echo "$files" | sed 's/^/  /'
+
+          code=false
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            # Order matters. docs/ first; then any *other* nested path is
+            # code, which is what keeps .github/** and .claude/** out even
+            # though they are full of markdown; then root-level *.md.
+            case "$f" in
+              docs/*) ;;
+              */*)    code=true; break ;;
+              *.md)   ;;
+              *)      code=true; break ;;
+            esac
+          done <<< "$files"
+
+          # An empty diff is not evidence of a docs-only change.
+          [ -n "$files" ] || code=true
+
+          echo "code=$code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # fmt and unit always run, even on a docs-only change. That is not
+  # belt-and-braces: docs/*.md is go:embed-ed through lib/docs, so renaming
+  # or removing a page breaks lib/docs' page map and embed_test.go. A fast
+  # path that skipped `unit` would sail straight past that -- and #175, which
+  # adds docs/install.md plus a page-map entry, is exactly such a change.
   fmt:
     name: fmt
     runs-on: ubuntu-latest
@@ -90,6 +155,8 @@ jobs:
 
   smoke:
     name: smoke
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -104,6 +171,8 @@ jobs:
 
   browser:
     name: browser
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -141,12 +210,20 @@ jobs:
   # protection it is trying to preserve.
   test:
     name: test
-    needs: [fmt, unit, smoke, browser]
+    needs: [changes, fmt, unit, smoke, browser]
     if: always()
     runs-on: ubuntu-latest
     steps:
+      # `skipped` is accepted only on a run the classifier called docs-only,
+      # and only from the two surfaces allowed to skip (#184). Everywhere
+      # else it still fails, which is the distinction this gate exists to
+      # make: "correctly sat out" and "never ran" must not look alike.
+      #
+      # If the `changes` job itself failed, CODE is empty, which is not
+      # 'false', so every skip below is a failure. Fail-safe by construction.
       - name: Check every test surface succeeded
         env:
+          CODE: ${{ needs.changes.outputs.code }}
           RESULTS: >-
             fmt=${{ needs.fmt.result }}
             unit=${{ needs.unit.result }}
@@ -154,17 +231,28 @@ jobs:
             browser=${{ needs.browser.result }}
         run: |
           echo "$RESULTS"
+          echo "changes.code=${CODE:-<unset>}"
           failed=0
           for pair in $RESULTS; do
-            case "${pair#*=}" in
+            name="${pair%%=*}"
+            result="${pair#*=}"
+            case "$result" in
               success) ;;
-              *) echo "::error::${pair%%=*} did not succeed (${pair#*=})"; failed=1 ;;
+              skipped)
+                if [ "$CODE" = "false" ] && { [ "$name" = "smoke" ] || [ "$name" = "browser" ]; }; then
+                  echo "$name skipped: docs-only change"
+                else
+                  echo "::error::$name was skipped but this run is not docs-only (changes.code=${CODE:-<unset>})"
+                  failed=1
+                fi
+                ;;
+              *) echo "::error::$name did not succeed ($result)"; failed=1 ;;
             esac
           done
           if [ "$failed" -ne 0 ]; then
             exit 1
           fi
-          echo "all test surfaces passed"
+          echo "all required test surfaces passed"
 
   # ---------------------------------------------------------------------
   # Supplementary jobs. Already parallel before the fan-out; unchanged
@@ -184,6 +272,8 @@ jobs:
   # "green for a week" bar has demonstrably not been met yet. See #169.
   race:
     name: race
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -212,6 +302,8 @@ jobs:
   # averages 68s (peak 114s), which looks uncached. See #168.
   windows:
     name: windows
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     defaults:
       run:
