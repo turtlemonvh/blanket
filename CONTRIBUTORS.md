@@ -546,11 +546,21 @@ Dependabot proposes it (security-advisory updates bypass cooldown by
 design); the weekly govulncheck/grype job (#144) catching disclosures
 after the fact; Go's checksum database (`go.sum` / sum.golang.org)
 making tampering with an already-published version detectable; and
-every GitHub Action in `.github/workflows/*.yml` pinned to a commit SHA
-with its tag as a trailing comment (`uses: actions/checkout@<sha> #
-v4.4.0`) — Dependabot's `github-actions` ecosystem proposes the SHA
-bump when a pinned action moves, keeping the pins current without
-manual lookups.
+every GitHub Action pinned to a commit SHA with its tag as a trailing
+comment (`uses: actions/checkout@<sha> # v4.4.0`) — Dependabot's
+`github-actions` ecosystem proposes the SHA bump when a pinned action
+moves, keeping the pins current without manual lookups.
+
+That last control only works where Dependabot is actually looking, and
+"where" is not obvious: for this ecosystem a directory counts as a
+manifest only if it holds workflows or an `action.yml`, so `/` covers
+`.github/workflows` but not the composite actions under
+`.github/actions/*/action.yml`. #160 moved four pins into exactly those
+files and they stopped being monitored — visible only when Dependabot
+closed #174 saying `docker/build-push-action` was "no longer a
+dependency". `dependabot.yml` now lists `/.github/actions/*` alongside
+`/`. **If you add a pinned action anywhere outside `.github/workflows`
+or `.github/actions/`, add that path to `directories` in the same PR.**
 
 ### Ownership: assignee = whose turn
 
