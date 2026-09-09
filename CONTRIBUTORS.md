@@ -179,9 +179,31 @@ header comment.
   yourself and want to skip the rebuild; if the image is missing the
   target fails with a clear message rather than a confusing
   `docker run` error.
+- **`changes`**: classifies the run as docs-only or not (#184), by
+  `git diff` against the PR base or the previous master commit. Paths
+  under `docs/`, plus root-level `*.md` (`README.md`,
+  `CONTRIBUTORS.md`), count as docs; **everything else does not,
+  including `.github/**` and `.claude/**`** — a workflow or skill edit
+  can change what CI does, so it runs the full suite even though it is
+  all prose. Anything it cannot classify (missing base, empty diff)
+  reports `code=true` and runs everything.
+
+  On a docs-only run, `smoke`, `browser`, `race` and `windows` skip.
+  **`fmt` and `unit` always run**, which is the point of the design
+  rather than caution: `docs/*.md` is `go:embed`-ed through `lib/docs`,
+  so renaming or deleting a page breaks the page map and
+  `embed_test.go`. A fast path that skipped `unit` would miss exactly
+  the way a docs change can break the build.
 - **`test`** (required check): an aggregator, not a test runner. It
   `needs` the four surfaces above and fails if any of them did not
-  succeed. It keeps that name so master's branch protection — which
+  succeed.
+
+  It accepts `skipped` **only** from `smoke` and `browser`, and only
+  when `changes` reported `code=false`. A surface that skips on a run
+  touching code is a failure, and so is a skip when the `changes` job
+  itself failed (its output is then empty, which is not `'false'`).
+  That distinction is the whole reason the gate is strict: "correctly
+  sat out" and "never ran" must not look alike. It keeps that name so master's branch protection — which
   lists `test` as its single required context — goes on working across
   the fan-out with no settings change, and with no window in which
   master merges against a check that no longer reports. The
