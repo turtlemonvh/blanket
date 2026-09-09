@@ -43,7 +43,21 @@ updates:
       - "status: in-review"
 
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # `directories`, not `directory`: for this ecosystem a directory is a
+    # manifest only if it holds workflows or an action.yml, so "/" covers
+    # .github/workflows but NOT the composite actions under
+    # .github/actions/*/action.yml. #160 extracted the toolchain-image and
+    # go-build-cache steps into exactly those files, and the four action
+    # pins that moved with them silently fell out of Dependabot's view --
+    # confirmed when Dependabot closed #174 with "Looks like
+    # docker/build-push-action is no longer a dependency". SHA-pinning is
+    # only half the supply-chain control in this file's header; Dependabot
+    # proposing the bumps is the other half, and it had stopped for those
+    # four. The glob is deliberate: a new composite action is covered the
+    # day it is added, rather than needing this list edited again.
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
     cooldown:

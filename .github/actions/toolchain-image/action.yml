@@ -15,9 +15,12 @@
 #
 # The action SHAs below are pinned the same way the workflows pin theirs
 # (see .github/dependabot.yml and the supply-chain rationale in its header).
-# Dependabot's `github-actions` ecosystem is configured at `directory: "/"`;
-# if a weekly run bumps the pins in .github/workflows but leaves these
-# behind, this file needs adding to that config explicitly.
+# The warning this comment used to carry -- that `directory: "/"` would not
+# reach these pins -- turned out to be exactly right: Dependabot closed #174
+# with "Looks like docker/build-push-action is no longer a dependency" the
+# moment #160 moved that pin here. dependabot.yml now lists
+# `/.github/actions/*` alongside `/`, so this file is covered; adding a new
+# composite action needs no further config change.
 name: Build toolchain image
 description: Build blanket-dev:latest from the GHA layer cache and load it into the docker daemon.
 
@@ -42,7 +45,7 @@ runs:
     # measured over 100 builds while investigating #155). mode=max on the
     # writer exports every layer for maximum hit rate -- fits inside GHA's
     # 10GB per-repo cache budget today.
-    - uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+    - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
       with:
         context: .
         tags: blanket-dev:latest
