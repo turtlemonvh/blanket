@@ -204,6 +204,27 @@ ifneq ($(GO_BUILD_CACHE),)
 GO_BUILD_CACHE_MOUNT = -v $(abspath $(GO_BUILD_CACHE)):/gocache -e GOCACHE=/gocache
 endif
 
+# BLANKET_SKIP_IMAGE_BUILD -- set to any non-empty value to assert that
+# $(DOCKER_IMAGE) has already been built by someone else, and that
+# `docker-image` should verify it rather than rebuild it
+# (turtlemonvh/blanket#53 phase 1).
+#
+# Why this exists: every docker-* target below depends on `docker-image`,
+# which was an unguarded `docker build`. In CI that meant the composite
+# action's buildx step loaded blanket-dev:latest, and then the very first
+# `make docker-*` rebuilt straight over it with the default dockerd builder
+# -- zero layers CACHED, a different image id, ~30s per job. The tests did
+# not run in the image the workflow built. Measured on run 34158704850:
+# buildx 81s, then a full rebuild 28s ending `writing image sha256:b6701ff5`.
+#
+# That is wasteful today and wrong later: once #53 phase 3 makes the image a
+# pinned artifact pulled from GHCR, silently rebuilding over it would defeat
+# the pin entirely.
+#
+# Unset (the default) nothing changes, which is what you want locally -- a
+# plain `make docker-test` still builds.
+BLANKET_SKIP_IMAGE_BUILD ?=
+
 DOCKER_RUN = docker run --rm \
 	-v $(CURDIR):/src \
 	-v blanket-dev-cache:/go \
@@ -213,7 +234,12 @@ DOCKER_RUN = docker run --rm \
 	$(DOCKER_IMAGE)
 
 docker-image:
+ifeq ($(strip $(BLANKET_SKIP_IMAGE_BUILD)),)
 	docker build -t $(DOCKER_IMAGE) .
+else
+	@docker image inspect $(DOCKER_IMAGE) >/dev/null \
+		|| { echo "BLANKET_SKIP_IMAGE_BUILD is set but $(DOCKER_IMAGE) does not exist"; exit 1; }
+endif
 
 docker-check-fmt: docker-image
 	$(DOCKER_RUN) make check-fmt
