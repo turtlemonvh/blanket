@@ -76,7 +76,7 @@ flowchart LR
 
     subgraph serverproc["blanket serve (server process)"]
         router["Gin HTTP router<br/>(server/server.go)"]
-        tf["tailed_file collection<br/>(lib/tailed_file)"]
+        tf["tailed_file collection<br/>(lib/tailed_file)<br/>follower: lib/follow"]
     end
 
     db[("BoltDB — single .db file<br/>tasks + workers buckets (lib/bolt)<br/>queue bucket (lib/bolt/queue.go)<br/>meta bucket: schema version, lock holder (lib/bolt/meta.go)")]
@@ -91,7 +91,7 @@ flowchart LR
     client -- "HTTP: submit/list/cancel tasks,<br/>SSE log/event streams" --> router
     router -- "direct calls: DB.*, Q.*" --> db
     router -- "reads lines from" --> tf
-    tf -- "tails" --> logs
+    tf -- "tails (lib/follow: fsnotify on unix,<br/>polling on Windows)" --> logs
 
     claimloop -- "HTTP: POST /task/claim/:workerId,<br/>PUT /task/:id/run|progress|finish" --> router
     claimloop -- "starts, monitors" --> subcmd
