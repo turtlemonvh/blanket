@@ -40,7 +40,7 @@ jobs:
       # (see `windows` job in ci.yml for the same setup-go pattern).
       # go-version-file tracks go.mod's pinned toolchain -- see
       # CLAUDE.md's "three Go version pins must stay in sync" gotcha.
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
