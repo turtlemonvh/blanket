@@ -1,15 +1,9 @@
 module github.com/turtlemonvh/blanket
 
-go 1.25.0
-
-// Keep in sync with Dockerfile's GO_VERSION and scripts/setup.sh's
-// GO_VERSION. Locks the exact toolchain `go` uses (GOTOOLCHAIN=auto
-// auto-downloads it) so a drifted/ambient system go can't cause local
-// gofmt/build/test to diverge from CI. See CLAUDE.md Gotchas.
-toolchain go1.25.14
+go 1.26.0
 
 require (
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-gonic/gin v1.12.0
 	github.com/manucorporat/sse v0.0.0-20160126180136-ee05b128a739
 	github.com/modelcontextprotocol/go-sdk v1.7.0
@@ -22,7 +16,7 @@ require (
 	github.com/stretchr/testify v1.12.1
 	go.etcd.io/bbolt v1.5.0
 	go.mongodb.org/mongo-driver/v2 v2.9.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 )
 
 require (
