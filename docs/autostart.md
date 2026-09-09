@@ -49,9 +49,8 @@ prints the binary/config/data paths it deliberately leaves behind —
 see "What `blanket uninstall` does and does not remove" below.
 
 `blanket service install` uses the `--config`/`--port` this command
-itself resolves — the same config file search
-[the server uses](../README.md#quick-start) (or whatever `-c`/`-p` you
-pass explicitly) — so the service runs against the exact config you
+itself resolves — the same config file search the server uses (or
+whatever `-c`/`-p` you pass explicitly) — so the service runs against the exact config you
 had active, not whatever a bare `blanket` invocation would default to
 later.
 
@@ -68,7 +67,7 @@ systemctl --user enable --now blanket.service
 ```
 
 Logs go to `blanket-service.log` under blanket's data directory (see
-the [README](../README.md#installation) for the exact path), via the
+[installation](install.md#where-files-land) for the exact path), via the
 unit's `StandardOutput`/`StandardError`. `Restart=on-failure` restarts
 the server if it crashes.
 

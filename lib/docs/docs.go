@@ -28,6 +28,7 @@ var pages = map[string]string{
 	"api":       "api.md",
 	"flow":      "task_flow.md",
 	"upgrade":   "upgrade.md",
+	"install":   "install.md",
 }
 
 var (

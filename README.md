@@ -22,28 +22,16 @@ curl -sSfL https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/
 irm https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/install.ps1 | iex
 ```
 
-The installers download the binary (verified against the release's
-`SHA256SUMS`, then renamed into place so a failed download never leaves a
-half-written binary behind), create config/data directories, write a
-default config file, and fetch the example task types. Set `INSTALL_DIR`
-to override the binary location, or `VERSION=v0.1.0` to pin a release. If Claude Code is on your `$PATH`, they'll also
-offer to install the `blanket-task-type` authoring skill — set
-`INSTALL_SKILLS=1` (or `0`) to decide without being prompted.
+The install script adds blanket to your `PATH`, sets up configuration,
+loads default task types, and offers to set blanket up to run on boot
+and to install AI-agent skills for drafting task types. See
+[**installation**](docs/install.md) for the environment variables that
+control each of those, and where files land.
 
-They'll also offer to register blanket as a background service that
-starts on login/boot (off by default) — set `INSTALL_AUTOSTART=1` (or
-`0`) to decide without being prompted, or run `blanket service install`
-any time afterward. See [autostart](docs/autostart.md) for details and
-`blanket uninstall`.
-
-They'll also offer to add the binary to `PATH` and enable tab
-completion — bash, zsh, and fish on Linux/macOS, PowerShell on
-Windows — by appending a clearly marked block to your shell's rc file
-(`~/.bashrc`, `~/.zshrc`, `~/.config/fish/config.fish`, or
-`$PROFILE`), the same pattern nvm and conda use. Re-running the
-installer updates that block in place instead of duplicating it. Set
-`INSTALL_SHELL_INTEGRATION=1` (or `0`) to decide without being
-prompted; `0` also removes a block a previous run added.
+**No `sudo` or administrator rights are needed** for a default install
+— everything goes under your home directory. Blanket is designed to be
+easy to set up inside organisations with a semi-paranoid security
+culture.
 
 No internet access, or only local-user permissions? Each release
 attaches `blanket-bundle-<version>.tar.gz` — binaries, checksums,
@@ -58,18 +46,10 @@ blanket upgrade --yes        # install it and restart the server onto it
 blanket rollback --yes       # change your mind
 ```
 
-`blanket upgrade` verifies the download against the release's
-`SHA256SUMS`, keeps the binary it replaces so `blanket rollback` can put
-it back, takes a database backup first, and restarts the running server
-onto the new binary without losing the work in flight. `--print-plan`
-shows the exact steps, `--bundle` installs from an offline bundle, and
-`--stage-only` / `--no-restart` split it up. See
+Upgrades are checksum-verified, take a database backup first, keep the
+binary they replace so `blanket rollback` can put it back, and restart
+the running server without losing the work in flight. See
 [**upgrading**](docs/upgrade.md).
-
-| | Binary | Config | Data |
-|---|---|---|---|
-| Linux/macOS | `~/.local/bin/blanket` | `~/.config/blanket/` | `~/.local/share/blanket/` |
-| Windows | `%LOCALAPPDATA%\blanket\bin\blanket.exe` | `%LOCALAPPDATA%\blanket\` | `%LOCALAPPDATA%\blanket\` |
 
 ## Quick start
 

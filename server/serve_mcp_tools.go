@@ -28,7 +28,7 @@ func textResult(s string) (*mcp.CallToolResult, any, error) {
 }
 
 type blanketDocsArgs struct {
-	Page string `json:"page" jsonschema:"doc page: overview, authoring, schema, tags, usage, api, or flow"`
+	Page string `json:"page" jsonschema:"doc page: overview, authoring, schema, tags, usage, api, flow, upgrade, or install"`
 }
 
 func (s *ServerConfig) mcpDocs(ctx context.Context, req *mcp.CallToolRequest, args blanketDocsArgs) (*mcp.CallToolResult, any, error) {

@@ -97,10 +97,9 @@ An offline machine also has no controlling terminal to prompt on in
 the usual case (or does, but you'd rather not be asked), so set
 `INSTALL_SKILLS=1` or `INSTALL_SKILLS=0` to decide up front instead of
 relying on the interactive prompt. Same goes for
-`INSTALL_SHELL_INTEGRATION` — see [README](../README.md#installation)
-for what it does (PATH + shell completion via a marked block in your
-shell's rc file); set it to `1` or `0` rather than leaving it to the
-prompt.
+`INSTALL_SHELL_INTEGRATION` — see [installation](install.md) for what
+it does (PATH + shell completion via a marked block in your shell's rc
+file); set it to `1` or `0` rather than leaving it to the prompt.
 
 **Linux / macOS:**
 
@@ -124,8 +123,8 @@ $env:INSTALL_SHELL_INTEGRATION = "1"
 
 Everything else — config generation, `~/.local/bin` (or
 `%LOCALAPPDATA%\blanket\bin`) placement, data directory layout — is
-unchanged and already offline-safe. See the main
-[README](../README.md#installation) for the default paths.
+unchanged and already offline-safe. See
+[installation](install.md#where-files-land) for the default paths.
 
 If you skip `TYPES_SRC`, the installer will still try to download
 example types and print `warn: could not download ...` for each one;
