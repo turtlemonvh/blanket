@@ -54,12 +54,22 @@ function Stop-IfRunning {
 
 function Fail {
     param([string]$Message)
-    Write-Host "--- server.log ---"
-    $serverLog = Join-Path $WorkDir "server.log"
-    if (Test-Path $serverLog) { Get-Content $serverLog | Write-Host }
-    Write-Host "--- worker.log ---"
-    $workerLog = Join-Path $WorkDir "worker.log"
-    if (Test-Path $workerLog) { Get-Content $workerLog | Write-Host }
+
+    # Stop the server and worker BEFORE reading their logs. Both are
+    # Start-Process redirections, so output sits in a buffer the parent
+    # cannot see until the child exits -- dumping first is why a real
+    # failure (turtlemonvh/blanket#169) printed one line of server.log and
+    # an empty worker.log, which is the half of a flake investigation that
+    # actually costs attention.
+    Stop-IfRunning $script:WorkerProcess
+    Stop-IfRunning $script:ServerProcess
+    Start-Sleep -Milliseconds 250
+
+    foreach ($name in @("server.log", "worker.log", "worker.err.log")) {
+        Write-Host "--- $name ---"
+        $path = Join-Path $WorkDir $name
+        if (Test-Path $path) { Get-Content $path | Write-Host } else { Write-Host "(absent)" }
+    }
     throw "smoke: FAIL - $Message"
 }
 
@@ -175,6 +185,8 @@ try {
     foreach ($type in $typesToRun) {
         $taskId = $taskIds[$type]
         $finalState = $null
+        $task = $null
+        $waitStart = Get-Date
         for ($i = 0; $i -lt 200; $i++) {
             if ($WorkerProcess.HasExited) {
                 Fail "worker exited unexpectedly (exit code $($WorkerProcess.ExitCode)) while waiting on $type"
@@ -186,10 +198,18 @@ try {
             }
             Start-Sleep -Milliseconds 100
         }
+        $waited = [math]::Round(((Get-Date) - $waitStart).TotalSeconds, 1)
+
         if ($finalState -ne "SUCCESS") {
-            Fail "task $taskId (type $type) did not reach SUCCESS (got '$finalState')"
+            Fail "task $taskId (type $type) did not reach SUCCESS after ${waited}s (got '$finalState', timeout $($task.timeout)s, exitCode $($task.exitCode))"
         }
-        Write-Host "smoke: $type -> SUCCESS"
+
+        # The elapsed time is printed on success, not just on failure,
+        # because the margin is the thing worth watching: #169's Windows
+        # flake was a task quietly running close to its timeout on a loaded
+        # runner until one day it crossed. A number in every green log
+        # turns "it broke" into "it had been drifting for weeks".
+        Write-Host "smoke: $type -> SUCCESS (${waited}s of a $($task.timeout)s budget)"
     }
 
     Write-Host "smoke: OK"
