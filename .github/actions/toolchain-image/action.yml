@@ -7,11 +7,10 @@
 # needs this same preamble. Keeping it in one file means a cache-strategy
 # change or an action version bump is a single edit rather than six.
 #
-# release.yml uses it too, so "how blanket-dev:latest gets built" has exactly
-# one definition in the repo. That matters for #53 (publishing the image to
-# GHCR): switching the docker jobs from building to pulling is an edit to
-# this file, not the same edit repeated across two workflows with an
-# opportunity to diverge each time.
+# release.yml uses it too, so "how blanket-dev:latest gets here" has exactly
+# one definition in the repo. That is what made #53 cheap: switching every
+# docker job from building to pulling was an edit to this one file, and
+# release.yml inherited the fast path without being touched.
 #
 # The action SHAs below are pinned the same way the workflows pin theirs
 # (see .github/dependabot.yml and the supply-chain rationale in its header).
@@ -22,7 +21,7 @@
 # `/.github/actions/*` alongside `/`, so this file is covered; adding a new
 # composite action needs no further config change.
 name: Build toolchain image
-description: Build blanket-dev:latest from the GHA layer cache, and either load it into the docker daemon or push it to GHCR.
+description: Get blanket-dev:latest into the docker daemon -- pulled from GHCR when the content tag hits, built from the GHA layer cache when it misses -- or push it to GHCR.
 
 inputs:
   cache-to:
@@ -80,15 +79,49 @@ runs:
         # from the Dockerfile, and continuing would publish or pull a tag
         # that means something different than it claims.
 
-    # Buildx is required for the gha cache backend used below.
+    # The fast path (turtlemonvh/blanket#53 phase 3): if master already
+    # published an image for exactly these inputs, pull it and skip the
+    # build entirely.
+    #
+    # This step can never fail the job. No `set -e`, and the pull's exit
+    # status is consumed by the `if` -- a miss, a cold registry, a package
+    # that is still private, or GHCR being down all fall through to the
+    # buildx build below, which is precisely what every job did before this
+    # existed. The failure mode of the whole scheme is "as slow as
+    # yesterday", never "red".
+    #
+    # Anonymous: the package is public, which is what the local `docker
+    # pull` path in #53 needs, so there is no login step here. Only the
+    # publishing workflow authenticates.
+    - name: Pull the toolchain image from GHCR
+      if: inputs.push != 'true'
+      id: pull
+      shell: bash
+      run: |
+        set -uo pipefail
+        ref="${{ inputs.image }}:${{ steps.tag.outputs.tag }}"
+
+        if docker pull --quiet "$ref"; then
+          docker tag "$ref" blanket-dev:latest
+          echo "hit=true" >> "$GITHUB_OUTPUT"
+          echo "pulled $ref -- skipping the build"
+        else
+          echo "hit=false" >> "$GITHUB_OUTPUT"
+          echo "no image published for $ref -- building it"
+        fi
+
+    # Buildx is required for the gha cache backend used below. Skipped on a
+    # pull hit along with the build itself: setting it up costs a few
+    # seconds and nothing downstream reads it when there is no build.
     - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      if: inputs.push == 'true' || steps.pull.outputs.hit != 'true'
 
     # Cold builds take ~5m; cached builds settle to ~60s (mean 65s, p50 61s,
     # measured over 100 builds while investigating #155). mode=max on the
     # writer exports every layer for maximum hit rate -- fits inside GHA's
     # 10GB per-repo cache budget today.
     - name: Build and load blanket-dev:latest
-      if: inputs.push != 'true'
+      if: inputs.push != 'true' && steps.pull.outputs.hit != 'true'
       uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
       with:
         context: .
@@ -125,9 +158,12 @@ runs:
         cache-from: type=gha
         cache-to: ${{ inputs.cache-to }}
 
-    # blanket-dev:latest is now in the local daemon. Tell every subsequent
-    # `make docker-*` in this job not to build it again
-    # (turtlemonvh/blanket#53 phase 1).
+    # blanket-dev:latest is now in the local daemon, pulled or built. Tell
+    # every subsequent `make docker-*` in this job not to build it again
+    # (turtlemonvh/blanket#53 phase 1). This matters more after phase 3
+    # than before it: an unguarded rebuild over a pulled image would not
+    # merely waste time, it would mean the tests never run in the pinned
+    # artifact the tag promises.
     #
     # Without this the step above was pure waste: `docker-image` is an
     # unguarded `docker build` that every docker-* target depends on, so the
