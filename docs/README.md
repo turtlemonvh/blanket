@@ -37,6 +37,14 @@ here go deeper.
   `curl` recipe that drives it, `--exec-mode` / `--drain-mode`, and what
   to do when a migration or a restart dies half-way.
 
+## Examples
+
+Integration recipes — how to run blanket alongside something else.
+
+- [**Tailscale**](examples/tailscale.md) — putting blanket on a tailnet
+  with HTTPS and a real name, via `tailscale serve` or a Tailscale
+  Service, and why Funnel is the wrong tool for it.
+
 ## For maintainers
 
 - [**Task flow**](task_flow.md) — task and worker state machines,
