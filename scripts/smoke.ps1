@@ -200,16 +200,31 @@ try {
         }
         $waited = [math]::Round(((Get-Date) - $waitStart).TotalSeconds, 1)
 
-        if ($finalState -ne "SUCCESS") {
-            Fail "task $taskId (type $type) did not reach SUCCESS after ${waited}s (got '$finalState', timeout $($task.timeout)s, exitCode $($task.exitCode))"
+        # How long the *task* ran, which is not the same as how long this
+        # loop waited for it. Every task is submitted up front and the
+        # worker drains the queue, so by the time the loop reaches the
+        # second type it has often already finished -- the wait reads 0s
+        # while the task itself took seconds. The budget is enforced
+        # against this number (worker.go: StartedTs + Timeout), so this is
+        # the one to compare against it.
+        #
+        # Unix seconds, so sub-second tasks read 0s. That is fine for what
+        # this is watching: whether a task is creeping up on its timeout.
+        $ran = "?"
+        if ($task.startedTs -gt 0 -and $task.lastUpdatedTs -ge $task.startedTs) {
+            $ran = "$($task.lastUpdatedTs - $task.startedTs)s"
         }
 
-        # The elapsed time is printed on success, not just on failure,
-        # because the margin is the thing worth watching: #169's Windows
-        # flake was a task quietly running close to its timeout on a loaded
-        # runner until one day it crossed. A number in every green log
-        # turns "it broke" into "it had been drifting for weeks".
-        Write-Host "smoke: $type -> SUCCESS (${waited}s of a $($task.timeout)s budget)"
+        if ($finalState -ne "SUCCESS") {
+            Fail "task $taskId (type $type) did not reach SUCCESS (got '$finalState', ran $ran of a $($task.timeout)s budget, script waited ${waited}s, exitCode $($task.exitCode))"
+        }
+
+        # Printed on success, not just on failure, because the margin is
+        # the thing worth watching: #169's Windows flake was a task
+        # quietly running close to its timeout on a loaded runner until one
+        # day it crossed. A number in every green log turns "it broke"
+        # into "it had been drifting for weeks".
+        Write-Host "smoke: $type -> SUCCESS (ran $ran of a $($task.timeout)s budget; script waited ${waited}s)"
     }
 
     Write-Host "smoke: OK"
