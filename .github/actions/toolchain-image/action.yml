@@ -63,7 +63,22 @@ runs:
     - name: Compute toolchain tag
       id: tag
       shell: bash
-      run: echo "tag=$("$GITHUB_WORKSPACE/scripts/toolchain-hash.sh")" >> "$GITHUB_OUTPUT"
+      run: |
+        set -euo pipefail
+        tag="$("$GITHUB_WORKSPACE/scripts/toolchain-hash.sh")"
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+        # Echoed as well as written to $GITHUB_OUTPUT so the value is
+        # visible in the job log. That is the one place you can check that
+        # CI and a local `scripts/toolchain-hash.sh` agree -- and a silent
+        # disagreement between them is the failure mode this whole scheme
+        # is built to avoid.
+        echo "toolchain tag: $tag"
+
+        # A failure here is deliberately fatal rather than a fallback to
+        # building: the script only fails when its INPUTS list has drifted
+        # from the Dockerfile, and continuing would publish or pull a tag
+        # that means something different than it claims.
 
     # Buildx is required for the gha cache backend used below.
     - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
