@@ -459,6 +459,14 @@ timeout = 300
 Supported executors: `bash` (default), `cmd` (Windows), `powershell`,
 or any executable that accepts `-c <command>`.
 
+Executors run the command non-interactively and without user shell
+config: `bash -c` already ignores `~/.bashrc` for a non-interactive
+shell, and `powershell` is invoked with `-NoProfile -NonInteractive` so
+it behaves the same way. A task runs what its task type declares, not
+that plus whatever is in the machine owner's profile. If a task needs
+something a profile would have set, set it explicitly in the task type's
+`[[environment.default]]` or in the command itself.
+
 See [task_type_definitions.md](task_type_definitions.md) for the full
 schema, and [`examples/types/`](../examples/types/) for working
 copy-paste starters.

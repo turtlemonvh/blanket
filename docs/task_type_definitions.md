@@ -251,3 +251,11 @@ timeout = 10
 ```
 
 No bash or WSL required — runs anywhere `cmd.exe` is available.
+
+The `powershell` executor is invoked with `-NoProfile -NonInteractive`,
+so a task does not inherit the machine owner's PowerShell profile and a
+prompt becomes an error rather than a task that hangs until its timeout.
+Budget its `timeout` for interpreter startup as well as the work:
+`powershell.exe` starts far slower than `cmd.exe`, which is why
+[`windows_powershell.toml`](../examples/types/windows_powershell.toml)
+allows 60s where its `cmd` sibling allows 10.
