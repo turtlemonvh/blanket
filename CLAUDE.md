@@ -118,19 +118,34 @@ convention and were left as-is; this applies going forward.)
   host" is the project's main promise. Before landing platform-sensitive
   code, run `make docker-build` locally — the master-only CI job will
   otherwise catch it post-merge.
-- **Three Go version pins must stay in sync:** `go.mod`'s `toolchain`
+- **Three Go version pins must stay in sync:** `go.mod`'s `go`
   directive, the Dockerfile's `ARG GO_VERSION`, and `scripts/setup.sh`'s
   `GO_VERSION`. They drifted once (system Go upgraded to 1.27 mid-session
   while all three were still pinned to 1.25.9, and a bare `gofmt` on
-  `PATH` reformatted differently than CI expected — broke #73 and #75).
-  `go.mod`'s `toolchain` directive is the load-bearing fix: with
-  `GOTOOLCHAIN=auto` (the Go default), any `go` subcommand — `go build`,
-  `go test`, `go env`, etc. — re-execs into the pinned toolchain even
-  when the ambient system `go` has drifted. That's also why `make
-  check-fmt` resolves gofmt via `` $(go env GOROOT)/bin/gofmt `` instead
-  of a bare `gofmt` on `PATH` — a raw `gofmt` binary isn't a `go`
-  subcommand, so it doesn't get toolchain-switched on its own. When
-  bumping the Go version, update all three pins in the same PR.
+  `PATH` reformatted differently than CI expected — broke #73 and #75),
+  and again in #185. **`go_pins_test.go` now enforces this**, so it is a
+  failing test rather than a thing to remember.
+
+  This used to say `go.mod`'s `toolchain` directive, and that directive
+  is gone: `go mod tidy` deletes a `toolchain` line that merely repeats
+  the `go` line, which is how Dependabot's #185 silently removed
+  `toolchain go1.25.14` while raising `go` to 1.26.0. A dependency can
+  raise the `go` directive (x/sys v0.48.0 requires 1.26.0), so there is
+  no lower line to pin a newer toolchain against.
+
+  **The Dockerfile sets `GOTOOLCHAIN=local`** in its place. Without it,
+  `GOTOOLCHAIN=auto` quietly downloads and re-execs into whatever `go`
+  directive go.mod names, so the image's baked Go stops deciding
+  anything — measured locally at ~7.5s per fresh container, and it puts a
+  proxy.golang.org fetch inside a container built precisely so it would
+  not need one. With `local`, a version mismatch is a loud build failure
+  naming the versions instead.
+
+  That's also why `make check-fmt` resolves gofmt via
+  `` $(go env GOROOT)/bin/gofmt `` instead of a bare `gofmt` on `PATH` —
+  a raw `gofmt` binary isn't a `go` subcommand, so it doesn't get
+  toolchain-switched on its own. When bumping the Go version, update all
+  three pins in the same PR.
 
 ## Issue workflow
 
