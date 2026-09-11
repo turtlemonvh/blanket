@@ -153,11 +153,18 @@ header comment.
   benefit.
 
   `.github/actions/toolchain-image` is the single definition of how
-  `blanket-dev:latest` gets built — `release.yml` uses it too, so a
+  `blanket-dev:latest` gets there — `release.yml` uses it too, so a
   release is cross-compiled in an image built exactly the way the
-  tested one was. Ahead of #53 (publish the image to GHCR), switching
-  the jobs from building to pulling is then an edit to that one file
-  rather than the same edit repeated across two workflows.
+  tested one was. That is what made #53 cheap: switching every docker
+  job from building to pulling was an edit to that one file, and
+  `release.yml` inherited the fast path without being touched.
+
+  The action pulls `ghcr.io/turtlemonvh/blanket-dev:<content tag>`
+  first and builds only on a miss. **A miss can never fail a job** —
+  an unpublished tag, a private package, a registry outage and a cold
+  start all fall through to the buildx build the jobs did before this
+  existed, so the worst case is yesterday's speed rather than a red
+  run. The pull is anonymous; only the publishing workflow logs in.
 
   That composite action ends by writing `BLANKET_SKIP_IMAGE_BUILD=1`
   to `$GITHUB_ENV`, which makes the Makefile's `docker-image` target
@@ -286,7 +293,10 @@ local `docker pull` need to agree by construction, not by coincidence.
 
 A second, moving `master` tag points at the newest published image, as
 the "just give me something recent" fallback for a developer whose local
-inputs match nothing published.
+inputs match nothing published. CI never uses it: a job wants the image
+for *its* inputs or no image at all, and pulling something merely recent
+would mean testing against a toolchain that isn't the one the branch
+describes.
 
 GHCR has no retention setting, so the workflow prunes as it goes: every
 untagged version (re-pointing `master` strands one on each push, and an
