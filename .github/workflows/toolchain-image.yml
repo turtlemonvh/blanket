@@ -1,0 +1,155 @@
+name: Toolchain image
+
+# Publishes the blanket-dev toolchain image to GHCR so CI jobs and
+# developers can pull it instead of building it (turtlemonvh/blanket#53,
+# phase 2). Nothing consumes the published image yet -- phase 3 adds the
+# pull to .github/actions/toolchain-image, phase 4 adds `make docker-pull`.
+#
+# Runs in parallel with ci.yml rather than as a dependency of it, so it
+# never adds latency to a PR or to a merge. The consequence is a race on
+# the first master push after a dependency bump: CI can start before the
+# image is pushed, miss the tag, and build. That is correct behaviour, not
+# a bug to design around -- a miss is always just today's build.
+#
+# Master only. PRs never push: they would add latency to the thing this
+# issue exists to speed up, and a PR that misses its tag falls back to the
+# buildx path with the same gha layer cache it uses today.
+on:
+  push:
+    branches: [master]
+    paths:
+      # Keep in sync with INPUTS in scripts/toolchain-hash.sh -- that list
+      # is the tag's definition, this one only decides when to rebuild. A
+      # path here that isn't a hash input just republishes an identical
+      # image under the tag it already has; a hash input missing from here
+      # means master never publishes the tag CI will look for.
+      - Dockerfile
+      - .dockerignore
+      - go.mod
+      - go.sum
+      - tests/e2e/package.json
+      - tests/e2e/package-lock.json
+      # Not hash inputs, but a change to any of them can change what gets
+      # pushed or under what name, so it is worth a run to prove it.
+      - scripts/toolchain-hash.sh
+      - .github/actions/toolchain-image/action.yml
+      - .github/workflows/toolchain-image.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Deliberately NOT cancel-in-progress. Two hash-input merges landing close
+# together produce two different tags, and a PR branched off the first one
+# needs that first image to exist. Cancelling would silently strand it.
+concurrency:
+  group: toolchain-image
+  cancel-in-progress: false
+
+jobs:
+  push:
+    name: push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # GITHUB_TOKEN carries write by default on this repo
+      # (`default_workflow_permissions: "write"`), so this needs no repo or
+      # account settings change -- but scoping it to the one job that needs
+      # it keeps the rest of the workflow read-only.
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Same composite the test jobs use, so there is exactly one definition
+      # of how this image is built. cache-to writes the layer cache back:
+      # this workflow is the one place that builds the canonical image, so
+      # it is the right writer.
+      - id: build
+        uses: ./.github/actions/toolchain-image
+        with:
+          push: 'true'
+          cache-to: type=gha,mode=max
+
+      # GHCR has no retention policy to switch on, so versions accumulate
+      # until something deletes them. Pruning lives here rather than in a
+      # scheduled workflow because this is the job that creates the garbage:
+      # re-pointing the moving `master` tag strands whatever version it used
+      # to point at, and an untagged container version can never be pulled
+      # again by anyone.
+      #
+      # Keeping 10 content tags is roughly two to three weeks at this repo's
+      # rate of hash-input changes, which comfortably covers a PR sitting
+      # open against an older master -- it hits its own tag instead of
+      # missing and rebuilding.
+      #
+      # continue-on-error because cleanup must never fail a publish. If the
+      # token cannot delete versions, the image is still pushed and the log
+      # says why.
+      - name: Prune old image versions
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: blanket-dev
+          KEEP: '10'
+        run: |
+          set -euo pipefail
+
+          if ! gh api "/users/$OWNER/packages/container/$PACKAGE/versions" \
+              --paginate > /tmp/versions.json 2>/tmp/versions.err; then
+            echo "could not list package versions; skipping prune"
+            cat /tmp/versions.err
+            exit 0
+          fi
+
+          # Untagged versions are pure orphans: nothing can address them.
+          # Tagged ones are kept newest-first, and anything still carrying
+          # the moving `master` tag is never a prune candidate.
+          jq -r --argjson keep "$KEEP" '
+            (map(select((.metadata.container.tags | length) == 0)) | .[].id),
+            (map(select((.metadata.container.tags | length) > 0))
+              | sort_by(.created_at) | reverse
+              | .[$keep:]
+              | map(select(.metadata.container.tags | index("master") | not))
+              | .[].id)
+          ' /tmp/versions.json > /tmp/doomed.txt
+
+          total=$(jq 'length' /tmp/versions.json)
+          doomed=$(wc -l < /tmp/doomed.txt)
+          echo "$total versions present, $doomed to delete (keeping $KEEP tagged + master)"
+
+          while read -r id; do
+            [ -n "$id" ] || continue
+            if gh api --method DELETE \
+                "/users/$OWNER/packages/container/$PACKAGE/versions/$id" >/dev/null; then
+              echo "deleted version $id"
+            else
+              echo "could not delete version $id"
+            fi
+          done < /tmp/doomed.txt
+
+      # The one manual step in this plan. GHCR creates a package private on
+      # first push and exposes no REST endpoint for visibility, so the
+      # private -> public flip is a UI action on the package settings page.
+      # Until it happens, phase 3's anonymous pull in ci.yml just misses and
+      # builds, which is exactly today's behaviour.
+      - name: Report package visibility
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: blanket-dev
+        run: |
+          set -euo pipefail
+          vis=$(gh api "/users/$OWNER/packages/container/$PACKAGE" --jq .visibility 2>/dev/null || echo unknown)
+          echo "tag pushed: ${{ steps.build.outputs.tag }}"
+          echo "package visibility: $vis"
+          if [ "$vis" != "public" ]; then
+            echo "::warning::ghcr.io/$OWNER/$PACKAGE is '$vis'. CI and local pulls are anonymous, so flip it to public at https://github.com/users/$OWNER/packages/container/$PACKAGE/settings"
+          fi

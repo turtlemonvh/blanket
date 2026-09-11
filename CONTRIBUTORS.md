@@ -262,6 +262,45 @@ Test adds must keep all three surfaces green. The suites overlap
 intentionally: unit tests hit handlers directly, smoke exercises the
 built binary over real HTTP, Playwright drives the UI.
 
+### Toolchain image on GHCR
+
+`.github/workflows/toolchain-image.yml` publishes the toolchain image to
+`ghcr.io/turtlemonvh/blanket-dev` on master pushes that touch one of its
+inputs (#53). It runs **in parallel with `ci.yml`, not ahead of it**, so
+it adds no latency to a PR or a merge; the cost of that choice is a race
+on the first master push after a dependency bump, where CI can start
+before the image exists, miss, and build. A miss is always just today's
+build, so that is correct behaviour rather than something to design
+around.
+
+`scripts/toolchain-hash.sh` is the single definition of the image tag —
+a SHA-256 over the six files the image's contents depend on (the
+Dockerfile, `.dockerignore`, `go.mod`, `go.sum`, and the two
+`tests/e2e/` npm manifests), truncated to 32 hex chars. **Edit that
+script's `INPUTS` list and the `paths:` filter in the workflow together**:
+the script decides what a tag means, the filter decides when master
+publishes one, and a hash input missing from the filter means CI looks
+for a tag master never pushed. The obvious alternative, GitHub Actions'
+`hashFiles()`, was rejected because the Makefile cannot call it — CI and
+local `docker pull` need to agree by construction, not by coincidence.
+
+A second, moving `master` tag points at the newest published image, as
+the "just give me something recent" fallback for a developer whose local
+inputs match nothing published.
+
+GHCR has no retention setting, so the workflow prunes as it goes: every
+untagged version (re-pointing `master` strands one on each push, and an
+untagged container version can never be pulled again), and tagged
+versions past the newest 10 — roughly two to three weeks at this repo's
+rate, which covers a PR sitting open against an older master. Pruning is
+`continue-on-error`: cleanup must never fail a publish.
+
+The package is created **private** on first push and GHCR exposes no
+visibility API, so making it public is a one-time UI action on the
+package settings page. The workflow's last step reports the current
+visibility and warns if it isn't public. Until it is, anonymous pulls
+miss and every job builds exactly as it does today.
+
 ### Dependency licenses
 
 An audit of every dependency's license (issue #131) found no copyleft
