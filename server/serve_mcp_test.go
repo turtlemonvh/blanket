@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/turtlemonvh/blanket/lib/database"
+	"github.com/turtlemonvh/blanket/lib/docs"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
 	"github.com/turtlemonvh/blanket/worker"
@@ -563,6 +564,51 @@ func TestToolListFitsContextBudget(t *testing.T) {
 	t.Logf("tools/list (%d tools) + Instructions: %d characters (budget: %d)", len(res.Tools), total, mcpContextBudgetChars)
 	assert.LessOrEqual(t, total, mcpContextBudgetChars,
 		"tools/list + Instructions exceeds the %d-character budget; see docs/mcp.md's levers (trim jsonschema descriptions, shorten tool descriptions, move prose into blanket_docs)", mcpContextBudgetChars)
+}
+
+// TestMCPDocsToolListsEveryPage stops the blanket_docs page list drifting
+// away from lib/docs again. It has drifted twice already: the tool
+// description was missing `upgrade` from #135 until #175 and `install`
+// from #175 onward, so an agent reading tools/list could not discover
+// pages that served fine if it guessed the key. Adding a page to
+// lib/docs should be a one-line change, and this is what makes it one.
+func TestMCPDocsToolListsEveryPage(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	viper.Set("mcp.mode", "all")
+	defer viper.Set("mcp.mode", nil)
+
+	srv := s.buildMCPServer()
+
+	ctx := context.Background()
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	serverSession, err := srv.Connect(ctx, serverTransport, nil)
+	assert.NoError(t, err)
+	defer serverSession.Wait()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	assert.NoError(t, err)
+	defer clientSession.Close()
+
+	res, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{})
+	assert.NoError(t, err)
+
+	var desc string
+	for _, tool := range res.Tools {
+		if tool.Name == "blanket_docs" {
+			desc = tool.Description
+			break
+		}
+	}
+	assert.NotEmpty(t, desc, "blanket_docs tool not found in tools/list")
+
+	keys := docs.Keys()
+	assert.NotEmpty(t, keys, "lib/docs reported no pages")
+	for _, key := range keys {
+		assert.Contains(t, desc, key,
+			"blanket_docs description does not mention page %q; it is generated from docs.Keys(), so this means the generation broke", key)
+	}
 }
 
 // --- blanket_run_task (turtlemonvh/blanket#27) ---
