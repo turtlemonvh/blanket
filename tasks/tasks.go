@@ -166,7 +166,27 @@ func (t *Task) GetCmd(tt *TaskType) (*exec.Cmd, error) {
 	case "cmd":
 		cmd = exec.Command("cmd", "/c", cmdString.String())
 	case "powershell":
-		cmd = exec.Command("powershell", "-Command", cmdString.String())
+		// -NoProfile and -NonInteractive make this behave like the bash
+		// branch below rather than like an interactive shell.
+		//
+		// `bash -c` already ignores ~/.bashrc for a non-interactive shell,
+		// so the bash executor has always been hermetic: a task runs the
+		// command the task type declares, not the command plus whatever
+		// the machine's owner put in their shell config. PowerShell is the
+		// opposite by default -- it sources $PROFILE on every launch -- so
+		// without -NoProfile a task's behaviour depends on ambient user
+		// state that the task type cannot see or control.
+		//
+		// -NonInteractive turns a prompt into an error instead of a task
+		// that hangs until its timeout with nobody able to answer it.
+		//
+		// Note this is a correctness change, not a speed one, despite
+		// arriving via a timeout flake (turtlemonvh/blanket#169). Measured
+		// on a Windows host with no profile files present, -NoProfile is
+		// worth ~28ms against a ~380ms startup -- noise. Where it matters
+		// is a machine whose owner *does* have a profile, and there the
+		// point is that the task type stops silently inheriting it.
+		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", cmdString.String())
 	default:
 		cmd = exec.Command(executor, "-c", cmdString.String())
 	}
