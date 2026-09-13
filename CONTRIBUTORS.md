@@ -15,6 +15,7 @@ make setup
 local Go or Node install needed:
 
 ```bash
+make docker-pull           # optional: fetch the image CI built, don't build it
 make docker-test           # Go unit tests in the container
 make docker-test-race      # Go unit tests under the race detector
 make docker-test-browser   # Playwright suite
@@ -23,6 +24,20 @@ make docker-shell          # interactive shell, source mounted at /src
 ```
 
 See `Dockerfile` for what the image carries.
+
+`make docker-pull` is optional and worth one run on a new machine: it
+fetches the toolchain image master already published instead of spending
+~5 minutes building it (#53). Every `docker-*` target still builds on its
+own if you skip it. On an unmodified checkout of master you get exactly
+the image CI is running, because `scripts/toolchain-hash.sh` is the same
+tag definition both use.
+
+If you have edited `go.mod`, the `Dockerfile`, or the `tests/e2e/` npm
+manifests, no image exists for your inputs and it falls back to the
+moving `master` tag, saying so. That is a convenience rather than an
+equivalent — master's baked Go and npm caches are warmed for master's
+manifests, not yours, so `go mod download` and `npm ci` do real work
+again at runtime. Still much cheaper than a cold build.
 
 ## Build & Test
 
@@ -37,6 +52,7 @@ make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh
                            #   + scripts/upgrade.sh)
 make docker-test-browser   # Playwright suite
 make docker-shell          # interactive container for ad-hoc work
+make docker-pull           # fetch the prebuilt toolchain image from GHCR
 make docker-build          # cross-compile linux/darwin/windows
 make docker-release        # cross-compile + SHA256SUMS + offline bundle
 make docker-licenses       # dependency license gate (see below)
@@ -153,11 +169,18 @@ header comment.
   benefit.
 
   `.github/actions/toolchain-image` is the single definition of how
-  `blanket-dev:latest` gets built — `release.yml` uses it too, so a
+  `blanket-dev:latest` gets there — `release.yml` uses it too, so a
   release is cross-compiled in an image built exactly the way the
-  tested one was. Ahead of #53 (publish the image to GHCR), switching
-  the jobs from building to pulling is then an edit to that one file
-  rather than the same edit repeated across two workflows.
+  tested one was. That is what made #53 cheap: switching every docker
+  job from building to pulling was an edit to that one file, and
+  `release.yml` inherited the fast path without being touched.
+
+  The action pulls `ghcr.io/turtlemonvh/blanket-dev:<content tag>`
+  first and builds only on a miss. **A miss can never fail a job** —
+  an unpublished tag, a private package, a registry outage and a cold
+  start all fall through to the buildx build the jobs did before this
+  existed, so the worst case is yesterday's speed rather than a red
+  run. The pull is anonymous; only the publishing workflow logs in.
 
   That composite action ends by writing `BLANKET_SKIP_IMAGE_BUILD=1`
   to `$GITHUB_ENV`, which makes the Makefile's `docker-image` target
@@ -261,6 +284,48 @@ direct push.
 Test adds must keep all three surfaces green. The suites overlap
 intentionally: unit tests hit handlers directly, smoke exercises the
 built binary over real HTTP, Playwright drives the UI.
+
+### Toolchain image on GHCR
+
+`.github/workflows/toolchain-image.yml` publishes the toolchain image to
+`ghcr.io/turtlemonvh/blanket-dev` on master pushes that touch one of its
+inputs (#53). It runs **in parallel with `ci.yml`, not ahead of it**, so
+it adds no latency to a PR or a merge; the cost of that choice is a race
+on the first master push after a dependency bump, where CI can start
+before the image exists, miss, and build. A miss is always just today's
+build, so that is correct behaviour rather than something to design
+around.
+
+`scripts/toolchain-hash.sh` is the single definition of the image tag —
+a SHA-256 over the six files the image's contents depend on (the
+Dockerfile, `.dockerignore`, `go.mod`, `go.sum`, and the two
+`tests/e2e/` npm manifests), truncated to 32 hex chars. **Edit that
+script's `INPUTS` list and the `paths:` filter in the workflow together**:
+the script decides what a tag means, the filter decides when master
+publishes one, and a hash input missing from the filter means CI looks
+for a tag master never pushed. The obvious alternative, GitHub Actions'
+`hashFiles()`, was rejected because the Makefile cannot call it — CI and
+local `docker pull` need to agree by construction, not by coincidence.
+
+A second, moving `master` tag points at the newest published image, as
+the "just give me something recent" fallback for a developer whose local
+inputs match nothing published. CI never uses it: a job wants the image
+for *its* inputs or no image at all, and pulling something merely recent
+would mean testing against a toolchain that isn't the one the branch
+describes.
+
+GHCR has no retention setting, so the workflow prunes as it goes: every
+untagged version (re-pointing `master` strands one on each push, and an
+untagged container version can never be pulled again), and tagged
+versions past the newest 10 — roughly two to three weeks at this repo's
+rate, which covers a PR sitting open against an older master. Pruning is
+`continue-on-error`: cleanup must never fail a publish.
+
+The package is created **private** on first push and GHCR exposes no
+visibility API, so making it public is a one-time UI action on the
+package settings page. The workflow's last step reports the current
+visibility and warns if it isn't public. Until it is, anonymous pulls
+miss and every job builds exactly as it does today.
 
 ### Dependency licenses
 
