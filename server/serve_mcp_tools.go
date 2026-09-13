@@ -28,7 +28,13 @@ func textResult(s string) (*mcp.CallToolResult, any, error) {
 }
 
 type blanketDocsArgs struct {
-	Page string `json:"page" jsonschema:"doc page: overview, authoring, schema, tags, usage, api, flow, upgrade, or install"`
+	// Deliberately does not repeat the page list -- the tool's own
+	// Description carries it, generated from docs.Keys(). Naming them
+	// here too cost ~70 characters of the tools/list budget
+	// (turtlemonvh/blanket#44) to say the same thing twice, and the two
+	// copies had already drifted apart from each other and from
+	// lib/docs.
+	Page string `json:"page" jsonschema:"doc page key; the tool description lists the valid values"`
 }
 
 func (s *ServerConfig) mcpDocs(ctx context.Context, req *mcp.CallToolRequest, args blanketDocsArgs) (*mcp.CallToolResult, any, error) {

@@ -1,11 +1,15 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
+
+	"github.com/turtlemonvh/blanket/lib/docs"
 )
 
 // mcpToolTier says which mcp.mode values register a given tool.
@@ -104,9 +108,20 @@ func (s *ServerConfig) registerReadonlyMCPTools(srv *mcp.Server, mode string) {
 	if !mcpModeAllows(mode, mcpTierReadonly) {
 		return
 	}
+	// The page list is built from docs.Keys() rather than written out
+	// here. It was written out here, and it drifted: this string was
+	// missing `upgrade` (added in #135) and `install` (added in #175),
+	// so an agent reading the tool list could not discover two pages
+	// that worked perfectly well if it happened to guess the key.
+	//
+	// Generating it also means adding a page to lib/docs is a one-line
+	// change again, and TestMCPDocsToolListsEveryPage keeps the two from
+	// separating a third time.
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "blanket_docs",
-		Description: "Fetch a blanket doc page (overview, authoring, schema, tags, usage, api, flow). Read 'authoring' before writing a task type.",
+		Name: "blanket_docs",
+		Description: fmt.Sprintf(
+			"Fetch a blanket doc page (%s). Read 'authoring' before writing a task type.",
+			strings.Join(docs.Keys(), ", ")),
 	}, s.mcpDocs)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_task_types",
