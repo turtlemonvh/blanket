@@ -22,6 +22,13 @@ var (
 // the root package is the one place that sits next to docs/. See #66: this
 // keeps docs/ itself markdown-only, no code mixed in.
 //
+// The pattern is deliberately flat: it covers docs/*.md and not
+// docs/*/*.md, so pages in subdirectories (docs/examples/) are shipped in
+// the repo but not in the binary. That is fine while nothing in
+// lib/docs's page map points at one -- if you ever add a subdirectory
+// page to that map, widen this pattern in the same change or Page() will
+// return a file-not-found at runtime.
+//
 //go:embed docs/*.md
 var docsFS embed.FS
 
