@@ -1,6 +1,6 @@
 # Build the reproducible toolchain image (Dockerfile at the repo root) and
-# load it into the local docker daemon as blanket-dev:latest, so the
-# `make docker-*` targets can run against it.
+# either load it into the local docker daemon as blanket-dev:latest, so the
+# `make docker-*` targets can run against it, or push it to GHCR.
 #
 # Extracted as a composite action because ci.yml now fans the test surfaces
 # out into one job each (turtlemonvh/blanket#155), and every one of them
@@ -8,9 +8,9 @@
 # change or an action version bump is a single edit rather than six.
 #
 # release.yml uses it too, so "how blanket-dev:latest gets built" has exactly
-# one definition in the repo. That matters ahead of #53 (publishing the image
-# to GHCR): switching the docker jobs from building to pulling should be an
-# edit to this file, not the same edit repeated across two workflows with an
+# one definition in the repo. That matters for #53 (publishing the image to
+# GHCR): switching the docker jobs from building to pulling is an edit to
+# this file, not the same edit repeated across two workflows with an
 # opportunity to diverge each time.
 #
 # The action SHAs below are pinned the same way the workflows pin theirs
@@ -22,7 +22,7 @@
 # `/.github/actions/*` alongside `/`, so this file is covered; adding a new
 # composite action needs no further config change.
 name: Build toolchain image
-description: Build blanket-dev:latest from the GHA layer cache and load it into the docker daemon.
+description: Build blanket-dev:latest from the GHA layer cache, and either load it into the docker daemon or push it to GHCR.
 
 inputs:
   cache-to:
@@ -34,10 +34,52 @@ inputs:
       would upload the same layers N times over for no benefit.
     required: false
     default: ''
+  push:
+    description: >
+      'true' publishes to GHCR under the content tag plus a moving `master`
+      tag, instead of loading into the local daemon. Only
+      .github/workflows/toolchain-image.yml passes this, and only on master:
+      a pushing job produces no local blanket-dev:latest and so cannot run
+      any `make docker-*` target. The caller is responsible for having
+      logged in to ghcr.io first.
+    required: false
+    default: 'false'
+  image:
+    description: GHCR repository to push to. Only read when push is 'true'.
+    required: false
+    default: ghcr.io/turtlemonvh/blanket-dev
+
+outputs:
+  tag:
+    description: The content tag for this image, from scripts/toolchain-hash.sh.
+    value: ${{ steps.tag.outputs.tag }}
 
 runs:
   using: composite
   steps:
+    # One definition of the tag, shared by this action, the push workflow and
+    # the Makefile's docker-pull -- see the script's header for why this is a
+    # script rather than hashFiles().
+    - name: Compute toolchain tag
+      id: tag
+      shell: bash
+      run: |
+        set -euo pipefail
+        tag="$("$GITHUB_WORKSPACE/scripts/toolchain-hash.sh")"
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+        # Echoed as well as written to $GITHUB_OUTPUT so the value is
+        # visible in the job log. That is the one place you can check that
+        # CI and a local `scripts/toolchain-hash.sh` agree -- and a silent
+        # disagreement between them is the failure mode this whole scheme
+        # is built to avoid.
+        echo "toolchain tag: $tag"
+
+        # A failure here is deliberately fatal rather than a fallback to
+        # building: the script only fails when its INPUTS list has drifted
+        # from the Dockerfile, and continuing would publish or pull a tag
+        # that means something different than it claims.
+
     # Buildx is required for the gha cache backend used below.
     - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
@@ -45,11 +87,41 @@ runs:
     # measured over 100 builds while investigating #155). mode=max on the
     # writer exports every layer for maximum hit rate -- fits inside GHA's
     # 10GB per-repo cache budget today.
-    - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+    - name: Build and load blanket-dev:latest
+      if: inputs.push != 'true'
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
       with:
         context: .
         tags: blanket-dev:latest
         load: true
+        cache-from: type=gha
+        cache-to: ${{ inputs.cache-to }}
+
+    # The push path deliberately does not `load` as well. Loading costs a
+    # full image export into dockerd (~8s) that nothing in the push workflow
+    # would ever use, and buildx needs a non-default driver to do both in one
+    # pass -- two exporters for one consumer is not worth the complexity.
+    #
+    # Two tags on one build: the content tag is what CI and `make docker-pull`
+    # resolve to, and `master` is the "just give me something recent" fallback
+    # for a developer whose local inputs don't match any pushed image.
+    #
+    # The opencontainers source label is what links the GHCR package to this
+    # repository, which is what lets GITHUB_TOKEN manage it afterwards (the
+    # version pruning in the push workflow) and what makes the package show
+    # up on the repo page rather than floating loose under the user account.
+    - name: Build and push to GHCR
+      if: inputs.push == 'true'
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      with:
+        context: .
+        tags: |
+          ${{ inputs.image }}:${{ steps.tag.outputs.tag }}
+          ${{ inputs.image }}:master
+        labels: |
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          org.opencontainers.image.description=blanket toolchain image (Go + Playwright), built from the repo Dockerfile
+        push: true
         cache-from: type=gha
         cache-to: ${{ inputs.cache-to }}
 
@@ -63,9 +135,15 @@ runs:
     # builder -- zero layers CACHED, a different image id -- and the tests
     # ran in that rebuild rather than in the image this action just loaded.
     #
+    # Skipped on the push path, where there is no local image to protect:
+    # asserting the knob there would make the next `make docker-*` fail its
+    # `docker image inspect` guard instead of building, which is the correct
+    # failure but an unhelpful one.
+    #
     # $GITHUB_ENV, not a step output, because the consumer is `make` invoked
     # from an arbitrary later step in the job, not a step that could read an
     # output binding.
     - name: Skip the redundant image rebuild in make
+      if: inputs.push != 'true'
       shell: bash
       run: echo "BLANKET_SKIP_IMAGE_BUILD=1" >> "$GITHUB_ENV"
