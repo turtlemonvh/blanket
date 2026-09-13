@@ -88,6 +88,18 @@ jobs:
       # open against an older master -- it hits its own tag instead of
       # missing and rebuilding.
       #
+      # *** Untagged does not mean orphaned. *** buildx pushes an OCI index,
+      # and GHCR lists every manifest the index references -- the linux/amd64
+      # image itself, and the provenance attestation -- as its own package
+      # version carrying no tags. Only the index gets the tags. So the
+      # obvious rule "delete everything untagged" deletes the live image out
+      # from under the tag that was just published: the tag still resolves,
+      # and every `docker pull` of it fails with `not found` on the child
+      # manifest. That is what the first run of this workflow did
+      # (turtlemonvh/blanket#53), and it is why the keep-set below is built
+      # from what the kept indexes actually reference rather than from the
+      # tag list alone.
+      #
       # continue-on-error because cleanup must never fail a publish. If the
       # token cannot delete versions, the image is still pushed and the log
       # says why.
@@ -108,21 +120,51 @@ jobs:
             exit 0
           fi
 
-          # Untagged versions are pure orphans: nothing can address them.
-          # Tagged ones are kept newest-first, and anything still carrying
-          # the moving `master` tag is never a prune candidate.
+          # The versions we intend to keep: the newest $KEEP tagged ones,
+          # plus whatever currently carries the moving `master` tag. A
+          # container version's `name` is its digest, which is how the keep
+          # set below is matched against what the indexes reference.
           jq -r --argjson keep "$KEEP" '
-            (map(select((.metadata.container.tags | length) == 0)) | .[].id),
-            (map(select((.metadata.container.tags | length) > 0))
-              | sort_by(.created_at) | reverse
-              | .[$keep:]
-              | map(select(.metadata.container.tags | index("master") | not))
-              | .[].id)
-          ' /tmp/versions.json > /tmp/doomed.txt
+            map(select((.metadata.container.tags | length) > 0))
+            | sort_by(.created_at) | reverse
+            | (.[:$keep] + map(select(.metadata.container.tags | index("master"))))
+            | unique_by(.id)
+            | .[].name
+          ' /tmp/versions.json | sort -u > /tmp/keep-digests.txt
+
+          # Expand each kept index into the child manifests it references.
+          # imagetools reuses the login-action credentials, so this needs no
+          # second token dance. A plain (non-index) manifest simply yields
+          # nothing, which is why `.manifests[]?` is optional.
+          cp /tmp/keep-digests.txt /tmp/protected.txt
+          while read -r digest; do
+            [ -n "$digest" ] || continue
+            if ! raw=$(docker buildx imagetools inspect --raw \
+                "ghcr.io/$OWNER/$PACKAGE@$digest" 2>/tmp/inspect.err); then
+              # Never guess. Without the reference list, "untagged" is not a
+              # safe thing to act on, so abandon the whole prune rather than
+              # risk deleting a live child manifest.
+              echo "could not inspect $digest; skipping prune entirely"
+              cat /tmp/inspect.err
+              exit 0
+            fi
+            printf '%s\n' "$raw" | jq -r '.manifests[]?.digest' >> /tmp/protected.txt
+          done < /tmp/keep-digests.txt
+          sort -u /tmp/protected.txt -o /tmp/protected.txt
+
+          # Anything not in the protected set: superseded indexes beyond
+          # $KEEP, and untagged manifests no kept index points at (the
+          # children of those superseded indexes, cleaned up on the next
+          # run).
+          jq -r '.[] | "\(.id) \(.name)"' /tmp/versions.json \
+            | while read -r id name; do
+                grep -qxF "$name" /tmp/protected.txt || echo "$id"
+              done > /tmp/doomed.txt
 
           total=$(jq 'length' /tmp/versions.json)
-          doomed=$(wc -l < /tmp/doomed.txt)
-          echo "$total versions present, $doomed to delete (keeping $KEEP tagged + master)"
+          protected=$(wc -l < /tmp/protected.txt)
+          doomed=$(grep -c . /tmp/doomed.txt || true)
+          echo "$total versions present, $protected protected (${KEEP} newest tags + master + everything they reference), $doomed to delete"
 
           while read -r id; do
             [ -n "$id" ] || continue
@@ -133,6 +175,33 @@ jobs:
               echo "could not delete version $id"
             fi
           done < /tmp/doomed.txt
+
+      # The check that would have caught the prune bug above on the run that
+      # introduced it, instead of leaving a tag that resolves but cannot be
+      # pulled sitting in the registry.
+      #
+      # Anonymous on purpose -- an empty DOCKER_CONFIG discards the
+      # login-action credentials for this one command, so this asserts
+      # exactly what CI and a developer's `make docker-pull` will do, and
+      # fails if the package is not public.
+      #
+      # This one is NOT continue-on-error. A publish that cannot be consumed
+      # is worse than a publish that failed: it is silent, and every
+      # consumer of it just quietly falls back to building.
+      - name: Verify the published image pulls anonymously
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/blanket-dev
+          TAG: ${{ steps.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cfg=$(mktemp -d)
+          for tag in "$TAG" master; do
+            if ! DOCKER_CONFIG="$cfg" docker pull --quiet "$IMAGE:$tag"; then
+              echo "::error::$IMAGE:$tag was published but cannot be pulled anonymously. Either the prune deleted a manifest the index references, or the package is not public."
+              exit 1
+            fi
+            echo "pulled $IMAGE:$tag anonymously"
+          done
 
       # The one manual step in this plan. GHCR creates a package private on
       # first push and exposes no REST endpoint for visibility, so the
