@@ -2,6 +2,13 @@ module github.com/turtlemonvh/blanket
 
 go 1.26.0
 
+// Keep this version in sync with Dockerfile's GO_VERSION and
+// scripts/setup.sh's GO_VERSION -- go_pins_test.go enforces it. There is
+// deliberately no `toolchain` directive: it would only repeat the line
+// above, and `go mod tidy` deletes a redundant one (that is how the old
+// `toolchain go1.25.14` pin vanished in #185). The Dockerfile sets
+// GOTOOLCHAIN=local instead, so the image's Go is the one that runs.
+
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-gonic/gin v1.12.0
