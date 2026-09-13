@@ -50,11 +50,26 @@ ENV GOCACHE=/go/.cache
 # image silently stopped being the thing that decides which compiler runs:
 # with the default GOTOOLCHAIN=auto, a go.mod requiring a newer Go than
 # GO_VERSION makes every `go` command fetch a second toolchain and re-exec
-# into it. Measured locally at ~7.5s per fresh container, and it adds a
-# proxy.golang.org fetch to a container whose entire purpose is to have
-# already done its fetching. That download can fail like any other -- it
-# did twice while this change was being tested, with `connection reset by
-# peer`, though on a home connection rather than on a runner.
+# into it.
+#
+# What that costs is worth stating accurately, because the obvious guess is
+# wrong. It is NOT a per-CI-job download: `RUN go mod download` below bakes
+# the substitute toolchain into the image's module cache, and Docker
+# populates an empty named volume from the image, so the `blanket-dev-cache`
+# volume the docker-* targets mount over /go inherits it. A full master CI
+# run logs zero `downloading go1.26.0` lines, and `go version` in a fresh
+# container takes ~50ms.
+#
+# The costs that are real:
+#   - The image carries two complete Go toolchains, 243M at /usr/local/go
+#     and 240M in the module cache, and every CI job now pulls that.
+#   - A host whose blanket-dev-cache volume predates the substitute
+#     toolchain does download it -- measured at 7.5s to 19s depending on
+#     the connection, and it can fail like any other fetch (it did twice
+#     here, `connection reset by peer`, on a home connection rather than a
+#     runner).
+#   - Worst of all, it is silent. ARG GO_VERSION stops describing the
+#     compiler that actually runs, and nothing anywhere says so.
 #
 # With `local`, that situation is a loud build failure naming the version
 # mismatch instead, which is the signal that GO_VERSION needs bumping.

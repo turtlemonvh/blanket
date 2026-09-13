@@ -136,10 +136,15 @@ convention and were left as-is; this applies going forward.)
   **The Dockerfile sets `GOTOOLCHAIN=local`** in its place. Without it,
   `GOTOOLCHAIN=auto` quietly downloads and re-execs into whatever `go`
   directive go.mod names, so the image's baked Go stops deciding
-  anything — measured locally at ~7.5s per fresh container, and it puts a
-  proxy.golang.org fetch inside a container built precisely so it would
-  not need one. With `local`, a version mismatch is a loud build failure
-  naming the versions instead.
+  anything. The cost is not the per-job download it looks like — the
+  image's `go mod download` bakes the substitute toolchain into the module
+  cache, and an empty named volume inherits it, so a full CI run downloads
+  no toolchain at all. What it actually costs is a second complete
+  toolchain in the image (240M on top of `/usr/local/go`'s 243M, pulled by
+  every job), a real download on any host whose `blanket-dev-cache` volume
+  predates it, and — the part that matters — silence: `ARG GO_VERSION`
+  stops describing the compiler that runs. With `local`, a version mismatch
+  is a loud build failure naming the versions instead.
 
   That's also why `make check-fmt` resolves gofmt via
   `` $(go env GOROOT)/bin/gofmt `` instead of a bare `gofmt` on `PATH` —

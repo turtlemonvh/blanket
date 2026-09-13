@@ -14,11 +14,14 @@ import (
 // scripts/setup.sh stayed on 1.25.14. Nothing failed, so nothing noticed.
 //
 // What it cost: the toolchain image bakes a Go that `go` then refuses to
-// use, so with GOTOOLCHAIN=auto every fresh CI container downloaded a
-// second toolchain and re-exec'd into it -- measured locally at ~7.5s per
-// fresh container. A container built to make builds hermetic had
-// acquired a per-job network fetch from proxy.golang.org, which is a
-// dependency it exists to not have.
+// use, so with GOTOOLCHAIN=auto it silently re-execs into a second
+// toolchain and ARG GO_VERSION stops describing the compiler that runs.
+// Not, as first claimed here, a download on every CI job -- `RUN go mod
+// download` bakes the substitute into the image's module cache and an
+// empty named volume inherits it, so a full CI run downloads no toolchain
+// at all. The image just carries two of them (243M + 240M) for every job
+// to pull, and any host with an older blanket-dev-cache volume pays a
+// 7.5-19s fetch the image exists to avoid.
 //
 // The pin cannot simply be restored, which is worth knowing before
 // "fixing" this differently: `go mod tidy` deletes a `toolchain` line
