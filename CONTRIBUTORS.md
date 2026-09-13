@@ -15,6 +15,7 @@ make setup
 local Go or Node install needed:
 
 ```bash
+make docker-pull           # optional: fetch the image CI built, don't build it
 make docker-test           # Go unit tests in the container
 make docker-test-race      # Go unit tests under the race detector
 make docker-test-browser   # Playwright suite
@@ -23,6 +24,20 @@ make docker-shell          # interactive shell, source mounted at /src
 ```
 
 See `Dockerfile` for what the image carries.
+
+`make docker-pull` is optional and worth one run on a new machine: it
+fetches the toolchain image master already published instead of spending
+~5 minutes building it (#53). Every `docker-*` target still builds on its
+own if you skip it. On an unmodified checkout of master you get exactly
+the image CI is running, because `scripts/toolchain-hash.sh` is the same
+tag definition both use.
+
+If you have edited `go.mod`, the `Dockerfile`, or the `tests/e2e/` npm
+manifests, no image exists for your inputs and it falls back to the
+moving `master` tag, saying so. That is a convenience rather than an
+equivalent — master's baked Go and npm caches are warmed for master's
+manifests, not yours, so `go mod download` and `npm ci` do real work
+again at runtime. Still much cheaper than a cold build.
 
 ## Build & Test
 
@@ -37,6 +52,7 @@ make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh
                            #   + scripts/upgrade.sh)
 make docker-test-browser   # Playwright suite
 make docker-shell          # interactive container for ad-hoc work
+make docker-pull           # fetch the prebuilt toolchain image from GHCR
 make docker-build          # cross-compile linux/darwin/windows
 make docker-release        # cross-compile + SHA256SUMS + offline bundle
 make docker-licenses       # dependency license gate (see below)
