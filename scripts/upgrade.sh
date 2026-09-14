@@ -441,6 +441,111 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 8b. the crash window between the swap and the journal catching up
+# ---------------------------------------------------------------------------
+# Case 8 kills the CLI at a *random* point and only sometimes lands in the
+# window that matters, which is how turtlemonvh/blanket#203 stayed hidden:
+# it reproduced roughly one run in twenty and read as a flake. This builds
+# the same state deterministically.
+#
+# finishUpgrade does SaveSlot -> Swap -> journal.Advance(SWAPPED) -> save.
+# A kill between Swap returning and save completing leaves the binary
+# already replaced while the journal still says PAUSED and still names a
+# stagedPath that no longer exists. That is the state constructed here.
+echo "upgrade: resume after a swap the journal never recorded"
+
+setup_rb="$(blanket rollback --yes 2>&1)" || fail "could not get back to $OLD_VERSION for the swap-window test: $setup_rb"
+harness_wait_ready || fail "no server after the setup rollback"
+installed_version | grep -q "$OLD_VERSION" || fail "setup rollback did not restore $OLD_VERSION"
+
+rm -f "$WORKDIR/upgrade/journal.json"
+set +e
+stage_out="$(blanket upgrade --stage-only --releases-base-url "$BASE_URL" 2>&1)"
+stage_rc=$?
+set -e
+[[ $stage_rc -eq 11 ]] || fail "--stage-only should exit 11, got $stage_rc: $stage_out"
+
+journal_path="$WORKDIR/upgrade/journal.json"
+staged_path="$(json_field "$(cat "$journal_path")" stagedPath)"
+[[ -n "$staged_path" && -f "$staged_path" ]] || fail "no staged file at '$staged_path'"
+
+# Drive the server to PAUSED the way the killed CLI had, so the resume
+# finds the same server-side rank it would have.
+curl -fsS -H 'X-Blanket-Restart: 1' -X POST     "$BASE/ops/restart/begin?reason=swap+window+test" -d '{"reason":"swap window test","execMode":"exec"}' >/dev/null     || fail "could not begin a restart for the swap-window test"
+restart_id="$(json_field "$(curl -fsS -H 'X-Blanket-Restart: 1' "$BASE/ops/restart/status")" id)"
+curl -fsS -H 'X-Blanket-Restart: 1' -X POST "$BASE/ops/restart/pause" >/dev/null     || fail "could not pause for the swap-window test"
+
+# The journal as the killed CLI left it: PAUSED, stagedPath still set.
+python3 - "$journal_path" "$restart_id" <<'PYEOF'
+import json, sys, time
+p, restart_id = sys.argv[1], sys.argv[2]
+j = json.load(open(p))
+now = int(time.time())
+j["state"] = "PAUSED"
+j["restartId"] = restart_id
+j.setdefault("steps", [])
+j["steps"] += [
+    {"state": "BACKED_UP", "ts": now},
+    {"state": "PAUSED", "ts": now, "note": "worker spawn paused"},
+]
+json.dump(j, open(p, "w"), indent=2)
+PYEOF
+
+# ...and the world as the swap left it. finishUpgrade writes the rollback
+# slot *before* the rename, so in this window the slot already exists on
+# disk holding the old binary -- it is only the journal that never got to
+# name it. Building that too keeps the fixture honest and exercises the
+# recovery that finds the slot again by upgradeId.
+journal_id="$(json_field "$(cat "$journal_path")" id)"
+slot_dir="$WORKDIR/upgrade/slots/$(date -u +%Y%m%d%H%M%S).000-$OLD_VERSION"
+mkdir -p "$slot_dir"
+cp "$INSTALLED" "$slot_dir/blanket"
+cat > "$slot_dir/slot.json" <<EOF
+{
+  "binaryName": "blanket",
+  "version": "$OLD_VERSION",
+  "sha256": "$(sha256_of "$INSTALLED")",
+  "installedPath": "$INSTALLED",
+  "upgradeId": "$journal_id",
+  "createdTs": $(date -u +%s)
+}
+EOF
+
+mv "$staged_path" "$INSTALLED"
+installed_version | grep -q "$NEW_VERSION" || fail "the simulated swap did not install $NEW_VERSION"
+
+set +e
+resume3_out="$(blanket upgrade --resume --yes 2>&1)"
+resume3_rc=$?
+set -e
+
+# The resume must notice the world moved on. What it must never do is
+# treat the already-installed new binary as the *old* one and copy it into
+# a rollback slot labelled with the old version -- that corrupts the
+# rollback point silently, before any error is printed.
+grep -qi 'no such file or directory' <<<"$resume3_out"     && fail "--resume still trusted a stale stagedPath: $resume3_out"
+
+[[ $resume3_rc -eq 0 ]] || fail "--resume after an unrecorded swap exited $resume3_rc: $resume3_out"
+harness_wait_ready || fail "no server after resuming an unrecorded swap"
+installed_version | grep -q "$NEW_VERSION" || fail "the resumed upgrade did not leave $NEW_VERSION installed"
+
+# Every slot claiming to hold $OLD_VERSION must actually hold it.
+for meta in "$WORKDIR"/upgrade/slots/*/slot.json; do
+    [[ -f "$meta" ]] || continue
+    slot_version="$(json_field "$(cat "$meta")" version)"
+    slot_sha="$(json_field "$(cat "$meta")" sha256)"
+    [[ "$slot_version" == "$OLD_VERSION" ]] || continue
+    [[ "$slot_sha" == "$(sha256_of "$BUILDDIR/$OLD_VERSION-$ASSET")" ]]         || fail "rollback slot $(dirname "$meta") claims $OLD_VERSION but holds something else (sha $slot_sha)"
+done
+
+# The journal must have recovered the slot it never got to record, so the
+# rollback point is not left as an orphan for the next prune to collect.
+grep -q "$(basename "$slot_dir")" "$journal_path" \
+    || fail "the resume did not recover the rollback slot $slot_dir: $(cat "$journal_path")"
+
+echo "upgrade:   ok — resume detected the unrecorded swap, recovered its slot, mislabelled nothing"
+
+# ---------------------------------------------------------------------------
 # 9. --bundle
 # ---------------------------------------------------------------------------
 echo "upgrade: --bundle"

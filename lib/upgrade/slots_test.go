@@ -145,3 +145,52 @@ func TestSlotOrderingWithinOneSecond(t *testing.T) {
 		t.Errorf("newest slot is %s; the one saved LAST is the newest, whatever its version string", slots[0].Version)
 	}
 }
+
+// A crash between SaveSlot and the journal's next write leaves a slot on
+// disk that the journal does not name. UpgradeId is what --resume uses to
+// find it again rather than leaving it for the next prune to collect
+// (turtlemonvh/blanket#203).
+func TestSlotForUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	slotsDir := filepath.Join(dir, "slots")
+	bin := filepath.Join(dir, "blanket")
+
+	base := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	for i, v := range []string{"v0.1.0", "v0.2.0", "v0.3.0"} {
+		if err := os.WriteFile(bin, []byte("binary "+v), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := saveSlotAt(slotsDir, bin, v, "", "upgrade-"+v, base.Add(time.Duration(i)*time.Millisecond)); err != nil {
+			t.Fatalf("saveSlot %s: %v", v, err)
+		}
+	}
+
+	got, err := SlotForUpgrade(slotsDir, "upgrade-v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("no slot found for upgrade-v0.2.0")
+	}
+	if got.Version != "v0.2.0" {
+		t.Errorf("found the slot for %s, want v0.2.0", got.Version)
+	}
+
+	// An id nobody wrote, and an empty id, are both "no slot" rather than
+	// an error or an arbitrary one -- the caller falls back to leaving
+	// SlotPath unset, which is recoverable; a wrong slot is not.
+	for _, id := range []string{"upgrade-v9.9.9", ""} {
+		got, err := SlotForUpgrade(slotsDir, id)
+		if err != nil {
+			t.Fatalf("SlotForUpgrade(%q): %v", id, err)
+		}
+		if got != nil {
+			t.Errorf("SlotForUpgrade(%q) returned %s, want nil", id, got.Dir)
+		}
+	}
+
+	// A missing slots dir is not an error either: nothing has upgraded yet.
+	if got, err := SlotForUpgrade(filepath.Join(dir, "nope"), "upgrade-v0.1.0"); err != nil || got != nil {
+		t.Errorf("SlotForUpgrade on a missing dir = (%v, %v), want (nil, nil)", got, err)
+	}
+}
