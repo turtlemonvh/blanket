@@ -210,12 +210,14 @@ jobs:
   # protection it is trying to preserve.
   test:
     name: test
-    needs: [changes, fmt, unit, smoke, browser]
+    needs: [changes, fmt, unit, smoke, browser, race]
     if: always()
     runs-on: ubuntu-latest
     steps:
       # `skipped` is accepted only on a run the classifier called docs-only,
-      # and only from the two surfaces allowed to skip (#184). Everywhere
+      # and only from the surfaces allowed to skip -- smoke and browser
+      # (#184), and race, which carries the same `code == 'true'` guard
+      # (#169). Everywhere
       # else it still fails, which is the distinction this gate exists to
       # make: "correctly sat out" and "never ran" must not look alike.
       #
@@ -229,6 +231,7 @@ jobs:
             unit=${{ needs.unit.result }}
             smoke=${{ needs.smoke.result }}
             browser=${{ needs.browser.result }}
+            race=${{ needs.race.result }}
         run: |
           echo "$RESULTS"
           echo "changes.code=${CODE:-<unset>}"
@@ -239,7 +242,7 @@ jobs:
             case "$result" in
               success) ;;
               skipped)
-                if [ "$CODE" = "false" ] && { [ "$name" = "smoke" ] || [ "$name" = "browser" ]; }; then
+                if [ "$CODE" = "false" ] && { [ "$name" = "smoke" ] || [ "$name" = "browser" ] || [ "$name" = "race" ]; }; then
                   echo "$name skipped: docs-only change"
                 else
                   echo "::error::$name was skipped but this run is not docs-only (changes.code=${CODE:-<unset>})"
@@ -260,22 +263,29 @@ jobs:
   # ---------------------------------------------------------------------
 
   # Race detector over the packages listed in the Makefile's test-race
-  # target (turtlemonvh/blanket#119). Not yet a required check:
-  # continue-on-error so a red run is informational rather than blocking,
-  # the same posture the `windows` job started with. Promote this to
-  # required (drop continue-on-error, add to branch protection) once it's
-  # been green for a week -- long enough to catch a flake pattern before
-  # it starts blocking every PR.
+  # target (turtlemonvh/blanket#119). Required as of turtlemonvh/blanket#169
+  # -- it reports into the `test` aggregate below like every other surface,
+  # so a red race run now blocks a merge.
   #
-  # Note for whoever does that promotion: over the 36 runs sampled in #155
-  # this job failed 11.1% of the time, the highest rate of any job, so the
-  # "green for a week" bar has demonstrably not been met yet. See #169.
+  # It spent its probation as continue-on-error, and the promotion bar was
+  # "green for a week". The number that made it look unpromotable (11.1%
+  # over the 36 runs sampled in #155) did not survive classification: all
+  # four lifetime failures were the detector working, not noise -- two were
+  # one genuine data race (a test's `viper.Set` against a leftover scheduler
+  # goroutine reading global viper through lib/timing, fixed by 76ba365),
+  # one a real deadlock in TestSubscriberStop_WhileNotReading (57d4566), and
+  # one an infrastructure breakage. 0/44 since the #155 fan-out, and it has
+  # never produced a false red.
+  #
+  # Promotion is this `needs` entry, not a branch-protection change: `test`
+  # is the only required context on master, so a surface becomes blocking by
+  # joining that aggregate. Going through it also means race inherits the
+  # docs-only skip handling rather than needing its own carve-out.
   race:
     name: race
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/toolchain-image

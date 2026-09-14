@@ -255,13 +255,28 @@ header comment.
 - **`cross-compile`** (master pushes only): `make docker-build` —
   catches platform-only breakage without spending minutes on every PR.
 - **`race`**: builds the same toolchain image as the surfaces above,
-  then runs `make docker-test-race` (issue #119). `continue-on-error:
-  true` — a red `race` run is informational, not blocking, until it's
-  been green for a week; promote it to a required check (drop
-  `continue-on-error`, add to branch protection) once that holds. As of
-  the #155 measurements that bar has demonstrably not been met: over 36
-  sampled runs `race` failed 11.1% of the time, the highest rate of any
-  job.
+  then runs `make docker-test-race` (issue #119). **Required** as of
+  #169 — it reports into the `test` aggregate like every other surface,
+  so a red `race` run blocks a merge.
+
+  It was `continue-on-error` through its probation, and the 11.1%
+  failure rate measured over 36 runs in #155 made it look unpromotable.
+  Classifying those failures reversed the conclusion: all four lifetime
+  failures were the detector working — two were one real data race
+  (fixed by `76ba365`), one a real deadlock (`57d4566`), one an
+  infrastructure breakage — and it has been 0/44 since the fan-out,
+  with no false red ever. Note the promotion was a `needs:` entry on the
+  `test` job, not a branch-protection edit: `test` is the only required
+  context on master, so joining that aggregate is what makes a surface
+  blocking, and it carries the docs-only skip handling for free.
+
+**Go tests are not auto-retried, deliberately** (#169). Playwright keeps
+its single CI retry (`retries: process.env.CI ? 1 : 0`), but the Go
+surfaces do not, and adding one should be a conscious reversal rather
+than a quiet default. The measured flake population turned out to be a
+single identified cause — the `windows_powershell` smoke timeout, fixed
+in #195 — not a broad background rate, so a retry would buy little and
+cost the signal that `race` being required now depends on.
 
 `.github/workflows/licenses.yml` runs the `licenses` job separately, and
 is `paths:`-gated to `go.mod`/`go.sum` changes on PRs and master pushes,
