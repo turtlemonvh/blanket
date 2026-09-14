@@ -7,30 +7,30 @@
 # embedded asset problems, config/defaults drift, the bolt lock UX, etc.
 #
 # Usage:
-#   scripts/smoke.sh [path/to/blanket-binary]
+#   scripts/test/smoke.sh [path/to/blanket-binary]
 #
 # If no binary is given, the script picks the first one matching
 # ./blanket-<os>-<arch>[.exe] in the repo root.
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 # Port selection, workdir, config generation, readiness polling and trap
-# cleanup all live in the shared subprocess harness -- scripts/restart.sh
-# needs the same scaffolding. See scripts/lib/harness.sh.
-# shellcheck source=scripts/lib/harness.sh
-source "$REPO_ROOT/scripts/lib/harness.sh"
+# cleanup all live in the shared subprocess harness -- scripts/test/restart.sh
+# needs the same scaffolding. See scripts/test/lib/harness.sh.
+# shellcheck source=scripts/test/lib/harness.sh
+source "$REPO_ROOT/scripts/test/lib/harness.sh"
 
 harness_find_binary "${1:-}"
 harness_init blanket-smoke
 
 # Not part of the shared harness: only smoke.sh runs a live worker
 # alongside the server (turtlemonvh/blanket#27's ?wait checks need one to
-# actually claim and run tasks; scripts/restart.sh has no equivalent
+# actually claim and run tasks; scripts/test/restart.sh has no equivalent
 # need), so it's stopped locally in this script's own cleanup rather than
-# folded into scripts/lib/harness.sh.
+# folded into scripts/test/lib/harness.sh.
 WORKER_PID=""
 
 cleanup() {
@@ -496,7 +496,7 @@ WORKER_PID=""
 # clean up after a process that died without saying anything, and
 # `kill -9` on a real worker is the only honest way to produce that. The
 # thresholds are compressed in the harness config (see
-# scripts/lib/harness.sh) so a check that takes minutes in production
+# scripts/test/lib/harness.sh) so a check that takes minutes in production
 # takes seconds here.
 # ---------------------------------------------------------------------------
 

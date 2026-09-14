@@ -64,7 +64,7 @@ details, and release process.
 
 ```
 make docker-test           # Go unit tests
-make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh)
+make docker-test-smoke     # built binary end-to-end (scripts/test/smoke.sh)
 make docker-test-browser   # Playwright suite
 make docker-build          # cross-compile linux/darwin/windows
 ```

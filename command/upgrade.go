@@ -137,7 +137,7 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeConf.PrintPlan, "print-plan", false, "Print the steps this would run, with real paths, and stop")
 	upgradeCmd.Flags().StringVar(&upgradeConf.Bundle, "bundle", "", "Install from an offline bundle (.tar.gz or an extracted directory)")
 	upgradeCmd.Flags().StringVar(&upgradeConf.BaseURL, "releases-base-url", "", "Releases API base URL (tests; default the upgrade.releasesBaseURL config key)")
-	// Hidden because it exists for scripts/upgrade.sh: a test suite that
+	// Hidden because it exists for scripts/test/upgrade.sh: a test suite that
 	// reaches api.github.com is a test suite that fails whenever GitHub
 	// rate-limits an unauthenticated CI runner.
 	_ = upgradeCmd.Flags().MarkHidden("releases-base-url")

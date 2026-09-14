@@ -1,4 +1,4 @@
-// A stand-in for the GitHub Releases API, for scripts/upgrade.sh
+// A stand-in for the GitHub Releases API, for scripts/test/upgrade.sh
 // (turtlemonvh/blanket#23 phase 6).
 //
 // `blanket upgrade` reads a Releases API and downloads assets from it. A
@@ -100,6 +100,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-  // scripts/upgrade.sh waits for this line before starting the CLI.
+  // scripts/test/upgrade.sh waits for this line before starting the CLI.
   process.stdout.write(`fake-releases: listening on ${port}\n`);
 });

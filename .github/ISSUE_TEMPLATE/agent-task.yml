@@ -19,7 +19,7 @@ body:
       description: Checkable statements. An agent marks the issue done when all are true.
       placeholder: |
         - [ ] `blanket upgrade --check` prints the latest release version and exits 0
-        - [ ] Running tasks are not killed during upgrade (test: scripts/smoke.sh restart scenario)
+        - [ ] Running tasks are not killed during upgrade (test: scripts/test/smoke.sh restart scenario)
     validations:
       required: true
   - type: textarea

@@ -24,7 +24,7 @@ ARG GO_VERSION=1.26.0
 ARG TARGETARCH=amd64
 
 # Extra CLI tools: make for the Makefile, git for build ldflags, curl + jq
-# for scripts/smoke.sh, gcc + libc6-dev for `go test -race` (the race
+# for scripts/test/smoke.sh, gcc + libc6-dev for `go test -race` (the race
 # detector requires cgo, so without a C toolchain `make test-race` fails
 # with "-race requires cgo").
 RUN apt-get update \

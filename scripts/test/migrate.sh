@@ -2,7 +2,7 @@
 # Schema, backup, and migrate tests for the built blanket binary
 # (turtlemonvh/blanket#23 phase 4).
 #
-# These need a real process for the same reason scripts/restart.sh does,
+# These need a real process for the same reason scripts/test/restart.sh does,
 # plus one of their own: BoltDB's exclusive flock is a *cross-process*
 # invariant, and the whole design here turns on it. "The CLI can back up
 # only when the server is down", "restore refuses while the lock is held",
@@ -22,15 +22,15 @@
 #      a restore refused while the server holds the lock.
 #
 # Usage:
-#   scripts/migrate.sh [path/to/blanket-binary]
+#   scripts/test/migrate.sh [path/to/blanket-binary]
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-# shellcheck source=scripts/lib/harness.sh
-source "$REPO_ROOT/scripts/lib/harness.sh"
+# shellcheck source=scripts/test/lib/harness.sh
+source "$REPO_ROOT/scripts/test/lib/harness.sh"
 
 harness_find_binary "${1:-}"
 

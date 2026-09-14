@@ -15,7 +15,7 @@
 # "a different binary is running now".
 #
 # So this builds blanket twice with different VERSION ldflags, publishes
-# both through a fake Releases API (scripts/fake_releases.js) and an
+# both through a fake Releases API (scripts/test/fake_releases.js) and an
 # offline bundle, and drives the real command against a real server.
 #
 # Covered here:
@@ -39,18 +39,18 @@
 #   9. --bundle installs and verifies identically, offline.
 #
 # Usage:
-#   scripts/upgrade.sh [path/to/blanket-binary]
+#   scripts/test/upgrade.sh [path/to/blanket-binary]
 #
 # The argument is only used to locate the repo's own build; the versioned
 # binaries under test are compiled here.
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-# shellcheck source=scripts/lib/harness.sh
-source "$REPO_ROOT/scripts/lib/harness.sh"
+# shellcheck source=scripts/test/lib/harness.sh
+source "$REPO_ROOT/scripts/test/lib/harness.sh"
 
 OLD_VERSION="v9.9.0"
 NEW_VERSION="v9.9.1"
@@ -171,7 +171,7 @@ installed_version() {
 
 # Fake Releases API.
 RELEASES_PORT="$(harness_pick_port 19773)"
-node "$REPO_ROOT/scripts/fake_releases.js" "$RELDIR" "$RELEASES_PORT" "$FAKE_REPO" > "$WORKDIR/releases.log" 2>&1 &
+node "$REPO_ROOT/scripts/test/fake_releases.js" "$RELDIR" "$RELEASES_PORT" "$FAKE_REPO" > "$WORKDIR/releases.log" 2>&1 &
 RELEASES_PID=$!
 for _ in $(seq 1 50); do
     grep -q 'listening on' "$WORKDIR/releases.log" 2>/dev/null && break
@@ -587,7 +587,7 @@ cat > "$BUNDLE_SRC/blanket-bundle-$NEW_VERSION/manifest.json" <<EOF
 {
   "schema": 1,
   "version": "$NEW_VERSION",
-  "generator": "scripts/upgrade.sh",
+  "generator": "scripts/test/upgrade.sh",
   "binaries": [
     {"name": "$ASSET", "os": "linux", "arch": "amd64",
      "sha256": "$(sha256_of "$BUNDLE_SRC/blanket-bundle-$NEW_VERSION/$ASSET")"}
