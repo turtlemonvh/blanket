@@ -454,6 +454,25 @@ func finishUpgrade(res *upgradeResult, j *upgrade.Journal, stagedPath string) in
 	// Keep the old binary, then swap
 	// -------------------------------------------------------------------
 	slotsDir := upgradeSlotsDir()
+
+	// The staged file must still be there *before* a rollback slot is
+	// written, and this check is the reason why rather than a formality.
+	// SaveSlot copies whatever is at j.BinaryPath and labels it
+	// j.FromVersion; if the staged file has gone because the swap already
+	// happened, that copy is the *new* binary saved under the *old*
+	// version's name, and a later `blanket rollback` would install the
+	// version it was meant to undo. The visible ENOENT from the rename
+	// below would then be the second thing to go wrong, not the first
+	// (turtlemonvh/blanket#203).
+	//
+	// --resume identifies that case and never reaches here; this is the
+	// backstop for every other way of arriving with a stale path.
+	if _, err := os.Stat(stagedPath); err != nil {
+		return failWith(ExitError, fmt.Errorf(
+			"the staged binary %s is gone, so %s was left alone; run `blanket upgrade --yes` again",
+			stagedPath, j.BinaryPath))
+	}
+
 	if fi, err := os.Stat(j.BinaryPath); err == nil {
 		if w := upgrade.SpaceWarning(slotsDir, fi.Size(), upgradeSlotCount()); w != "" {
 			res.Warnings = append(res.Warnings, w)
@@ -732,6 +751,55 @@ func displayVersionOr(v string) string {
 // --resume and --abort
 // ---------------------------------------------------------------------------
 
+// adoptUnrecordedSwap handles the one case where a missing staged file is
+// not an error: the swap already happened and the crash beat the journal
+// to it (turtlemonvh/blanket#203).
+//
+// The evidence is the installed binary's digest. j.SHA256 is the digest of
+// the file that was staged, so if the binary now at j.BinaryPath hashes to
+// it, the rename completed and the only thing lost was the record of it.
+// Anything else -- a half-written file, an unrelated binary, a staged file
+// deleted by something else -- does not match, and the caller refuses.
+//
+// It returns (false, 0) when the swap cannot be confirmed, so the caller
+// owns the error message.
+func adoptUnrecordedSwap(res *upgradeResult, j *upgrade.Journal) (bool, int) {
+	if j.SHA256 == "" {
+		return false, 0
+	}
+	sum, err := upgrade.FileSHA256(j.BinaryPath)
+	if err != nil || sum != j.SHA256 {
+		return false, 0
+	}
+
+	// The slot was written before the swap, so it exists on disk even
+	// though the journal never got to name it. Recovering it matters: it
+	// is the rollback point for this upgrade, and left unnamed the next
+	// prune would eventually collect it as if it belonged to nobody.
+	if j.SlotPath == "" {
+		if slot, err := upgrade.SlotForUpgrade(upgradeSlotsDir(), j.Id); err == nil && slot != nil {
+			j.SlotPath = slot.Dir
+			res.SlotPath = slot.Dir
+		}
+	}
+
+	j.StagedPath = ""
+	j.Advance(upgrade.JournalSwapped, fmt.Sprintf(
+		"%s was already installed at %s; the interrupted attempt swapped it without recording it", j.ToVersion, j.BinaryPath))
+	if err := j.Save(res.JournalPath); err != nil {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("could not update the upgrade journal: %v", err))
+	}
+	res.Warnings = append(res.Warnings, fmt.Sprintf(
+		"%s was already installed; the interrupted attempt got as far as the swap without recording it", j.ToVersion))
+	res.State = j.State
+
+	port := j.Port
+	if port == 0 {
+		port = viper.GetInt("port")
+	}
+	return true, execAndVerify(res, j, port)
+}
+
 func runUpgradeResume(res *upgradeResult, installed string) int {
 	j, err := upgrade.LoadJournal(res.JournalPath)
 	if err != nil {
@@ -771,11 +839,38 @@ func runUpgradeResume(res *upgradeResult, installed string) int {
 		res.StagedPath = j.StagedPath
 		return finishUpgrade(res, j, j.StagedPath)
 	case upgrade.JournalBackedUp, upgrade.JournalPaused:
-		// The binary was never swapped; the staged file is the way back in.
-		if j.StagedPath != "" {
+		// Normally the binary was never swapped and the staged file is the
+		// way back in. But BACKED_UP/PAUSED is also what the journal says
+		// after a crash in the window between Swap() returning and the
+		// journal recording it, and in that window the staged file is gone
+		// because it *became* the installed binary
+		// (turtlemonvh/blanket#203). Trusting the journal's stagedPath
+		// there copies the already-new binary into a rollback slot
+		// labelled with the old version, silently, before failing with a
+		// confusing ENOENT from the rename.
+		//
+		// So: ask the disk, not the journal.
+		if j.StagedPath == "" {
+			return res.fail(ExitUsage, errors.New("nothing staged to resume with; run `blanket upgrade --abort` then try again"))
+		}
+		if _, err := os.Stat(j.StagedPath); err == nil {
+			// The ordinary case. Re-verify for the same reason the STAGED
+			// branch does: the file has been on disk since another process
+			// wrote it, and "it was correct when we staged it" is a claim
+			// about a different moment.
+			if err := upgrade.VerifyFileDigest(j.StagedPath, j.AssetName, j.SHA256); err != nil {
+				os.Remove(j.StagedPath)
+				return res.fail(ExitVerificationFailed, err)
+			}
+			res.StagedPath = j.StagedPath
 			return finishUpgrade(res, j, j.StagedPath)
 		}
-		return res.fail(ExitUsage, errors.New("nothing staged to resume with; run `blanket upgrade --abort` then try again"))
+		if adopted, code := adoptUnrecordedSwap(res, j); adopted {
+			return code
+		}
+		return res.fail(ExitUsage, fmt.Errorf(
+			"the staged binary %s is gone and %s is not the %s that was staged; run `blanket upgrade --yes` again",
+			j.StagedPath, j.BinaryPath, j.ToVersion))
 	case upgrade.JournalSwapped, upgrade.JournalDrained, upgrade.JournalExeced:
 		// The new binary is already installed; all that is left is to get
 		// a server onto it.
