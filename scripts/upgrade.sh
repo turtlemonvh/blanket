@@ -497,7 +497,19 @@ PYEOF
 # name it. Building that too keeps the fixture honest and exercises the
 # recovery that finds the slot again by upgradeId.
 journal_id="$(json_field "$(cat "$journal_path")" id)"
-slot_dir="$WORKDIR/upgrade/slots/$(date -u +%Y%m%d%H%M%S).000-$OLD_VERSION"
+# The millisecond field has to sort *last*, not .000. SaveSlot runs
+# immediately before the rename, so in the real window this is the newest
+# slot -- and the whole suite can run inside a single second, where a .000
+# fixture sorts older than the slot the setup rollback just wrote and
+# quietly leaves a $NEW_VERSION slot as the rollback point. That is exactly
+# how this fixture passed locally and failed in CI.
+#
+# A literal .999 rather than `date +%3N`, which is a GNU extension this
+# script cannot assume (see harness_now_ms, which works around the same
+# thing) -- and ListSlots only requires \d{14}\.\d{3}, not a real clock
+# reading.
+slot_dir="$WORKDIR/upgrade/slots/$(date -u +%Y%m%d%H%M%S).999-$OLD_VERSION"
+[[ -e "$slot_dir" ]] && fail "the fixture slot $slot_dir already exists; a real slot landed on it"
 mkdir -p "$slot_dir"
 cp "$INSTALLED" "$slot_dir/blanket"
 cat > "$slot_dir/slot.json" <<EOF
@@ -529,7 +541,10 @@ grep -qi 'no such file or directory' <<<"$resume3_out"     && fail "--resume sti
 harness_wait_ready || fail "no server after resuming an unrecorded swap"
 installed_version | grep -q "$NEW_VERSION" || fail "the resumed upgrade did not leave $NEW_VERSION installed"
 
-# Every slot claiming to hold $OLD_VERSION must actually hold it.
+# Every slot claiming to hold $OLD_VERSION must actually hold it. This is
+# the real payload of #203: the bug's first effect was a slot labelled
+# $OLD_VERSION holding the $NEW_VERSION binary, which would have made a
+# later `blanket rollback` install the version it was asked to undo.
 for meta in "$WORKDIR"/upgrade/slots/*/slot.json; do
     [[ -f "$meta" ]] || continue
     slot_version="$(json_field "$(cat "$meta")" version)"
@@ -537,6 +552,15 @@ for meta in "$WORKDIR"/upgrade/slots/*/slot.json; do
     [[ "$slot_version" == "$OLD_VERSION" ]] || continue
     [[ "$slot_sha" == "$(sha256_of "$BUILDDIR/$OLD_VERSION-$ASSET")" ]]         || fail "rollback slot $(dirname "$meta") claims $OLD_VERSION but holds something else (sha $slot_sha)"
 done
+
+# And the *newest* slot -- the one `blanket rollback --yes` would use -- is
+# the pre-swap $OLD_VERSION binary. Asserted here rather than left for a
+# later case to trip over: a rollback point that has silently become
+# $NEW_VERSION is this bug's worst outcome, so it should fail in the case
+# that builds the state, not three cases downstream.
+newest_slot="$(find "$WORKDIR/upgrade/slots" -mindepth 1 -maxdepth 1 -type d | sort | tail -1)"
+newest_version="$(json_field "$(cat "$newest_slot/slot.json")" version)"
+[[ "$newest_version" == "$OLD_VERSION" ]] || fail "the newest rollback slot is '$newest_version', want $OLD_VERSION (a rollback would not undo the upgrade): $newest_slot"
 
 # The journal must have recovered the slot it never got to record, so the
 # rollback point is not left as an orphan for the next prune to collect.
