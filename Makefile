@@ -69,27 +69,27 @@ test-api-e2e:
 
 # End-to-end smoke test for the built binary: starts the server on a throwaway
 # port + tempdir, exercises core endpoints, tears down. Run `make linux`
-# (or darwin/windows) first so scripts/smoke.sh has a binary to exec.
+# (or darwin/windows) first so scripts/test/smoke.sh has a binary to exec.
 test-smoke:
-	bash scripts/smoke.sh
+	bash scripts/test/smoke.sh
 
 # Shutdown / restart tests for the built binary (turtlemonvh/blanket#23
 # phase 2): SIGTERM drains with an SSE client attached and exits 0, SIGINT
 # stops without resurrecting anything, SIGUSR2 re-execs in place keeping the
 # PID. None of these are expressible in-process — see the header of
-# scripts/restart.sh. Shares scripts/lib/harness.sh with test-smoke, and
+# scripts/test/restart.sh. Shares scripts/test/lib/harness.sh with test-smoke, and
 # needs a built binary the same way.
 test-restart:
-	bash scripts/restart.sh
+	bash scripts/test/restart.sh
 
 # Schema / backup / migrate tests for the built binary
 # (turtlemonvh/blanket#23 phase 4). Cross-process by nature: BoltDB's
 # exclusive flock is what makes "back up via the server while it's running"
 # and "restore only with it stopped" mean anything, and a single `go test`
-# process can't observe either. Shares scripts/lib/harness.sh with
+# process can't observe either. Shares scripts/test/lib/harness.sh with
 # test-smoke and test-restart.
 test-migrate:
-	bash scripts/migrate.sh
+	bash scripts/test/migrate.sh
 
 # Restart state-machine tests for the built binary (turtlemonvh/blanket#23
 # phase 5). Its claim is not "each transition works" -- that is a Go test --
@@ -97,9 +97,9 @@ test-migrate:
 # a documented place", which needs a real process killed at a point no
 # wall-clock `kill -9` could reliably hit. The binary carries a
 # crash-injection hook (BLANKET_TEST_CRASH_AT) and this parametrizes over
-# every state with it. Shares scripts/lib/harness.sh with the other three.
+# every state with it. Shares scripts/test/lib/harness.sh with the other three.
 test-restart-machine:
-	bash scripts/restart_machine.sh
+	bash scripts/test/restart_machine.sh
 
 # Dependency license gate (turtlemonvh/blanket#143, following the audit in
 # #131): `go-licenses check` against an explicit allowlist, plus a CSV
@@ -128,10 +128,10 @@ bundle:
 # binary on disk was replaced and a *different* process came back running
 # it", which no in-process test can even state. It builds blanket twice
 # with different VERSION ldflags, serves them from a fake releases API and
-# from a bundle, and drives the real command. Shares scripts/lib/harness.sh
+# from a bundle, and drives the real command. Shares scripts/test/lib/harness.sh
 # with the other four.
 test-upgrade:
-	bash scripts/upgrade.sh
+	bash scripts/test/upgrade.sh
 
 install-playwright:
 	cd tests/e2e && npm install && npx playwright install --with-deps chromium

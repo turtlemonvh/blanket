@@ -21,7 +21,7 @@ whole design:
 
   - **Every state has a documented recovery.** A process that boots and
     finds a record knows what it is the continuation of, and what it owes
-    the workers that record mentions. scripts/restart_machine.sh kills the
+    the workers that record mentions. scripts/test/restart_machine.sh kills the
     server at each state in turn and asserts the recovery actually happens.
 
 ## What is in memory, and why any of it is
@@ -134,7 +134,7 @@ const (
 
 // CrashAtEnv names the state at which the server should die immediately
 // after committing the transition into it. The crash-injection suite
-// (scripts/restart_machine.sh) parametrizes over every state with it.
+// (scripts/test/restart_machine.sh) parametrizes over every state with it.
 //
 // This is a test hook compiled into the production binary, which is a real
 // (if small) cost, taken deliberately. The property being tested — "a

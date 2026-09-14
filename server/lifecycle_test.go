@@ -12,7 +12,7 @@
 //
 // What can't be tested in-process -- signals actually delivered to a real
 // process, SIGUSR2 re-exec preserving the PID, exit codes -- lives in
-// scripts/restart.sh on top of scripts/lib/harness.sh.
+// scripts/test/restart.sh on top of scripts/test/lib/harness.sh.
 
 package server
 

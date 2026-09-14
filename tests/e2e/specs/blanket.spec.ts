@@ -120,7 +120,7 @@ test.describe('Task API lifecycle', () => {
   // submitted task is never claimed and the wait always expires. That
   // makes this a real test of the timeout path: 504, with enough in the
   // body to go pick the task up asynchronously. Anything that needs the
-  // task to actually complete lives in scripts/smoke.sh, which runs a
+  // task to actually complete lives in scripts/test/smoke.sh, which runs a
   // worker.
   test('POST /task/?wait times out with 504 on an unclaimed task', async ({ request, baseURL }) => {
     const types = await getTaskTypes(baseURL!);

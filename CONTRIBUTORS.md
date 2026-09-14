@@ -46,10 +46,10 @@ again at runtime. Still much cheaper than a cold build.
 ```
 make docker-test           # Go unit tests
 make docker-test-race      # Go unit tests under -race (worker/server/bolt/…)
-make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh
-                           #   + scripts/restart.sh + scripts/migrate.sh
-                           #   + scripts/restart_machine.sh
-                           #   + scripts/upgrade.sh)
+make docker-test-smoke     # built binary end-to-end (scripts/test/smoke.sh
+                           #   + scripts/test/restart.sh + scripts/test/migrate.sh
+                           #   + scripts/test/restart_machine.sh
+                           #   + scripts/test/upgrade.sh)
 make docker-test-browser   # Playwright suite
 make docker-shell          # interactive container for ad-hoc work
 make docker-pull           # fetch the prebuilt toolchain image from GHCR
@@ -91,15 +91,15 @@ verify Windows-specific changes natively:
 ```powershell
 go build -o blanket-windows-amd64.exe .
 go test ./worker/... ./command/... ./lib/service/... ./lib/proclive/... ./lib/follow/...
-pwsh scripts/smoke.ps1 -Binary .\blanket-windows-amd64.exe
+pwsh scripts/test/smoke.ps1 -Binary .\blanket-windows-amd64.exe
 ```
 
-`scripts/smoke.ps1` starts the built binary against a scratch config,
+`scripts/test/smoke.ps1` starts the built binary against a scratch config,
 submits a task through each native Windows executor example
 (`examples/types/windows_echo.toml` for `cmd`,
 `examples/types/windows_powershell.toml` for `powershell`), runs a real
 `blanket worker` to drain them, and asserts both reach `SUCCESS` — the
-Windows counterpart to `scripts/smoke.sh`.
+Windows counterpart to `scripts/test/smoke.sh`.
 
 ### The subprocess test harness
 
@@ -110,9 +110,35 @@ reading `os.Executable()` (which resolves to the test binary under
 same scaffolding — free port, throwaway workdir, generated config,
 readiness polling, cleanup on every exit path.
 
-That scaffolding lives in **`scripts/lib/harness.sh`**. `scripts/smoke.sh`,
-`scripts/restart.sh`, `scripts/migrate.sh`, `scripts/restart_machine.sh`
-and `scripts/upgrade.sh` all source it; a new subprocess test should too,
+### What lives in `scripts/`
+
+`scripts/` holds three unrelated audiences, so the test material sits in
+**`scripts/test/`** (turtlemonvh/blanket#207) and the rest stays at the top
+level:
+
+| path | who runs it |
+| ---- | ----------- |
+| `scripts/install.sh`, `scripts/install.ps1` | **users**, usually by URL |
+| `scripts/setup.sh` | contributors, once, to build a dev box |
+| `scripts/bundle.sh`, `scripts/licenses.sh`, `scripts/toolchain-hash.sh` | release + CI plumbing |
+| `scripts/test/**` | `make test-smoke`, `test-restart`, `test-migrate`, `test-restart-machine`, `test-upgrade` |
+
+**The two install scripts cannot move.** They are published URLs —
+`https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/install.sh`
+and its `.ps1` twin — named in the README, `docs/autostart.md`, and inside
+`install.ps1` itself (`$RawBase`), and copied into offline bundles by
+`bundle.sh`. Moving either would 404 a one-liner someone has already pasted
+into a runbook. That constraint is the reason for the split rather than an
+obstacle to it: the two files a user actually wants are the two that are
+pinned in place, so everything else gets out of their way.
+
+A moved script resolves `REPO_ROOT` two levels up, not one. `smoke.sh`
+still reaches back to `scripts/install.sh` on purpose — it tests the
+installer.
+
+That scaffolding lives in **`scripts/test/lib/harness.sh`**. `scripts/test/smoke.sh`,
+`scripts/test/restart.sh`, `scripts/test/migrate.sh`, `scripts/test/restart_machine.sh`
+and `scripts/test/upgrade.sh` all source it; a new subprocess test should too,
 rather than copying the setup a third time. Everything it defines is
 prefixed `harness_`, and it exports `BINARY`, `WORKDIR`, `PORT`, `BASE`,
 `CONFIG`, `SERVER_PID` and `SERVER_LOG`. The usage sketch is in the file's
@@ -245,7 +271,7 @@ header comment.
   on, and `follow_notify_test.go` is `//go:build !windows` so this job
   exercises exactly the polling path the product uses there (#142) —
   then a
-  PowerShell smoke pass (`scripts/smoke.ps1` — see below) and two runs of
+  PowerShell smoke pass (`scripts/test/smoke.ps1` — see below) and two runs of
   `scripts/install.ps1` against the just-built binary, asserting its
   `$PROFILE` shell-integration block is written idempotently. It does
   **not** run the Docker-based Go test suite, `docker-test-smoke`, or the

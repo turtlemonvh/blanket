@@ -10,7 +10,7 @@ transitions are legal, what each one does to the record and to the workers,
 who is refused, and which workers a respawn pass picks up. What cannot is
 the half that needs a second process — a crash between two transitions, a
 re-exec that keeps the pid, an exit code a supervisor acts on. That is
-scripts/restart_machine.sh, which parametrizes a real binary over every
+scripts/test/restart_machine.sh, which parametrizes a real binary over every
 state with BLANKET_TEST_CRASH_AT.
 
 The spawn hook (ServerConfig.spawnWorkerFn) is what makes the respawn tests

@@ -243,7 +243,7 @@ func SetConfigDefaults() {
 	// backup had already been pruned out from under it.
 	viper.SetDefault("upgrade.slots", 3)
 	// Which repository releases come from, and the Releases API root.
-	// The base URL is overridable so scripts/upgrade.sh can serve a fake
+	// The base URL is overridable so scripts/test/upgrade.sh can serve a fake
 	// releases API off localhost; a test suite that reached
 	// api.github.com would fail whenever GitHub rate-limited CI.
 	viper.SetDefault("upgrade.repo", "turtlemonvh/blanket")
