@@ -7,4 +7,21 @@ description = "Write a fixed string to stdout via powershell.exe."
 tags = ["os:windows"]
 executor = "powershell"
 command = "Write-Output 'hello from blanket'"
-timeout = 10
+
+# 60s, not the 10s its cmd.exe sibling uses. On a cold, loaded CI runner
+# this one-line command was exceeding 10s and timing out, failing the
+# Windows smoke job roughly one run in ten (turtlemonvh/blanket#169).
+#
+# Blanket was right to kill it -- the task really did exceed its declared
+# budget. The budget was the wrong number. 10s for "start an interpreter
+# and echo a string" asserts something about how fast the machine is
+# rather than anything about the task, and an assertion that only holds
+# on an unloaded machine is a coin flip, not a test. 60s still fails a
+# genuinely hung task; it just stops failing a slow morning.
+#
+# What it does not do is explain *why* startup crossed 10s. Measured
+# locally, powershell.exe starts in ~380ms. scripts/smoke.ps1 now prints
+# each task's elapsed time against its budget on success, so the runner's
+# real number shows up in every green log instead of only surfacing the
+# next time it crosses.
+timeout = 60

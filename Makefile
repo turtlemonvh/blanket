@@ -171,6 +171,10 @@ clean:
 
 DOCKER_IMAGE ?= blanket-dev:latest
 
+# Where master publishes the toolchain image (turtlemonvh/blanket#53).
+# `make docker-pull` below fetches from here instead of building.
+TOOLCHAIN_REGISTRY ?= ghcr.io/turtlemonvh/blanket-dev
+
 # Base run command:
 #   -v $(CURDIR):/src                        — mount the checkout
 #   -v blanket-dev-cache:/go                 — persist Go module + build cache
@@ -241,6 +245,27 @@ else
 		|| { echo "BLANKET_SKIP_IMAGE_BUILD is set but $(DOCKER_IMAGE) does not exist"; exit 1; }
 endif
 
+# Fetch the toolchain image master already built, instead of spending ~5min
+# building it (turtlemonvh/blanket#53). Optional: every docker-* target
+# still builds on its own if you never run this.
+#
+# scripts/toolchain-hash.sh is the same tag definition CI uses, so an
+# unmodified checkout of master pulls exactly the image CI is running. Two
+# tags are tried, in this order:
+#
+#   <content hash>  the image for *these* inputs. An exact match.
+#   master          whatever was published most recently. A near-miss you
+#                   get when you have edited go.mod, the Dockerfile, or the
+#                   e2e package manifests locally.
+#
+# The master fallback is a convenience, not an equivalent: its baked Go
+# module and npm caches are pre-warmed for master's manifests, not yours,
+# so `go mod download` and `npm ci` do real work again at runtime. It is
+# still far cheaper than a cold build, which is why it is offered at all --
+# but it is why the fallback says so out loud rather than quietly.
+docker-pull:
+	@tag=$$(scripts/toolchain-hash.sh); 	if docker pull "$(TOOLCHAIN_REGISTRY):$$tag"; then 		docker tag "$(TOOLCHAIN_REGISTRY):$$tag" $(DOCKER_IMAGE); 		echo "$(DOCKER_IMAGE) <- $(TOOLCHAIN_REGISTRY):$$tag (exact match for this checkout)"; 	elif docker pull "$(TOOLCHAIN_REGISTRY):master"; then 		docker tag "$(TOOLCHAIN_REGISTRY):master" $(DOCKER_IMAGE); 		echo; 		echo "note: no image published for this checkout's inputs ($$tag)."; 		echo "      pulled the master tag instead -- usable, but its Go and npm"; 		echo "      caches are warmed for master's manifests, not yours."; 	else 		echo "could not pull $(TOOLCHAIN_REGISTRY) (offline, or the package is not public)."; 		echo "run 'make docker-image' to build the toolchain locally instead."; 		exit 1; 	fi
+
 docker-check-fmt: docker-image
 	$(DOCKER_RUN) make check-fmt
 
@@ -289,4 +314,4 @@ docker-shell: docker-image
 docker-clean:
 	-docker volume rm blanket-dev-cache blanket-npm-cache
 
-.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine test-upgrade checksums bundle install-playwright vet fmt check-fmt clean licenses docker-image docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-release docker-shell docker-clean docker-licenses
+.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine test-upgrade checksums bundle install-playwright vet fmt check-fmt clean licenses docker-image docker-pull docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-release docker-shell docker-clean docker-licenses
