@@ -7,15 +7,15 @@ re-fetches this tbody, so the cancelled row leaves the list.
 {{define "upcoming-onetime-rows"}}
 {{range $i, $t := .OneTime}}
 <tr>
-    <th scope="row">{{add $i 1}}</th>
-    <td><a href="/ui/tasks/{{hex $t.Id}}">{{shortId $t.Id}}</a></td>
+    <th scope="row" class="cell-num">{{add $i 1}}</th>
+    <td class="cell-id"><a class="card-link" href="/ui/tasks/{{hex $t.Id}}">{{shortId $t.Id}}</a></td>
     <td>{{$t.TypeId}}</td>
-    <td>{{fmtTs $t.ScheduledTs}}</td>
+    <td data-label="runs">{{fmtTs $t.ScheduledTs}}</td>
     <td class="muted">{{scheduleDesc $t}}</td>
-    <td class="row-actions">
+    <td class="cell-actions row-actions">
         <a class="danger"
            hx-put="/task/{{hex $t.Id}}/cancel"
-           hx-confirm="Cancel this scheduled task? It will not run."
+           hx-confirm="Cancel this scheduled {{$t.TypeId}} task? It will not run."
            hx-swap="none"
            hx-on::after-request="htmx.trigger('#upcoming-onetime-rows', 'refresh-rows')">
             Cancel

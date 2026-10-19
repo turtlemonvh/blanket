@@ -42,8 +42,9 @@ func uiStaticFS() http.FileSystem {
 
 // Template funcs shared across all pages.
 var uiFuncs = template.FuncMap{
-	"add":  func(a, b int) int { return a + b },
-	"join": strings.Join,
+	"add":       func(a, b int) int { return a + b },
+	"join":      strings.Join,
+	"hasPrefix": strings.HasPrefix,
 	"shortId": func(id objectid.ObjectId) string {
 		h := id.Hex()
 		if len(h) >= 8 {
@@ -61,14 +62,12 @@ var uiFuncs = template.FuncMap{
 	"isCancelable": func(state string) bool {
 		return state == "WAITING" || state == "SCHEDULED" || state == "CLAIMED" || state == "RUNNING"
 	},
-	"isTerminal": func(state string) bool {
-		for _, s := range tasks.ValidTerminalTaskStates {
-			if s == state {
-				return true
-			}
-		}
-		return false
-	},
+	"isTerminal": isTerminalState,
+	// instanceName and taskDuration are the phone layout's
+	// (turtlemonvh/blanket#216) -- see ui_mobile.go.
+	"instanceName": uiInstanceName,
+	"exitSummary":  exitSummary,
+	"taskDuration": func(t tasks.Task) string { return taskDurationAt(t, time.Now()) },
 	// scheduleDesc is the same friendly text the JSON API exposes as a
 	// task's "scheduleDescription" field, so the UI and API never disagree
 	// about how a schedule reads.
@@ -1005,6 +1004,8 @@ func (s *ServerConfig) uiTaskTypeWarningsPartial(c *gin.Context) {
 
 // renderUI executes the layout with the page's content block bound.
 func (s *ServerConfig) renderUI(c *gin.Context, t *template.Template, data gin.H) {
+	// The layout's phone tab bar marks the current section from this.
+	data["NavPath"] = c.Request.URL.Path
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(c.Writer, "layout", data); err != nil {
 		log.WithField("err", err).Warn("ui: render page")

@@ -34,46 +34,43 @@
         </tbody>
     </table>
 
-    <h3>Live Log
-        <label style="font-weight:normal;font-size:0.9rem;margin-left:1rem;">
-            <input type="checkbox" id="pin-bottom" checked> Pin to bottom
-        </label>
-    </h3>
+    <h3>Live Log</h3>
+    {{/* Same toolbar and behaviour as the task log (log-order.js, #216):
+         newest-first by default on a phone, oldest-first + pin to bottom
+         on desktop. */}}
+    <div class="log-toolbar">
+        <div class="log-options">
+            <label class="log-order">
+                <input type="checkbox" id="log-newest-first"> Newest first
+            </label>
+            <label class="log-pin">
+                <input type="checkbox" id="pin-bottom" checked> <span id="pin-label">Pin to bottom</span>
+            </label>
+        </div>
+    </div>
     {{if not .Worker.Stopped}}
     <pre id="worker-log"
+         class="log-pane"
          hx-ext="sse"
          sse-connect="/worker/{{hex .Worker.Id}}/log"
          sse-swap="message"
          hx-swap="beforeend"
-         style="max-height:420px;overflow:auto;background:#0e1014;color:#d4d4d4;padding:0.75rem;border-radius:6px;"
          aria-label="live worker log"></pre>
-    <script>
-    (function () {
-      var el = document.getElementById('worker-log');
-      var pin = document.getElementById('pin-bottom');
-      if (!el) return;
-      el.addEventListener('htmx:sseMessage', function () {
-        if (pin.checked) el.scrollTop = el.scrollHeight;
-      });
-    })();
-    </script>
     {{else}}
     <pre id="worker-log"
+         class="log-pane"
          hx-get="/worker/{{hex .Worker.Id}}/log/tail"
          hx-trigger="load"
          hx-swap="innerHTML"
-         style="max-height:420px;overflow:auto;background:#0e1014;color:#d4d4d4;padding:0.75rem;border-radius:6px;"
          aria-label="worker log output"><span class="muted">Loading…</span></pre>
-    <script>
-    (function () {
-      var el = document.getElementById('worker-log');
-      var pin = document.getElementById('pin-bottom');
-      if (!el) return;
-      el.addEventListener('htmx:afterSwap', function () {
-        if (pin.checked) el.scrollTop = el.scrollHeight;
-      });
-    })();
-    </script>
     {{end}}
+    <script>
+    window.blanketLogOrder.attach({
+      pane: document.getElementById('worker-log'),
+      order: document.getElementById('log-newest-first'),
+      pin: document.getElementById('pin-bottom'),
+      pinLabel: document.getElementById('pin-label')
+    });
+    </script>
 </section>
 {{end}}

@@ -256,6 +256,32 @@ server-rendered htmx UI baked into the binary, no separate deploy.
 | **Task Types** (`/ui/task-types`) | The loaded TOML types and their settings. |
 | **About** (`/ui/about`) | Version, config file, effective settings. |
 
+The header shows which blanket you're looking at: the machine's hostname
+by default, or whatever you set as `ui.instanceName`:
+
+```
+ui.instanceName  ""   # header + installed-app name; empty = hostname
+```
+
+### On a phone
+
+The same pages work on a phone. Below 640px wide the lists turn into
+cards — each task leads with its state and how long it has been queued,
+running, or ran for, then its type and short id, then one line of context
+(the worker it's on, or its exit code and finish time) — and the top
+links move to a tab bar at the bottom (**Tasks**, **Upcoming**,
+**Workers**, **More**). Tap a card to open it; the task page has a
+**Log ↓** button. Durations are computed by the server and refresh
+whenever the list does; nothing ticks in the browser. Cancel and Delete
+are still there, and every one of them — on a phone or not — asks first.
+
+To install it as an app, open blanket in the phone's browser and use
+**Add to Home Screen** (Safari: the share menu; Chrome: the ⋮ menu). The
+installed app opens full-screen and is named after the instance. Browsers
+only offer this over HTTPS — see [Exposing blanket with
+Tailscale](examples/tailscale.md) for the recommended way to get a real
+certificate. There's no offline mode: everything blanket shows is live.
+
 ### Task detail
 
 `/ui/tasks/<id>` is one task's page: its metadata, its environment, its
@@ -290,7 +316,10 @@ result artifact, and its log.
   stops a fraction of a second after the task itself exits, so if the
   task left something running behind it, that process's later output
   shows up under `stdout` / `stderr` but not under `both`. **Pin to
-  bottom** keeps the newest line in view.
+  bottom** keeps the newest line in view. **Newest first** flips the
+  pane so the latest line is at the top and new lines arrive there (the
+  pin then keeps the top in view); it's on by default on a phone and off
+  on a desktop, and the worker page's log has the same toggle.
 
 ### Upcoming
 
