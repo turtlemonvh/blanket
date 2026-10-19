@@ -13,7 +13,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-gonic/gin v1.12.0
 	github.com/manucorporat/sse v0.0.0-20160126180136-ee05b128a739
-	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rs/cors v1.11.1
 	github.com/sirupsen/logrus v1.10.2
@@ -22,8 +22,8 @@ require (
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.12.1
 	go.etcd.io/bbolt v1.5.0
-	go.mongodb.org/mongo-driver/v2 v2.9.0
-	golang.org/x/sys v0.48.0
+	go.mongodb.org/mongo-driver/v2 v2.9.2
+	golang.org/x/sys v0.49.0
 )
 
 require (
