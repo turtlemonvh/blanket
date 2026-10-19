@@ -5,7 +5,7 @@ package server
 Tests for the ops surface (turtlemonvh/blanket#23 phase 4).
 
 The non-loopback case has to be tested here rather than in
-scripts/smoke.sh: the subprocess harness runs everything on localhost, so
+scripts/test/smoke.sh: the subprocess harness runs everything on localhost, so
 the one address it can never produce is a remote one. In a Go handler test
 RemoteAddr is just a field.
 

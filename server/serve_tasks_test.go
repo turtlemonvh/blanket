@@ -404,7 +404,7 @@ func TestDeleteTask(t *testing.T) {
 
 // TestDeleteTask_InvalidId is #115's regression test for DELETE /task/:id:
 // a malformed id is a 400, never the 500 that motivated the issue (and
-// scripts/smoke.sh's `rm not-a-valid-id` assertion).
+// scripts/test/smoke.sh's `rm not-a-valid-id` assertion).
 func TestDeleteTask_InvalidId(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()

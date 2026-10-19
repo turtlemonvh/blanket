@@ -36,15 +36,15 @@
 #   * the deadline watchdog un-pauses a server whose driver never came back.
 #
 # Usage:
-#   scripts/restart_machine.sh [path/to/blanket-binary]
+#   scripts/test/restart_machine.sh [path/to/blanket-binary]
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-# shellcheck source=scripts/lib/harness.sh
-source "$REPO_ROOT/scripts/lib/harness.sh"
+# shellcheck source=scripts/test/lib/harness.sh
+source "$REPO_ROOT/scripts/test/lib/harness.sh"
 
 harness_find_binary "${1:-}"
 

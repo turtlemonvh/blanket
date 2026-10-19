@@ -349,13 +349,13 @@ jobs:
         run: go test -v -count=1 ./worker/... ./command/... ./lib/service/... ./lib/proclive/... ./lib/follow/...
 
       - name: Smoke test
-        run: pwsh scripts/smoke.ps1 -Binary .\blanket-windows-amd64.exe
+        run: pwsh scripts/test/smoke.ps1 -Binary .\blanket-windows-amd64.exe
 
       # install.ps1's first-ever CI run (issue #79). Exercises it twice
       # against the binary just built (BINARY_PATH skips the release
       # download) with a scratch $PROFILE/home so it can't touch the
       # runner's real user profile, asserting the marked shell-integration
-      # block in $PROFILE is idempotent — same property scripts/smoke.sh
+      # block in $PROFILE is idempotent — same property scripts/test/smoke.sh
       # already checks for install.sh's .bashrc block on Linux.
       - name: install.ps1 (offline, twice)
         run: |

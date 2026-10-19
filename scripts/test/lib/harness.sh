@@ -9,13 +9,13 @@
 # throwaway workdir, a generated config, readiness polling, and cleanup on
 # any exit path.
 #
-# This library is that scaffolding, factored out of scripts/smoke.sh so
-# scripts/restart.sh (and turtlemonvh/blanket#23 phase 5's restart
+# This library is that scaffolding, factored out of scripts/test/smoke.sh so
+# scripts/test/restart.sh (and turtlemonvh/blanket#23 phase 5's restart
 # state-machine tests) don't duplicate it.
 #
 # Usage:
 #
-#     source "$REPO_ROOT/scripts/lib/harness.sh"
+#     source "$REPO_ROOT/scripts/test/lib/harness.sh"
 #     harness_find_binary "${1:-}"       # -> BINARY (absolute)
 #     harness_init                       # -> WORKDIR, PORT, BASE, CONFIG
 #     trap harness_cleanup EXIT INT TERM
@@ -165,7 +165,7 @@ EOF
 #
 # Deliberately NOT wrapped in a `( cd … ; cmd & )` subshell: that makes the
 # server a grandchild, and `wait` on a grandchild's PID fails, so its exit
-# status is unobservable. scripts/restart.sh asserts on that exit status.
+# status is unobservable. scripts/test/restart.sh asserts on that exit status.
 harness_start_server() {
     local prev="$PWD"
     cd "$WORKDIR"

@@ -20,7 +20,7 @@ command = "Write-Output 'hello from blanket'"
 # genuinely hung task; it just stops failing a slow morning.
 #
 # What it does not do is explain *why* startup crossed 10s. Measured
-# locally, powershell.exe starts in ~380ms. scripts/smoke.ps1 now prints
+# locally, powershell.exe starts in ~380ms. scripts/test/smoke.ps1 now prints
 # each task's elapsed time against its budget on success, so the runner's
 # real number shows up in every green log instead of only surfacing the
 # next time it crosses.

@@ -1,9 +1,9 @@
 # End-to-end smoke test for the built blanket binary, Windows edition.
 #
-# Mirrors scripts/smoke.sh's spirit (spin up the server on a scratch port
+# Mirrors scripts/test/smoke.sh's spirit (spin up the server on a scratch port
 # against a throwaway config, exercise a handful of endpoints, tear
 # everything down) but is intentionally smaller: it focuses on the
-# Windows-only path scripts/smoke.sh can't cover — submitting and running
+# Windows-only path scripts/test/smoke.sh can't cover — submitting and running
 # a task through native Windows executors (cmd.exe / powershell.exe), via
 # a real `blanket worker` process. It is NOT a port of smoke.sh; the
 # Docker/Playwright/MCP surfaces smoke.sh also checks are exercised on
@@ -11,7 +11,7 @@
 #
 # Usage (from the repo root, or anywhere — the script resolves paths off
 # its own location):
-#   pwsh scripts/smoke.ps1 [-Binary path\to\blanket.exe]
+#   pwsh scripts/test/smoke.ps1 [-Binary path\to\blanket.exe]
 #
 # If -Binary is omitted, it defaults to .\blanket-windows-amd64.exe next
 # to the repo root (what `go build -o blanket-windows-amd64.exe .`
@@ -23,7 +23,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 if (-not $Binary) {
     $Binary = Join-Path $RepoRoot "blanket-windows-amd64.exe"

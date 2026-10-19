@@ -713,7 +713,7 @@ the plan; the intents are the debt.
 | `DRAINING` | Clears the record, then respawns every worker carrying an intent. | Nothing, unless a worker is missing — check its `stoppedReason`. |
 | `EXECING` | Same as `DRAINING`. The exec never happened; the debt to the workers did. | Nothing. |
 
-`scripts/restart_machine.sh` asserts every row of that table against a real
+`scripts/test/restart_machine.sh` asserts every row of that table against a real
 process, by killing the server at each state in turn
 (`BLANKET_TEST_CRASH_AT`) and checking the replacement's behaviour.
 
@@ -863,7 +863,7 @@ install that would rather be certain than quick.
 | `upgrade.stateDir` | `""` | Where the journal, the rollback slots and the notice cache live. Empty means `<database dir>/upgrade`, beside the backups the slots pair with. |
 | `upgrade.slots` | `3` | How many [rollback slots](#rollback-slots) to keep. |
 | `upgrade.repo` | `turtlemonvh/blanket` | Which repository releases come from. |
-| `upgrade.releasesBaseURL` | `https://api.github.com` | The Releases API root. Overridable (and `--releases-base-url`, hidden) so `scripts/upgrade.sh` can serve a fake releases API off localhost; a suite that reached api.github.com would fail whenever an unauthenticated CI runner got rate-limited. |
+| `upgrade.releasesBaseURL` | `https://api.github.com` | The Releases API root. Overridable (and `--releases-base-url`, hidden) so `scripts/test/upgrade.sh` can serve a fake releases API off localhost; a suite that reached api.github.com would fail whenever an unauthenticated CI runner got rate-limited. |
 
 ## The ops endpoints
 

@@ -59,7 +59,7 @@ export default defineConfig({
   // no live process behind them and no heartbeat, so at the shipped
   // thresholds the reaper would correctly mark them lost partway through a
   // long CI run and rewrite the very rows the specs are asserting on. The
-  // reaper's own coverage lives in scripts/smoke.sh and the Go tests.
+  // reaper's own coverage lives in scripts/test/smoke.sh and the Go tests.
   //
   // If BLANKET_URL is not set we assume the binary is in the repo root.
   // Build with `make linux` (or `make darwin`) first; set BLANKET_BIN to
