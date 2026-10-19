@@ -170,7 +170,8 @@ Every `status: ready` issue carries `autonomy:` and `risk:` labels; read
 them before starting (see CONTRIBUTORS.md "Autonomy, risk, and model
 labels"). Rules for running with nobody watching — never stop while
 ready issues remain, batch questions once with proposed answers, treat
-pre-approval as approval, leave a morning summary, clean up worktrees and
+pre-approval as approval, keep the local status report
+(`STATUS_REPORT.html`, gitignored) current, clean up worktrees and
 monitors before idling — are injected at session start by the `core`
 plugin from `.claude/night-crew.json`. Do not duplicate them here.
 
