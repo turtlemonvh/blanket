@@ -17,7 +17,7 @@
 # how it disappeared in #185 without anyone noticing. GOTOOLCHAIN=local
 # below is what replaces it.
 
-ARG PLAYWRIGHT_VERSION=v1.63.0
+ARG PLAYWRIGHT_VERSION=v1.64.0
 FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-noble
 
 ARG GO_VERSION=1.26.0
