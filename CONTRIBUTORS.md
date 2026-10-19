@@ -672,11 +672,12 @@ at session start. See that plugin's `night-crew` skill. The file is
 committed (it's the one exception to `.gitignore`'s `.claude/*` rule
 besides `skills/`) so every checkout runs the loop with the same policy.
 
-The loop's morning summary is one comment, edited in place, on the
-pinned issue named by `summary_issue` (#121). That issue is a standing
-log: it stays open, is never assigned, and is the one exception to the
-"exactly one `status:` label" state machine below — it just carries
-`status: in-progress` so audits don't flag it.
+The loop's status report is a local, self-contained HTML file at
+`report_path` (`STATUS_REPORT.html` in the repo root), rewritten each
+tick and never committed — `.gitignore` excludes it. It is not posted to
+GitHub; ask the session to publish it as an Artifact if you want to read
+it from a phone or comment on it. (Before core 0.12.0 the summary was a
+comment on a standing issue, #121; that key and issue are retired.)
 
 ### Dependabot
 
@@ -729,20 +730,23 @@ Claude and Timothy both post GitHub comments as `turtlemonvh` (same
 login, no separate bot identity yet — see "PR / merge workflow" below),
 so a rendered issue/PR thread shows no author distinction and reads as
 Timothy arguing with himself. Every comment Claude posts — justification
-comments and any other issue/PR comment — opens with a visible marker
-line, blank line, then the body:
+comments and any other issue/PR comment — has `🤖 Claude:` as the very
+start of its first line, then the body:
 
 ```markdown
-**🤖 Claude**
-
-<comment body>
+🤖 Claude: <comment body>
 ```
 
-This is separate from the hidden `<!-- blanket-label-note ... -->`
-marker below, which stays machine-only and unchanged — the two solve
-different problems (audit tooling vs. human readability) and both
+This matches the `core` plugin's night-crew convention, which reads any
+`turtlemonvh` comment that does *not* start with `🤖 Claude:` as the
+reviewer speaking (an LGTM, a change request) — so the marker must come
+first, before anything else. It is separate from the hidden
+`<!-- blanket-label-note ... -->` marker below, which goes on the line
+after it, stays machine-only, and is otherwise unchanged — the two
+solve different problems (audit tooling vs. human readability) and both
 apply. Applies going forward only; comments already posted before this
-convention aren't backfilled. PR *descriptions* already carry their own
+convention (including the older `**🤖 Claude**` heading form) aren't
+backfilled. PR *descriptions* already carry their own
 "Generated with Claude Code" footer and don't need this too.
 
 ### Justification comments
@@ -753,8 +757,8 @@ audit can tell them apart from a human's, since both currently post as
 `turtlemonvh` via `gh`:
 
 ```markdown
+🤖 Claude:
 <!-- blanket-label-note label="status: ready" by="claude" -->
-**🤖 Claude**
 
 **`status: ready`** — acceptance criteria are fully specified in the
 issue body; the change is confined to `server/serve_tasks.go` and its

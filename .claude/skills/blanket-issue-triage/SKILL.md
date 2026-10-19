@@ -49,8 +49,8 @@ there and can change independently of this skill.
    `needs-info` enumerates the questions):
    ```bash
    gh issue comment N --body "$(cat <<'EOF'
+   🤖 Claude:
    <!-- blanket-label-note label="status: <new>" by="claude" -->
-   **🤖 Claude**
 
    **`status: <new>`** — <one to three sentences: why this state, what's
    still needed if anything>
@@ -66,8 +66,8 @@ post the note yourself with the backfill marker:
 
 ```bash
 gh issue comment N --body "$(cat <<'EOF'
+🤖 Claude:
 <!-- blanket-label-note label="status: <label>" by="human" via="claude-backfill" -->
-**🤖 Claude**
 
 **`status: <label>`** — <Timothy's stated reason, in his words or close to it>
 EOF

@@ -1,13 +1,13 @@
 ---
 name: blanket-ready-batch
-description: Use when picking up unassigned blanket issues labeled `status: ready` and running them in parallel — "run the ready issues", "pick up what's clear to execute", "work the backlog". Dispatches up to 3 concurrent subagents in isolated worktrees, one issue each, ending at an opened PR (never auto-merge).
+description: Use when picking up unassigned blanket issues labeled `status: ready` and running them in parallel — "run the ready issues", "pick up what's clear to execute", "work the backlog". Dispatches up to 3 concurrent subagents in isolated worktrees, one issue each, ending at an opened PR — merged by the run only when the issue is `autonomy: ship-to-merge` + `risk: low`.
 ---
 
 # blanket-ready-batch
 
-Turns `status: ready` + unassigned issues into PRs, in parallel, without
-auto-merging. Full rules (label states, PR/merge workflow) are in
-[`CONTRIBUTORS.md`](../../../CONTRIBUTORS.md#issue-workflow) — read it
+Turns `status: ready` + unassigned issues into PRs, in parallel. It
+merges only what the labels pre-approve (step 6). Full rules (label
+states, PR/merge workflow) are in [`CONTRIBUTORS.md`](../../../CONTRIBUTORS.md#issue-workflow) — read it
 first if this is the first batch run this session.
 
 ## Steps
@@ -35,10 +35,39 @@ first if this is the first batch run this session.
    - Pointer to `CLAUDE.md`/`CONTRIBUTORS.md` for repo conventions
      (commit style `[AI] ...`, `go fmt`, the three-surface test
      requirement).
-   - Instruction to open a PR against `master` when done, referencing
-     `Closes #N` in the PR body, and to run the relevant `make docker-*`
-     targets before declaring done — don't claim success without running
-     them.
+   - Instruction to run the relevant `make docker-*` targets before
+     declaring done — don't claim success without running them — and to
+     open a PR against `master` titled `[AI] #N: <summary>`, with a body
+     in the `core` plugin night-crew's "PR shape and size" order, short
+     enough to read in two minutes:
+
+     ```markdown
+     **Decision needed:** <one line, with the proposed answer — omit the
+     section if there is none>
+
+     ## What changed
+     - <three to six bullets; if the PR is long, say which files carry
+       the risk and which are skim-only>
+
+     ## Judgment calls
+     - <every place you chose between options, and what you chose>
+
+     ## Verification
+     - `make docker-test` — <result>
+     - `make docker-test-smoke` — <result>
+
+     Closes #N
+
+     🤖 Generated with [Claude Code](https://claude.com/claude-code)
+     ```
+
+     `Closes #N` only if the PR delivers every acceptance item; otherwise
+     `Part of #N` plus what remains. Aim for about 400 changed lines; past
+     that, split into stacked phase PRs and say so in the first one.
+   - Instruction that any issue or PR comment it posts starts with
+     `🤖 Claude:` on its first line (CONTRIBUTORS.md "Visible
+     attribution") — night-crew treats a comment without it as the
+     reviewer speaking.
 5. **On each PR opening**, move the issue to `status: in-review`, assign
    `turtlemonvh`, justification comment linking the PR — **and apply the
    same label + assignee to the PR itself** (`gh pr edit N --add-label
@@ -61,7 +90,6 @@ first if this is the first batch run this session.
 
 - Decide which issues are `status: ready` in the first place — that's
   `blanket-issue-triage`/`blanket-issue-audit`.
-- Merge PRs.
 - Order the queue by anything but issue recency — there's no
   `priority:` namespace yet (deliberately deferred; see the design doc
   if you want the reasoning).
