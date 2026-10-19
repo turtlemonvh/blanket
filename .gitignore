@@ -28,5 +28,3 @@ tests/e2e/playwright-report
 .claude/*
 !.claude/skills/
 !.claude/night-crew.json
-# night-crew's local status report (`report_path` in night-crew.json).
-/STATUS_REPORT.html
