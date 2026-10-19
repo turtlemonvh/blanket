@@ -1,8 +1,8 @@
 package server
 
 // Phone support for the web UI (turtlemonvh/blanket#216): the instance
-// name in the header, the server-computed task duration the mobile cards
-// lead with, and the web app manifest that makes the UI installable as a
+// name in the header, the server-computed task duration (the mobile cards
+// lead with it; desktop shows it as a Duration column), and the web app manifest that makes the UI installable as a
 // PWA.
 //
 // There is deliberately no service worker. Everything the UI shows is
@@ -46,7 +46,7 @@ func uiInstanceName() string {
 }
 
 // fmtDuration renders a duration compactly enough for a phone card's top
-// line: "42s", "3m 05s", "2h 07m", "3d 4h". Seconds are dropped once the
+// line and a desktop table column: "42s", "3m 05s", "2h 07m", "3d 4h". Seconds are dropped once the
 // duration is long enough that they're noise, and nothing here ticks on
 // the client -- the value is refreshed whenever the row is re-rendered.
 func fmtDuration(d time.Duration) string {
@@ -66,7 +66,8 @@ func fmtDuration(d time.Duration) string {
 	}
 }
 
-// taskDurationAt is the duration text a task's card leads with, as of now:
+// taskDurationAt is a task's duration text (card, Duration column, and
+// task detail row), as of now:
 //
 //   - WAITING: how long it has been queued, "queued 4m 10s".
 //   - CLAIMED / RUNNING: time since it started.

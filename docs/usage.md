@@ -272,7 +272,9 @@ running, or ran for, then its type and short id, then one line of context
 links move to a tab bar at the bottom (**Tasks**, **Upcoming**,
 **Workers**, **More**). Tap a card to open it; the task page has a
 **Log ↓** button. Durations are computed by the server and refresh
-whenever the list does; nothing ticks in the browser. Cancel and Delete
+whenever the list does; nothing ticks in the browser. On a desktop the
+same duration is the task list's **Duration** column and a row on the
+task page. Cancel and Delete
 are still there, and every one of them — on a phone or not — asks first.
 
 To install it as an app, open blanket in the phone's browser and use
@@ -316,10 +318,10 @@ result artifact, and its log.
   stops a fraction of a second after the task itself exits, so if the
   task left something running behind it, that process's later output
   shows up under `stdout` / `stderr` but not under `both`. **Pin to
-  bottom** keeps the newest line in view. **Newest first** flips the
-  pane so the latest line is at the top and new lines arrive there (the
-  pin then keeps the top in view); it's on by default on a phone and off
-  on a desktop, and the worker page's log has the same toggle.
+  bottom** keeps the newest line in view once the log outgrows its pane;
+  a short log just sits at the top of the pane. The order is oldest
+  first, newest at the bottom, on a phone and a desktop alike, and the
+  worker page's log behaves the same way.
 
 ### Upcoming
 

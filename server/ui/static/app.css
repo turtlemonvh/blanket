@@ -394,8 +394,8 @@ tr:hover td { background: #fafbfc; }
 .exit-code.exit-ok  { background: #e6f4ea; color: var(--ok);     border-color: #b2d8bf; }
 .exit-code.exit-bad { background: #fbe9e9; color: var(--danger); border-color: #ecb9b9; }
 
-/* Toolbar above the pane: the stream toggle on the left, the order and
- * pin checkboxes pushed to the right. */
+/* Toolbar above the pane: the stream toggle on the left, the pin
+ * checkbox pushed to the right. */
 .log-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -409,8 +409,7 @@ tr:hover td { background: #fafbfc; }
   gap: 0.25rem 1rem;
   margin-left: auto;
 }
-.log-toolbar .log-pin,
-.log-toolbar .log-order {
+.log-toolbar .log-pin {
   font-size: 0.85rem;
   color: var(--muted);
   cursor: pointer;

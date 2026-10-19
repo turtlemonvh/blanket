@@ -26,11 +26,8 @@ stdout", so the default view is not merely equivalent but identical.
         {{end}}
     </div>
     <div class="log-options">
-        <label class="log-order">
-            <input type="checkbox" id="log-newest-first"> Newest first
-        </label>
         <label class="log-pin">
-            <input type="checkbox" id="pin-bottom" checked> <span id="pin-label">Pin to bottom</span>
+            <input type="checkbox" id="pin-bottom" checked> Pin to bottom
         </label>
     </div>
 </div>
@@ -69,16 +66,21 @@ order and says nothing, because there is nothing to warn about.
 {{end}}
 
 <script>
-// Line order and pinning (log-order.js, #216): "Newest first" reverses the
-// pane and makes streamed lines land at the top; the pin keeps the newest
-// line in view at whichever end it is. Runs on every swap of this partial
-// (htmx executes scripts in swapped-in content), and the listeners die
-// with the <pre> they are bound to.
-window.blanketLogOrder.attach({
-  pane: document.getElementById('task-log'),
-  order: document.getElementById('log-newest-first'),
-  pin: document.getElementById('pin-bottom'),
-  pinLabel: document.getElementById('pin-label')
-});
+// Oldest line first, newest at the bottom -- the same on a phone and a
+// desktop (#216 review). The pane is top-aligned, so a short log sits at
+// the top; once it overflows, "Pin to bottom" keeps the newest line in
+// view. Runs on every swap of this partial (htmx executes scripts in
+// swapped-in content), and the listener dies with the <pre> it is bound to.
+(function () {
+  var el = document.getElementById('task-log');
+  var pin = document.getElementById('pin-bottom');
+  if (!el) return;
+  function toBottom() {
+    if (!pin || pin.checked) el.scrollTop = el.scrollHeight;
+  }
+  el.addEventListener('htmx:sseMessage', toBottom);
+  if (pin) pin.addEventListener('change', toBottom);
+  toBottom();
+})();
 </script>
 {{end}}

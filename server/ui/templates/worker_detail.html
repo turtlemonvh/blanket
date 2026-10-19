@@ -35,16 +35,13 @@
     </table>
 
     <h3>Live Log</h3>
-    {{/* Same toolbar and behaviour as the task log (log-order.js, #216):
-         newest-first by default on a phone, oldest-first + pin to bottom
-         on desktop. */}}
+    {{/* Same toolbar and behaviour as the task log (#216): oldest first,
+         newest at the bottom, pinned there once the pane overflows --
+         identical on a phone and a desktop. */}}
     <div class="log-toolbar">
         <div class="log-options">
-            <label class="log-order">
-                <input type="checkbox" id="log-newest-first"> Newest first
-            </label>
             <label class="log-pin">
-                <input type="checkbox" id="pin-bottom" checked> <span id="pin-label">Pin to bottom</span>
+                <input type="checkbox" id="pin-bottom" checked> Pin to bottom
             </label>
         </div>
     </div>
@@ -65,12 +62,19 @@
          aria-label="worker log output"><span class="muted">Loading…</span></pre>
     {{end}}
     <script>
-    window.blanketLogOrder.attach({
-      pane: document.getElementById('worker-log'),
-      order: document.getElementById('log-newest-first'),
-      pin: document.getElementById('pin-bottom'),
-      pinLabel: document.getElementById('pin-label')
-    });
+    (function () {
+      var el = document.getElementById('worker-log');
+      var pin = document.getElementById('pin-bottom');
+      if (!el) return;
+      function toBottom() {
+        if (pin.checked) el.scrollTop = el.scrollHeight;
+      }
+      // A live pane grows by SSE message; a stopped worker's pane is
+      // filled once by its own hx-get.
+      el.addEventListener('htmx:sseMessage', toBottom);
+      el.addEventListener('htmx:afterSwap', toBottom);
+      pin.addEventListener('change', toBottom);
+    })();
     </script>
 </section>
 {{end}}

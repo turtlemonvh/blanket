@@ -9,8 +9,9 @@ throw that away.
 One set of markup for desktop and phone (turtlemonvh/blanket#216): below
 640px app.css turns each row into a card, keyed off the cell-* classes.
 The card leads with state + duration, then type + short id, then one
-context line. The two m-only cells (duration, context) exist only for that
-card and are display:none on desktop, so the desktop table is unchanged.
+context line. Duration is a real column on both (#216 review); the m-only
+context cell exists only for the card, because on desktop it would just
+repeat the Exit / Updated / Created / Scheduled columns.
 Progress % is deliberately not on the card: it is only what a task
 reports about itself.
 */}}
@@ -38,6 +39,10 @@ reports about itself.
     <td class="cell-started">{{if eq $t.StartedTs 0}}<span class="muted">None</span>{{else}}{{fmtTs $t.StartedTs}}{{end}}</td>
     <td class="cell-updated">{{fmtTs $t.LastUpdatedTs}}</td>
     <td class="cell-state"><span class="badge state-{{$t.State}}">{{$t.State}}</span></td>
+    {{/* Desktop column and phone card alike (#216): computed server-side,
+         refreshed whenever the rows are (SSE / Refresh) -- nothing ticks
+         on the client. */}}
+    <td class="cell-duration">{{taskDuration $t}}</td>
     {{/*
     exitCode (#104). Null — a dash — for anything that hasn't finished, and
     also for a terminal task with no exit status to report: one killed by a
@@ -50,9 +55,6 @@ reports about itself.
         {{else}}<span class="muted">&mdash;</span>
         {{end}}
     </td>
-    {{/* Phone card only (#216): computed server-side, refreshed whenever
-         the rows are (SSE / Refresh) -- nothing ticks on the client. */}}
-    <td class="cell-duration m-only" aria-label="duration">{{taskDuration $t}}</td>
     <td class="cell-context m-only">
         {{if or (eq $t.State "RUNNING") (eq $t.State "CLAIMED")}}
             {{if not $t.WorkerId.IsZero}}on worker <a href="/ui/workers/{{hex $t.WorkerId}}">{{shortId $t.WorkerId}}</a>{{end}}
@@ -67,7 +69,8 @@ reports about itself.
         {{end}}
     </td>
     {{/* Every cancel and every delete asks first, naming the task type
-         (#216) -- on a phone a mis-tap is easy and neither is undoable. */}}
+         (#216). Shared markup, so desktop and phone both get the dialog --
+         a mis-tap is easy and neither is undoable. */}}
     <td class="cell-actions row-actions">
         {{if isCancelable $t.State}}
         {{if eq $t.State "RUNNING"}}
@@ -100,6 +103,6 @@ reports about itself.
     </td>
 </tr>
 {{else}}
-<tr><td colspan="11" class="muted">No tasks.</td></tr>
+<tr><td colspan="12" class="muted">No tasks.</td></tr>
 {{end}}
 {{end}}

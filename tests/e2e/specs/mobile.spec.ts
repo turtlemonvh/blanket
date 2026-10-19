@@ -2,8 +2,10 @@
 //
 // Runs the same pages at a phone-sized viewport: the lists become cards,
 // the top links give way to a bottom tab bar, every cancel/delete asks
-// first, and the logs default to newest-first. A desktop block at the end
-// checks that none of that leaks onto a wide screen.
+// first. A desktop block at the end checks the wide screen keeps its table
+// and top nav, and that the parts the review asked to match (#216) do:
+// the same confirms, the Duration column, and the same log order --
+// oldest first, newest at the bottom, a short log sitting at the top.
 //
 // Rows are located with CSS (#tasks-rows tr) rather than getByRole('row'):
 // restyling a <tr> as a grid can cost it its table semantics in the
@@ -14,6 +16,7 @@ import { test, expect, type Page, type APIRequestContext } from '@playwright/tes
 const skipBrowser = process.env.SKIP_BROWSER_TESTS === '1';
 
 const PHONE = { width: 390, height: 844 };
+const DESKTOP = { width: 1280, height: 800 };
 
 async function purgeTasks(api: APIRequestContext) {
   const res = await api.get('/task/');
@@ -59,6 +62,63 @@ function nextDialog(page: Page, accept: boolean): Promise<string> {
       else await d.dismiss();
     });
   });
+}
+
+/**
+ * Cancel and delete both raise htmx's confirm dialog, naming the task
+ * type; declining leaves the task alone. Shared by the phone and desktop
+ * blocks: the hx-confirm attributes are in the one set of row markup.
+ */
+async function confirmJourney(page: Page, request: APIRequestContext) {
+  const waiting = await createTask(request);
+  const done = await finishedTask(request, 'x\n');
+  await page.goto('/ui/');
+
+  // Declining a delete leaves the task alone.
+  let msg = nextDialog(page, false);
+  await card(page, done).getByText('Delete', { exact: true }).click();
+  expect(await msg).toContain('echo_task');
+  expect((await request.get(`/task/${done}`)).status()).toBe(200);
+
+  // Accepting it deletes.
+  msg = nextDialog(page, true);
+  await card(page, done).getByText('Delete', { exact: true }).click();
+  expect(await msg).toMatch(/Delete this echo_task task/);
+  await expect(card(page, done)).toHaveCount(0);
+  expect((await request.get(`/task/${done}`)).status()).toBe(404);
+
+  // Cancel on a WAITING task asks too.
+  msg = nextDialog(page, true);
+  await card(page, waiting).getByText('Cancel', { exact: true }).click();
+  expect(await msg).toMatch(/Cancel this echo_task task/);
+  await expect(card(page, waiting).getByText('STOPPED', { exact: true })).toBeVisible();
+}
+
+/**
+ * The task log reads oldest first with the newest line at the bottom, has
+ * no order toggle, and a short log sits at the top of its pane rather than
+ * being pushed down. Same on both viewports.
+ */
+async function logJourney(page: Page, request: APIRequestContext) {
+  const id = await finishedTask(request, 'line one\nline two\nline three\n');
+  await page.goto(`/ui/tasks/${id}`);
+
+  const pane = page.locator('#task-log');
+  await expect(pane).toHaveText(/^\s*line one\s+line two\s+line three\s*$/);
+  await expect(page.getByLabel('Newest first')).toHaveCount(0);
+  await expect(page.getByLabel('Pin to bottom')).toBeChecked();
+
+  // Top-aligned: the pane is no taller than its three lines need, so the
+  // first line starts right under the pane's top edge.
+  const box = await pane.boundingBox();
+  expect(box).not.toBeNull();
+  const firstLine = await pane.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return range.getClientRects()[0].top - el.getBoundingClientRect().top;
+  });
+  expect(firstLine).toBeLessThan(30);
+  expect(box!.height).toBeLessThan(150);
 }
 
 test.describe('Phone layout', () => {
@@ -155,62 +215,36 @@ test.describe('Phone layout', () => {
   });
 
   test('cancel and delete both ask first, naming the task type', async ({ page, request }) => {
-    const waiting = await createTask(request);
-    const done = await finishedTask(request, 'x\n');
-    await page.goto('/ui/');
-
-    // Declining a delete leaves the task alone.
-    let msg = nextDialog(page, false);
-    await card(page, done).getByText('Delete', { exact: true }).click();
-    expect(await msg).toContain('echo_task');
-    expect((await request.get(`/task/${done}`)).status()).toBe(200);
-
-    // Accepting it deletes.
-    msg = nextDialog(page, true);
-    await card(page, done).getByText('Delete', { exact: true }).click();
-    expect(await msg).toMatch(/Delete this echo_task task/);
-    await expect(card(page, done)).toHaveCount(0);
-    expect((await request.get(`/task/${done}`)).status()).toBe(404);
-
-    // Cancel on a WAITING task asks too.
-    msg = nextDialog(page, true);
-    await card(page, waiting).getByText('Cancel', { exact: true }).click();
-    expect(await msg).toMatch(/Cancel this echo_task task/);
-    await expect(card(page, waiting).getByText('STOPPED', { exact: true })).toBeVisible();
+    await confirmJourney(page, request);
   });
 
-  test('task log defaults to newest first', async ({ page, request }) => {
-    const id = await finishedTask(request, 'line one\nline two\nline three\n');
-    await page.goto(`/ui/tasks/${id}`);
-
-    const order = page.getByLabel('Newest first');
-    await expect(order).toBeChecked();
-    const pane = page.locator('#task-log');
-    await expect(pane).toHaveText(/^\s*line three\s+line two\s+line one\s*$/);
-
-    // Turning it off restores the file's order, and survives the stream toggle.
-    await order.uncheck();
-    await expect(pane).toHaveText(/^\s*line one\s+line two\s+line three\s*$/);
-    await page.getByRole('button', { name: 'show stdout' }).click();
-    await expect(page.getByLabel('Newest first')).not.toBeChecked();
+  test('task log is oldest first, newest at the bottom, top-aligned', async ({ page, request }) => {
+    await logJourney(page, request);
   });
 });
 
-test.describe('Desktop is unchanged', () => {
+test.describe('Desktop', () => {
   test.skip(skipBrowser, 'SKIP_BROWSER_TESTS=1');
+  test.use({ viewport: DESKTOP });
 
   test.beforeEach(async ({ request }) => purgeTasks(request));
   test.afterEach(async ({ request }) => purgeTasks(request));
 
-  test('no tab bar, table header visible, log oldest first', async ({ page, request }) => {
-    const id = await finishedTask(request, 'line one\nline two\n');
+  test('no tab bar; table header and Duration column visible', async ({ page, request }) => {
+    const id = await createTask(request); // WAITING: duration reads "queued Ns"
     await page.goto('/ui/');
     await expect(page.getByRole('navigation', { name: 'sections' })).toBeHidden();
     await expect(page.getByRole('columnheader', { name: 'Tags' })).toBeVisible();
-    await expect(card(page, id).locator('.cell-duration')).toBeHidden();
+    await expect(page.getByRole('columnheader', { name: 'Duration' })).toBeVisible();
+    await expect(card(page, id).locator('.cell-duration')).toBeVisible();
+    await expect(card(page, id).locator('.cell-duration')).toHaveText(/queued \d+s/);
+  });
 
-    await page.goto(`/ui/tasks/${id}`);
-    await expect(page.getByLabel('Newest first')).not.toBeChecked();
-    await expect(page.locator('#task-log')).toHaveText(/^\s*line one\s+line two\s*$/);
+  test('cancel and delete both ask first, naming the task type', async ({ page, request }) => {
+    await confirmJourney(page, request);
+  });
+
+  test('task log is oldest first, newest at the bottom, top-aligned', async ({ page, request }) => {
+    await logJourney(page, request);
   });
 });

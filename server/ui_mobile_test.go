@@ -188,7 +188,9 @@ func TestUI_TasksRows_ConfirmsAndCardCells(t *testing.T) {
 	body := getUI(r, "/ui/partials/tasks-rows").Body.String()
 	assert.Contains(t, body, `hx-confirm="Cancel this echo_task task (WAITING)? It will not run."`)
 	assert.Contains(t, body, `hx-confirm="Delete this echo_task task (`+done[:8]+`) and its results? This cannot be undone."`)
-	assert.Contains(t, body, `class="cell-duration m-only"`)
+	// Duration is a real column on desktop too, not phone-only (#216 review).
+	assert.Contains(t, body, `<td class="cell-duration">`)
+	assert.NotContains(t, body, `cell-duration m-only`)
 	assert.Contains(t, body, "queued ")
 	assert.Contains(t, body, "created ")
 	assert.Contains(t, body, "· finished ")
@@ -203,4 +205,27 @@ func TestUI_TasksRows_ConfirmsAndCardCells(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestUI_DurationOnDesktop pins the review ask on #216: the server-computed
+// duration is not phone-only. The tasks page has a Duration column header
+// to match the row cell, and the task detail table has a Duration row.
+func TestUI_DurationOnDesktop(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	w := postTask(r, "echo_task")
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var created struct {
+		Id string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+
+	assert.Contains(t, getUI(r, "/ui/").Body.String(), "<th>Duration</th>")
+	detail := getUI(r, "/ui/tasks/"+created.Id).Body.String()
+	assert.Contains(t, detail, "<tr><td>Duration</td><td>queued ")
 }

@@ -30,6 +30,8 @@
             started — so a dash here means "no exit status", never "0".
             */}}
             <tr><td>Exit Code</td><td>{{exitCode .Task.ExitCode}}</td></tr>
+            {{/* Server-computed, same as the task list's Duration column (#216). */}}
+            <tr><td>Duration</td><td>{{with taskDuration .Task}}{{.}}{{else}}<span class="muted">&mdash;</span>{{end}}</td></tr>
             {{/* Hidden on phones (#216): it is only what the task reports. */}}
             <tr class="d-only"><td>Progress</td><td>{{.Task.Progress}}%</td></tr>
             <tr><td>Created</td><td>{{fmtTs .Task.CreatedTs}}</td></tr>
