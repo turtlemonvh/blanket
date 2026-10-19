@@ -15,6 +15,7 @@ make setup
 local Go or Node install needed:
 
 ```bash
+make docker-pull           # optional: fetch the image CI built, don't build it
 make docker-test           # Go unit tests in the container
 make docker-test-race      # Go unit tests under the race detector
 make docker-test-browser   # Playwright suite
@@ -24,6 +25,20 @@ make docker-shell          # interactive shell, source mounted at /src
 
 See `Dockerfile` for what the image carries.
 
+`make docker-pull` is optional and worth one run on a new machine: it
+fetches the toolchain image master already published instead of spending
+~5 minutes building it (#53). Every `docker-*` target still builds on its
+own if you skip it. On an unmodified checkout of master you get exactly
+the image CI is running, because `scripts/toolchain-hash.sh` is the same
+tag definition both use.
+
+If you have edited `go.mod`, the `Dockerfile`, or the `tests/e2e/` npm
+manifests, no image exists for your inputs and it falls back to the
+moving `master` tag, saying so. That is a convenience rather than an
+equivalent — master's baked Go and npm caches are warmed for master's
+manifests, not yours, so `go mod download` and `npm ci` do real work
+again at runtime. Still much cheaper than a cold build.
+
 ## Build & Test
 
 ### Docker targets (authoritative CI path)
@@ -31,12 +46,13 @@ See `Dockerfile` for what the image carries.
 ```
 make docker-test           # Go unit tests
 make docker-test-race      # Go unit tests under -race (worker/server/bolt/…)
-make docker-test-smoke     # built binary end-to-end (scripts/smoke.sh
-                           #   + scripts/restart.sh + scripts/migrate.sh
-                           #   + scripts/restart_machine.sh
-                           #   + scripts/upgrade.sh)
+make docker-test-smoke     # built binary end-to-end (scripts/test/smoke.sh
+                           #   + scripts/test/restart.sh + scripts/test/migrate.sh
+                           #   + scripts/test/restart_machine.sh
+                           #   + scripts/test/upgrade.sh)
 make docker-test-browser   # Playwright suite
 make docker-shell          # interactive container for ad-hoc work
+make docker-pull           # fetch the prebuilt toolchain image from GHCR
 make docker-build          # cross-compile linux/darwin/windows
 make docker-release        # cross-compile + SHA256SUMS + offline bundle
 make docker-licenses       # dependency license gate (see below)
@@ -75,15 +91,15 @@ verify Windows-specific changes natively:
 ```powershell
 go build -o blanket-windows-amd64.exe .
 go test ./worker/... ./command/... ./lib/service/... ./lib/proclive/... ./lib/follow/...
-pwsh scripts/smoke.ps1 -Binary .\blanket-windows-amd64.exe
+pwsh scripts/test/smoke.ps1 -Binary .\blanket-windows-amd64.exe
 ```
 
-`scripts/smoke.ps1` starts the built binary against a scratch config,
+`scripts/test/smoke.ps1` starts the built binary against a scratch config,
 submits a task through each native Windows executor example
 (`examples/types/windows_echo.toml` for `cmd`,
 `examples/types/windows_powershell.toml` for `powershell`), runs a real
 `blanket worker` to drain them, and asserts both reach `SUCCESS` — the
-Windows counterpart to `scripts/smoke.sh`.
+Windows counterpart to `scripts/test/smoke.sh`.
 
 ### The subprocess test harness
 
@@ -94,9 +110,35 @@ reading `os.Executable()` (which resolves to the test binary under
 same scaffolding — free port, throwaway workdir, generated config,
 readiness polling, cleanup on every exit path.
 
-That scaffolding lives in **`scripts/lib/harness.sh`**. `scripts/smoke.sh`,
-`scripts/restart.sh`, `scripts/migrate.sh`, `scripts/restart_machine.sh`
-and `scripts/upgrade.sh` all source it; a new subprocess test should too,
+### What lives in `scripts/`
+
+`scripts/` holds three unrelated audiences, so the test material sits in
+**`scripts/test/`** (turtlemonvh/blanket#207) and the rest stays at the top
+level:
+
+| path | who runs it |
+| ---- | ----------- |
+| `scripts/install.sh`, `scripts/install.ps1` | **users**, usually by URL |
+| `scripts/setup.sh` | contributors, once, to build a dev box |
+| `scripts/bundle.sh`, `scripts/licenses.sh`, `scripts/toolchain-hash.sh` | release + CI plumbing |
+| `scripts/test/**` | `make test-smoke`, `test-restart`, `test-migrate`, `test-restart-machine`, `test-upgrade` |
+
+**The two install scripts cannot move.** They are published URLs —
+`https://raw.githubusercontent.com/turtlemonvh/blanket/master/scripts/install.sh`
+and its `.ps1` twin — named in the README, `docs/autostart.md`, and inside
+`install.ps1` itself (`$RawBase`), and copied into offline bundles by
+`bundle.sh`. Moving either would 404 a one-liner someone has already pasted
+into a runbook. That constraint is the reason for the split rather than an
+obstacle to it: the two files a user actually wants are the two that are
+pinned in place, so everything else gets out of their way.
+
+A moved script resolves `REPO_ROOT` two levels up, not one. `smoke.sh`
+still reaches back to `scripts/install.sh` on purpose — it tests the
+installer.
+
+That scaffolding lives in **`scripts/test/lib/harness.sh`**. `scripts/test/smoke.sh`,
+`scripts/test/restart.sh`, `scripts/test/migrate.sh`, `scripts/test/restart_machine.sh`
+and `scripts/test/upgrade.sh` all source it; a new subprocess test should too,
 rather than copying the setup a third time. Everything it defines is
 prefixed `harness_`, and it exports `BINARY`, `WORKDIR`, `PORT`, `BASE`,
 `CONFIG`, `SERVER_PID` and `SERVER_LOG`. The usage sketch is in the file's
@@ -153,11 +195,18 @@ header comment.
   benefit.
 
   `.github/actions/toolchain-image` is the single definition of how
-  `blanket-dev:latest` gets built — `release.yml` uses it too, so a
+  `blanket-dev:latest` gets there — `release.yml` uses it too, so a
   release is cross-compiled in an image built exactly the way the
-  tested one was. Ahead of #53 (publish the image to GHCR), switching
-  the jobs from building to pulling is then an edit to that one file
-  rather than the same edit repeated across two workflows.
+  tested one was. That is what made #53 cheap: switching every docker
+  job from building to pulling was an edit to that one file, and
+  `release.yml` inherited the fast path without being touched.
+
+  The action pulls `ghcr.io/turtlemonvh/blanket-dev:<content tag>`
+  first and builds only on a miss. **A miss can never fail a job** —
+  an unpublished tag, a private package, a registry outage and a cold
+  start all fall through to the buildx build the jobs did before this
+  existed, so the worst case is yesterday's speed rather than a red
+  run. The pull is anonymous; only the publishing workflow logs in.
 
   That composite action ends by writing `BLANKET_SKIP_IMAGE_BUILD=1`
   to `$GITHUB_ENV`, which makes the Makefile's `docker-image` target
@@ -222,7 +271,7 @@ header comment.
   on, and `follow_notify_test.go` is `//go:build !windows` so this job
   exercises exactly the polling path the product uses there (#142) —
   then a
-  PowerShell smoke pass (`scripts/smoke.ps1` — see below) and two runs of
+  PowerShell smoke pass (`scripts/test/smoke.ps1` — see below) and two runs of
   `scripts/install.ps1` against the just-built binary, asserting its
   `$PROFILE` shell-integration block is written idempotently. It does
   **not** run the Docker-based Go test suite, `docker-test-smoke`, or the
@@ -232,13 +281,28 @@ header comment.
 - **`cross-compile`** (master pushes only): `make docker-build` —
   catches platform-only breakage without spending minutes on every PR.
 - **`race`**: builds the same toolchain image as the surfaces above,
-  then runs `make docker-test-race` (issue #119). `continue-on-error:
-  true` — a red `race` run is informational, not blocking, until it's
-  been green for a week; promote it to a required check (drop
-  `continue-on-error`, add to branch protection) once that holds. As of
-  the #155 measurements that bar has demonstrably not been met: over 36
-  sampled runs `race` failed 11.1% of the time, the highest rate of any
-  job.
+  then runs `make docker-test-race` (issue #119). **Required** as of
+  #169 — it reports into the `test` aggregate like every other surface,
+  so a red `race` run blocks a merge.
+
+  It was `continue-on-error` through its probation, and the 11.1%
+  failure rate measured over 36 runs in #155 made it look unpromotable.
+  Classifying those failures reversed the conclusion: all four lifetime
+  failures were the detector working — two were one real data race
+  (fixed by `76ba365`), one a real deadlock (`57d4566`), one an
+  infrastructure breakage — and it has been 0/44 since the fan-out,
+  with no false red ever. Note the promotion was a `needs:` entry on the
+  `test` job, not a branch-protection edit: `test` is the only required
+  context on master, so joining that aggregate is what makes a surface
+  blocking, and it carries the docs-only skip handling for free.
+
+**Go tests are not auto-retried, deliberately** (#169). Playwright keeps
+its single CI retry (`retries: process.env.CI ? 1 : 0`), but the Go
+surfaces do not, and adding one should be a conscious reversal rather
+than a quiet default. The measured flake population turned out to be a
+single identified cause — the `windows_powershell` smoke timeout, fixed
+in #195 — not a broad background rate, so a retry would buy little and
+cost the signal that `race` being required now depends on.
 
 `.github/workflows/licenses.yml` runs the `licenses` job separately, and
 is `paths:`-gated to `go.mod`/`go.sum` changes on PRs and master pushes,
@@ -261,6 +325,48 @@ direct push.
 Test adds must keep all three surfaces green. The suites overlap
 intentionally: unit tests hit handlers directly, smoke exercises the
 built binary over real HTTP, Playwright drives the UI.
+
+### Toolchain image on GHCR
+
+`.github/workflows/toolchain-image.yml` publishes the toolchain image to
+`ghcr.io/turtlemonvh/blanket-dev` on master pushes that touch one of its
+inputs (#53). It runs **in parallel with `ci.yml`, not ahead of it**, so
+it adds no latency to a PR or a merge; the cost of that choice is a race
+on the first master push after a dependency bump, where CI can start
+before the image exists, miss, and build. A miss is always just today's
+build, so that is correct behaviour rather than something to design
+around.
+
+`scripts/toolchain-hash.sh` is the single definition of the image tag —
+a SHA-256 over the six files the image's contents depend on (the
+Dockerfile, `.dockerignore`, `go.mod`, `go.sum`, and the two
+`tests/e2e/` npm manifests), truncated to 32 hex chars. **Edit that
+script's `INPUTS` list and the `paths:` filter in the workflow together**:
+the script decides what a tag means, the filter decides when master
+publishes one, and a hash input missing from the filter means CI looks
+for a tag master never pushed. The obvious alternative, GitHub Actions'
+`hashFiles()`, was rejected because the Makefile cannot call it — CI and
+local `docker pull` need to agree by construction, not by coincidence.
+
+A second, moving `master` tag points at the newest published image, as
+the "just give me something recent" fallback for a developer whose local
+inputs match nothing published. CI never uses it: a job wants the image
+for *its* inputs or no image at all, and pulling something merely recent
+would mean testing against a toolchain that isn't the one the branch
+describes.
+
+GHCR has no retention setting, so the workflow prunes as it goes: every
+untagged version (re-pointing `master` strands one on each push, and an
+untagged container version can never be pulled again), and tagged
+versions past the newest 10 — roughly two to three weeks at this repo's
+rate, which covers a PR sitting open against an older master. Pruning is
+`continue-on-error`: cleanup must never fail a publish.
+
+The package is created **private** on first push and GHCR exposes no
+visibility API, so making it public is a one-time UI action on the
+package settings page. The workflow's last step reports the current
+visibility and warns if it isn't public. Until it is, anonymous pulls
+miss and every job builds exactly as it does today.
 
 ### Dependency licenses
 

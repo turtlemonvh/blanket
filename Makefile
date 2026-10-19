@@ -69,27 +69,27 @@ test-api-e2e:
 
 # End-to-end smoke test for the built binary: starts the server on a throwaway
 # port + tempdir, exercises core endpoints, tears down. Run `make linux`
-# (or darwin/windows) first so scripts/smoke.sh has a binary to exec.
+# (or darwin/windows) first so scripts/test/smoke.sh has a binary to exec.
 test-smoke:
-	bash scripts/smoke.sh
+	bash scripts/test/smoke.sh
 
 # Shutdown / restart tests for the built binary (turtlemonvh/blanket#23
 # phase 2): SIGTERM drains with an SSE client attached and exits 0, SIGINT
 # stops without resurrecting anything, SIGUSR2 re-execs in place keeping the
 # PID. None of these are expressible in-process — see the header of
-# scripts/restart.sh. Shares scripts/lib/harness.sh with test-smoke, and
+# scripts/test/restart.sh. Shares scripts/test/lib/harness.sh with test-smoke, and
 # needs a built binary the same way.
 test-restart:
-	bash scripts/restart.sh
+	bash scripts/test/restart.sh
 
 # Schema / backup / migrate tests for the built binary
 # (turtlemonvh/blanket#23 phase 4). Cross-process by nature: BoltDB's
 # exclusive flock is what makes "back up via the server while it's running"
 # and "restore only with it stopped" mean anything, and a single `go test`
-# process can't observe either. Shares scripts/lib/harness.sh with
+# process can't observe either. Shares scripts/test/lib/harness.sh with
 # test-smoke and test-restart.
 test-migrate:
-	bash scripts/migrate.sh
+	bash scripts/test/migrate.sh
 
 # Restart state-machine tests for the built binary (turtlemonvh/blanket#23
 # phase 5). Its claim is not "each transition works" -- that is a Go test --
@@ -97,9 +97,9 @@ test-migrate:
 # a documented place", which needs a real process killed at a point no
 # wall-clock `kill -9` could reliably hit. The binary carries a
 # crash-injection hook (BLANKET_TEST_CRASH_AT) and this parametrizes over
-# every state with it. Shares scripts/lib/harness.sh with the other three.
+# every state with it. Shares scripts/test/lib/harness.sh with the other three.
 test-restart-machine:
-	bash scripts/restart_machine.sh
+	bash scripts/test/restart_machine.sh
 
 # Dependency license gate (turtlemonvh/blanket#143, following the audit in
 # #131): `go-licenses check` against an explicit allowlist, plus a CSV
@@ -128,10 +128,10 @@ bundle:
 # binary on disk was replaced and a *different* process came back running
 # it", which no in-process test can even state. It builds blanket twice
 # with different VERSION ldflags, serves them from a fake releases API and
-# from a bundle, and drives the real command. Shares scripts/lib/harness.sh
+# from a bundle, and drives the real command. Shares scripts/test/lib/harness.sh
 # with the other four.
 test-upgrade:
-	bash scripts/upgrade.sh
+	bash scripts/test/upgrade.sh
 
 install-playwright:
 	cd tests/e2e && npm install && npx playwright install --with-deps chromium
@@ -170,6 +170,10 @@ clean:
 # ---------------------------------------------------------------------------
 
 DOCKER_IMAGE ?= blanket-dev:latest
+
+# Where master publishes the toolchain image (turtlemonvh/blanket#53).
+# `make docker-pull` below fetches from here instead of building.
+TOOLCHAIN_REGISTRY ?= ghcr.io/turtlemonvh/blanket-dev
 
 # Base run command:
 #   -v $(CURDIR):/src                        — mount the checkout
@@ -241,6 +245,27 @@ else
 		|| { echo "BLANKET_SKIP_IMAGE_BUILD is set but $(DOCKER_IMAGE) does not exist"; exit 1; }
 endif
 
+# Fetch the toolchain image master already built, instead of spending ~5min
+# building it (turtlemonvh/blanket#53). Optional: every docker-* target
+# still builds on its own if you never run this.
+#
+# scripts/toolchain-hash.sh is the same tag definition CI uses, so an
+# unmodified checkout of master pulls exactly the image CI is running. Two
+# tags are tried, in this order:
+#
+#   <content hash>  the image for *these* inputs. An exact match.
+#   master          whatever was published most recently. A near-miss you
+#                   get when you have edited go.mod, the Dockerfile, or the
+#                   e2e package manifests locally.
+#
+# The master fallback is a convenience, not an equivalent: its baked Go
+# module and npm caches are pre-warmed for master's manifests, not yours,
+# so `go mod download` and `npm ci` do real work again at runtime. It is
+# still far cheaper than a cold build, which is why it is offered at all --
+# but it is why the fallback says so out loud rather than quietly.
+docker-pull:
+	@tag=$$(scripts/toolchain-hash.sh); 	if docker pull "$(TOOLCHAIN_REGISTRY):$$tag"; then 		docker tag "$(TOOLCHAIN_REGISTRY):$$tag" $(DOCKER_IMAGE); 		echo "$(DOCKER_IMAGE) <- $(TOOLCHAIN_REGISTRY):$$tag (exact match for this checkout)"; 	elif docker pull "$(TOOLCHAIN_REGISTRY):master"; then 		docker tag "$(TOOLCHAIN_REGISTRY):master" $(DOCKER_IMAGE); 		echo; 		echo "note: no image published for this checkout's inputs ($$tag)."; 		echo "      pulled the master tag instead -- usable, but its Go and npm"; 		echo "      caches are warmed for master's manifests, not yours."; 	else 		echo "could not pull $(TOOLCHAIN_REGISTRY) (offline, or the package is not public)."; 		echo "run 'make docker-image' to build the toolchain locally instead."; 		exit 1; 	fi
+
 docker-check-fmt: docker-image
 	$(DOCKER_RUN) make check-fmt
 
@@ -289,4 +314,4 @@ docker-shell: docker-image
 docker-clean:
 	-docker volume rm blanket-dev-cache blanket-npm-cache
 
-.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine test-upgrade checksums bundle install-playwright vet fmt check-fmt clean licenses docker-image docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-release docker-shell docker-clean docker-licenses
+.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine test-upgrade checksums bundle install-playwright vet fmt check-fmt clean licenses docker-image docker-pull docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-release docker-shell docker-clean docker-licenses

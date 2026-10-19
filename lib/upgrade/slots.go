@@ -198,6 +198,29 @@ func ListSlots(slotsDir string) ([]Slot, error) {
 	return out, nil
 }
 
+// SlotForUpgrade returns the slot a given upgrade attempt saved, or nil.
+//
+// A crash between SaveSlot and the journal's next write leaves a slot on
+// disk that the journal does not name (see command/upgrade.go's
+// finishUpgrade, and turtlemonvh/blanket#203). UpgradeId is what makes
+// that slot findable afterwards rather than an orphan the next prune
+// silently collects.
+func SlotForUpgrade(slotsDir, upgradeId string) (*Slot, error) {
+	if upgradeId == "" {
+		return nil, nil
+	}
+	slots, err := ListSlots(slotsDir)
+	if err != nil {
+		return nil, err
+	}
+	for i := range slots {
+		if slots[i].UpgradeId == upgradeId {
+			return &slots[i], nil
+		}
+	}
+	return nil, nil
+}
+
 // PruneSlots removes all but the newest `keep` slots and returns what it
 // removed.
 //

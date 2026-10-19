@@ -532,8 +532,32 @@ sees.
 | ------------------------------- | ---------------- | --------- |
 | `PLANNED` | Refuses. A partial download cannot be resumed — the only safe thing to do with an unverified file is throw it away. Run the upgrade again. | Removes the staging file. |
 | `STAGED` | Re-verifies the staged binary against the recorded digest, then continues from `begin`. | Removes it; nothing was installed. |
-| `BACKED_UP`, `PAUSED` | Continues, skipping the transitions the server has already made. | Clears the server-side restart (un-pausing worker spawn); nothing was installed. |
+| `BACKED_UP`, `PAUSED` | Re-verifies the staged binary and continues, skipping the transitions the server has already made. If the staged file is **gone**, checks whether the installed binary is already the one that was staged: if it is, the interrupted attempt completed the swap without recording it, so the resume adopts that and finishes the restart; if it is not, it refuses rather than guess. | Clears the server-side restart (un-pausing worker spawn); nothing was installed. |
 | `SWAPPED`, `DRAINED`, `EXECED` | The new binary is already installed; finishes the restart. If a server answers, its own `resolvedExecMode` decides whether the CLI has to start the replacement or the server is bringing itself back. | Clears the server-side restart and **leaves the new binary in place**, naming `blanket rollback` as the way back. |
+
+#### The gap between the swap and the journal
+
+`finishUpgrade` saves the rollback slot, renames the staged binary into
+place, and only then records `SWAPPED`. A process killed between the rename
+returning and the journal being written leaves a state the journal
+misdescribes: it still says `PAUSED` and still names a `stagedPath`, but
+that file is gone, because it *became* the installed binary.
+
+Trusting the journal there is not merely a failed resume. `SaveSlot` copies
+whatever is at the installed path and labels it with the journal's
+`fromVersion`, so a resume that believed the swap had not happened would
+copy the **new** binary into a rollback slot named for the **old** version —
+silently, and before the confusing `rename ... no such file or directory`
+that would follow. A later `blanket rollback` would then install the very
+version it was asked to undo. This was turtlemonvh/blanket#203; it reached
+CI as an intermittent smoke failure roughly one run in twenty.
+
+So the resume asks the disk rather than the journal, and the digest is what
+answers: `sha256` in the journal is the digest of the file that was staged,
+so an installed binary hashing to it is proof the rename completed. The
+slot written just before the rename is found again by `upgradeId`, which is
+why slots carry one. Anything that does not hash to the staged file is
+refused — a resume that cannot tell which world it is in must not pick one.
 
 `--abort` always tries `POST /ops/restart/abort` first, journal or no
 journal: a paused server is the failure mode that outlives everything else,
@@ -689,7 +713,7 @@ the plan; the intents are the debt.
 | `DRAINING` | Clears the record, then respawns every worker carrying an intent. | Nothing, unless a worker is missing — check its `stoppedReason`. |
 | `EXECING` | Same as `DRAINING`. The exec never happened; the debt to the workers did. | Nothing. |
 
-`scripts/restart_machine.sh` asserts every row of that table against a real
+`scripts/test/restart_machine.sh` asserts every row of that table against a real
 process, by killing the server at each state in turn
 (`BLANKET_TEST_CRASH_AT`) and checking the replacement's behaviour.
 
@@ -839,7 +863,7 @@ install that would rather be certain than quick.
 | `upgrade.stateDir` | `""` | Where the journal, the rollback slots and the notice cache live. Empty means `<database dir>/upgrade`, beside the backups the slots pair with. |
 | `upgrade.slots` | `3` | How many [rollback slots](#rollback-slots) to keep. |
 | `upgrade.repo` | `turtlemonvh/blanket` | Which repository releases come from. |
-| `upgrade.releasesBaseURL` | `https://api.github.com` | The Releases API root. Overridable (and `--releases-base-url`, hidden) so `scripts/upgrade.sh` can serve a fake releases API off localhost; a suite that reached api.github.com would fail whenever an unauthenticated CI runner got rate-limited. |
+| `upgrade.releasesBaseURL` | `https://api.github.com` | The Releases API root. Overridable (and `--releases-base-url`, hidden) so `scripts/test/upgrade.sh` can serve a fake releases API off localhost; a suite that reached api.github.com would fail whenever an unauthenticated CI runner got rate-limited. |
 
 ## The ops endpoints
 

@@ -155,8 +155,8 @@ would cap the whole request read including multipart uploads to
 
 Testing this needs a real process — signal delivery, exit codes, the
 BoltDB flock and `os.Executable()` are all cross-process properties — so
-`scripts/restart.sh` drives the built binary through the shared subprocess
-harness (`scripts/lib/harness.sh`), and `scripts/restart_machine.sh` does
+`scripts/test/restart.sh` drives the built binary through the shared subprocess
+harness (`scripts/test/lib/harness.sh`), and `scripts/test/restart_machine.sh` does
 the same for the restart state machine, killing the server at each of its
 states in turn (`BLANKET_TEST_CRASH_AT`) and asserting the documented
 recovery. The in-process half, including a test that holds all four

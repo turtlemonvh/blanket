@@ -1,9 +1,9 @@
 # End-to-end smoke test for the built blanket binary, Windows edition.
 #
-# Mirrors scripts/smoke.sh's spirit (spin up the server on a scratch port
+# Mirrors scripts/test/smoke.sh's spirit (spin up the server on a scratch port
 # against a throwaway config, exercise a handful of endpoints, tear
 # everything down) but is intentionally smaller: it focuses on the
-# Windows-only path scripts/smoke.sh can't cover — submitting and running
+# Windows-only path scripts/test/smoke.sh can't cover — submitting and running
 # a task through native Windows executors (cmd.exe / powershell.exe), via
 # a real `blanket worker` process. It is NOT a port of smoke.sh; the
 # Docker/Playwright/MCP surfaces smoke.sh also checks are exercised on
@@ -11,7 +11,7 @@
 #
 # Usage (from the repo root, or anywhere — the script resolves paths off
 # its own location):
-#   pwsh scripts/smoke.ps1 [-Binary path\to\blanket.exe]
+#   pwsh scripts/test/smoke.ps1 [-Binary path\to\blanket.exe]
 #
 # If -Binary is omitted, it defaults to .\blanket-windows-amd64.exe next
 # to the repo root (what `go build -o blanket-windows-amd64.exe .`
@@ -23,7 +23,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 if (-not $Binary) {
     $Binary = Join-Path $RepoRoot "blanket-windows-amd64.exe"
@@ -54,12 +54,22 @@ function Stop-IfRunning {
 
 function Fail {
     param([string]$Message)
-    Write-Host "--- server.log ---"
-    $serverLog = Join-Path $WorkDir "server.log"
-    if (Test-Path $serverLog) { Get-Content $serverLog | Write-Host }
-    Write-Host "--- worker.log ---"
-    $workerLog = Join-Path $WorkDir "worker.log"
-    if (Test-Path $workerLog) { Get-Content $workerLog | Write-Host }
+
+    # Stop the server and worker BEFORE reading their logs. Both are
+    # Start-Process redirections, so output sits in a buffer the parent
+    # cannot see until the child exits -- dumping first is why a real
+    # failure (turtlemonvh/blanket#169) printed one line of server.log and
+    # an empty worker.log, which is the half of a flake investigation that
+    # actually costs attention.
+    Stop-IfRunning $script:WorkerProcess
+    Stop-IfRunning $script:ServerProcess
+    Start-Sleep -Milliseconds 250
+
+    foreach ($name in @("server.log", "worker.log", "worker.err.log")) {
+        Write-Host "--- $name ---"
+        $path = Join-Path $WorkDir $name
+        if (Test-Path $path) { Get-Content $path | Write-Host } else { Write-Host "(absent)" }
+    }
     throw "smoke: FAIL - $Message"
 }
 
@@ -175,6 +185,8 @@ try {
     foreach ($type in $typesToRun) {
         $taskId = $taskIds[$type]
         $finalState = $null
+        $task = $null
+        $waitStart = Get-Date
         for ($i = 0; $i -lt 200; $i++) {
             if ($WorkerProcess.HasExited) {
                 Fail "worker exited unexpectedly (exit code $($WorkerProcess.ExitCode)) while waiting on $type"
@@ -186,10 +198,33 @@ try {
             }
             Start-Sleep -Milliseconds 100
         }
-        if ($finalState -ne "SUCCESS") {
-            Fail "task $taskId (type $type) did not reach SUCCESS (got '$finalState')"
+        $waited = [math]::Round(((Get-Date) - $waitStart).TotalSeconds, 1)
+
+        # How long the *task* ran, which is not the same as how long this
+        # loop waited for it. Every task is submitted up front and the
+        # worker drains the queue, so by the time the loop reaches the
+        # second type it has often already finished -- the wait reads 0s
+        # while the task itself took seconds. The budget is enforced
+        # against this number (worker.go: StartedTs + Timeout), so this is
+        # the one to compare against it.
+        #
+        # Unix seconds, so sub-second tasks read 0s. That is fine for what
+        # this is watching: whether a task is creeping up on its timeout.
+        $ran = "?"
+        if ($task.startedTs -gt 0 -and $task.lastUpdatedTs -ge $task.startedTs) {
+            $ran = "$($task.lastUpdatedTs - $task.startedTs)s"
         }
-        Write-Host "smoke: $type -> SUCCESS"
+
+        if ($finalState -ne "SUCCESS") {
+            Fail "task $taskId (type $type) did not reach SUCCESS (got '$finalState', ran $ran of a $($task.timeout)s budget, script waited ${waited}s, exitCode $($task.exitCode))"
+        }
+
+        # Printed on success, not just on failure, because the margin is
+        # the thing worth watching: #169's Windows flake was a task
+        # quietly running close to its timeout on a loaded runner until one
+        # day it crossed. A number in every green log turns "it broke"
+        # into "it had been drifting for weeks".
+        Write-Host "smoke: $type -> SUCCESS (ran $ran of a $($task.timeout)s budget; script waited ${waited}s)"
     }
 
     Write-Host "smoke: OK"
