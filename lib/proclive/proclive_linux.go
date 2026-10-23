@@ -45,6 +45,16 @@ var (
 func processExists(pid int) (bool, error) {
 	_, err := os.Stat(procRoot + "/" + strconv.Itoa(pid))
 	if err == nil {
+		// A zombie still has a /proc entry until its parent reaps it, but
+		// it has exited: nothing is running under the pid. Counting it as
+		// alive made every restart drain wait out its whole timeout,
+		// because the server forks its workers and a worker that exits
+		// when drained stays a zombie of the server (turtlemonvh/blanket#227).
+		if bts, err := os.ReadFile(procRoot + "/" + strconv.Itoa(pid) + "/stat"); err == nil {
+			if state, ok := parseStatState(string(bts)); ok && (state == "Z" || state == "X") {
+				return false, nil
+			}
+		}
 		return true, nil
 	}
 	if os.IsNotExist(err) {
@@ -68,6 +78,20 @@ func startTime(pid int) (int64, bool) {
 		return 0, false
 	}
 	return boot + ticks/clockTicksPerSecond, true
+}
+
+// parseStatState pulls field 3 (state: R, S, D, Z, X, ...) out of a
+// /proc/<pid>/stat line, skipping comm the same way parseStatStartTicks does.
+func parseStatState(line string) (string, bool) {
+	end := strings.LastIndex(line, ")")
+	if end < 0 {
+		return "", false
+	}
+	fields := strings.Fields(line[end+1:])
+	if len(fields) == 0 {
+		return "", false
+	}
+	return fields[0], true
 }
 
 // parseStatStartTicks pulls field 22 (starttime, in clock ticks since boot)

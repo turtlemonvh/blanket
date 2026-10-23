@@ -36,12 +36,19 @@ var (
 
 func Run(VERSION string, BRANCH string, COMMIT string, BUILD_DATE string) {
 	RawVersion = VERSION
-	if VERSION != "" {
-		Version = fmt.Sprintf("blanket %s (built %s)", VERSION, BUILD_DATE)
-	} else {
-		Version = fmt.Sprintf("blanket (dev) branch=%s commit=%s (built %s)", BRANCH, COMMIT, BUILD_DATE)
-	}
+	Version = versionBanner(VERSION, BRANCH, COMMIT, BUILD_DATE)
 	RootCmd.Execute()
+}
+
+// versionBanner is the string GET /version and GET /ops/restart/status
+// report. Its own function so the upgrade tests can build a banner exactly
+// the way a real binary does, rather than a lookalike: post-upgrade
+// verification parses the tag back out of it (upgrade.VersionFromBanner).
+func versionBanner(version, branch, commit, buildDate string) string {
+	if version != "" {
+		return fmt.Sprintf("blanket %s (built %s)", version, buildDate)
+	}
+	return fmt.Sprintf("blanket (dev) branch=%s commit=%s (built %s)", branch, commit, buildDate)
 }
 
 func init() {

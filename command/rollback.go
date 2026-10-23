@@ -217,7 +217,7 @@ func runRollback() int {
 		// it turns out to refuse the database ("written by a NEWER
 		// blanket"), the operator needs a copy of what they had at this
 		// moment, not at the moment of the upgrade.
-		if bb, err := opsCallTimeout(port, http.MethodPost, "/ops/backup", nil, 5*time.Minute); err == nil {
+		if bb, err := opsCallLong(port, http.MethodPost, "/ops/backup", nil, 5*time.Minute); err == nil {
 			var backup struct {
 				Path string `json:"path"`
 			}

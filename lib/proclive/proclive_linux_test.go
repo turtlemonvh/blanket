@@ -4,8 +4,11 @@ package proclive
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,4 +112,47 @@ func TestStartTime_ToleratesSecondOfSkew(t *testing.T) {
 	}
 	alive, _ := IsAlive(77, 1700000030)
 	assert.False(t, alive, "20s of drift is a different process")
+}
+
+func TestParseStatState(t *testing.T) {
+	for line, want := range map[string]string{
+		"4213 (blanket) S 1 1":         "S",
+		"4213 (blanket) Z 1 1":         "Z",
+		"4213 (my (old) prog) R 1 1 1": "R",
+	} {
+		got, ok := parseStatState(line)
+		assert.True(t, ok, line)
+		assert.Equal(t, want, got, line)
+	}
+	_, ok := parseStatState("4213 (blanket)")
+	assert.False(t, ok)
+}
+
+// A process that has exited but not been reaped is a zombie: /proc/<pid>
+// still exists, and it used to be reported as alive. A drained worker
+// exits on its own but, forked by the server, it sat there as the server's
+// zombie, and every restart drain waited out its full timeout
+// (turtlemonvh/blanket#227). Exited is exited, whether or not anyone has
+// called wait(2) yet.
+func TestIsAlive_ZombieIsConclusivelyGone(t *testing.T) {
+	cmd := exec.Command("true")
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	started, _ := StartTime(pid)
+	t.Cleanup(func() { _ = cmd.Wait() })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+		require.NoError(t, err, "the child keeps a /proc entry until it is reaped")
+		if st, _ := parseStatState(string(b)); st == "Z" {
+			break
+		}
+		require.True(t, time.Now().Before(deadline), "the child never became a zombie")
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	alive, conclusive := IsAlive(pid, started)
+	assert.False(t, alive, "a zombie has exited")
+	assert.True(t, conclusive)
 }

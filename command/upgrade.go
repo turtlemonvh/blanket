@@ -427,7 +427,7 @@ func finishUpgrade(res *upgradeResult, j *upgrade.Journal, stagedPath string) in
 		// by the server, because the CLI cannot open a database the server
 		// holds the lock on.
 		if rank < database.RestartStateRank(database.RestartStateBackedUp) {
-			bb, err := opsCallTimeout(port, http.MethodPost, "/ops/backup", nil, 5*time.Minute)
+			bb, err := opsCallLong(port, http.MethodPost, "/ops/backup", nil, 5*time.Minute)
 			if err != nil {
 				return failWith(ExitError, fmt.Errorf("pre-upgrade backup failed: %w", err))
 			}
@@ -566,13 +566,13 @@ func execAndVerify(res *upgradeResult, j *upgrade.Journal, port int) int {
 		if budget <= 0 {
 			budget = 60 * time.Second
 		}
-		db, err := opsCallTimeout(port, http.MethodPost, "/ops/restart/drain", nil, timing.Scale(budget)+30*time.Second)
+		db, err := opsCallLong(port, http.MethodPost, "/ops/restart/drain", nil, timing.Scale(budget)+30*time.Second)
 		if err != nil {
 			return failWith(ExitRestartRefused, err)
 		}
 		var drain struct {
 			Drained bool     `json:"drained"`
-			Running []string `json:"running"`
+			Running []string `json:"stillRunning"`
 			Stopped int      `json:"stopped"`
 		}
 		_ = json.Unmarshal(db, &drain)
