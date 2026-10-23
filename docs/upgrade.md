@@ -858,7 +858,7 @@ install that would rather be certain than quick.
 | `restart.execMode` | `auto` | How a requested restart replaces the process: `auto`, `exec`, `exit`. Also `--exec-mode`. |
 | `restart.drainMode` | `auto` | Whether a restart stops its workers: `auto`, `always`, `never`. Also `--drain-mode`. |
 | `restart.drainTimeout` | `60s` | How long a drain waits for stopped workers to exit before reporting the stragglers. A bound on the *wait*, never on the task — a worker finishes what it is running first. Also `--drain-timeout`. |
-| `restart.deadline` | `5m` | How long the watchdog gives the restart's driver between transitions before aborting. Generous: the steps it spans include a human swapping a binary by hand. |
+| `restart.deadline` | `5m` | How long the watchdog gives the restart's driver between transitions before aborting. Generous: the steps it spans include a human swapping a binary by hand. The drain is one transition, so **if you raise `restart.drainTimeout` past this, raise this too** (to the drain timeout plus a few minutes): otherwise the watchdog aborts the restart mid-drain and `blanket upgrade` exits 13 once the drain returns. |
 | `upgrade.checkForUpdates` | `true` | Whether the CLI prints [the update notice](#the-update-notice). Off is one line for an install that would rather its CLI never mentioned the internet. |
 | `upgrade.stateDir` | `""` | Where the journal, the rollback slots and the notice cache live. Empty means `<database dir>/upgrade`, beside the backups the slots pair with. |
 | `upgrade.slots` | `3` | How many [rollback slots](#rollback-slots) to keep. |
