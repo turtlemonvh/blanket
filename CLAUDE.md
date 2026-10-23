@@ -104,6 +104,9 @@ Delete a branch (local and remote) once its PR is merged — don't leave
 merged branches sitting around. (Older merged branches predate this
 convention and were left as-is; this applies going forward.)
 
+After merging a PR to master, run `make deploy-dev` on the dev box so the
+local server on :8773 runs the new master (see CONTRIBUTORS.md).
+
 ## Gotchas
 
 - **Bind-mount vs. image-baked dirs in docker-*.** `-v $(CURDIR):/src`

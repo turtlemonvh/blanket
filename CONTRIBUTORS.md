@@ -77,7 +77,15 @@ make test-browser          # run Playwright tests
 make fmt                   # gofmt all Go files
 make check-fmt             # fail if any Go file isn't gofmt-clean
 make licenses              # dependency license gate (see below)
+make deploy-dev            # dev box only: upgrade the local server to origin/master
 ```
+
+`make deploy-dev` builds a bundle from `origin/master` in a throwaway
+worktree and runs the installed binary's `blanket upgrade --bundle --yes`
+against it (defaults: `~/.local/bin/blanket`, `~/.config/blanket/config.json`,
+port 8773; override with `DEV_BLANKET`, `DEV_CONFIG`, `DEV_PORT`, `DEV_REF`).
+An unchanged master is a no-op; a bad deploy is undone with `blanket rollback
+--yes`. See the header of `scripts/deploy_dev.sh`.
 
 After bumping `go.sum` or `tests/e2e/package-lock.json`, run
 `make docker-clean` so the next `make docker-*` rebuilds the named
