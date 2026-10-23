@@ -5,13 +5,22 @@ whatever narrowing applies where these rows are rendered (the Tasks page's
 filter form via hx-include, or ?parentId= on a series detail page's Past
 runs table), and re-fetching a bare /ui/partials/tasks-rows would silently
 throw that away.
+
+One set of markup for desktop and phone (turtlemonvh/blanket#216): below
+640px app.css turns each row into a card, keyed off the cell-* classes.
+The card leads with state + duration, then type + short id, then one
+context line. Duration is a real column on both (#216 review); the m-only
+context cell exists only for the card, because on desktop it would just
+repeat the Exit / Updated / Created / Scheduled columns.
+Progress % is deliberately not on the card: it is only what a task
+reports about itself.
 */}}
 {{define "tasks-rows"}}
 {{range $i, $t := .Tasks}}
-<tr>
-    <th scope="row">{{add $i 1}}</th>
-    <td>
-        <a href="/ui/tasks/{{hex $t.Id}}">{{shortId $t.Id}}</a>
+<tr class="task-row">
+    <th scope="row" class="cell-num">{{add $i 1}}</th>
+    <td class="cell-id">
+        <a class="card-link" href="/ui/tasks/{{hex $t.Id}}">{{shortId $t.Id}}</a>
         {{/*
         A run spawned by a scheduled series links back to it (#98). Skipped
         when the list is already filtered to one series (the Past runs table
@@ -24,30 +33,50 @@ throw that away.
         </div>
         {{end}}
     </td>
-    <td>{{$t.TypeId}}</td>
-    <td>{{join $t.Tags ", "}}</td>
-    <td>{{fmtTs $t.CreatedTs}}</td>
-    <td>{{if eq $t.StartedTs 0}}<span class="muted">None</span>{{else}}{{fmtTs $t.StartedTs}}{{end}}</td>
-    <td>{{fmtTs $t.LastUpdatedTs}}</td>
-    <td><span class="badge state-{{$t.State}}">{{$t.State}}</span></td>
+    <td class="cell-type">{{$t.TypeId}}</td>
+    <td class="cell-tags">{{join $t.Tags ", "}}</td>
+    <td class="cell-created">{{fmtTs $t.CreatedTs}}</td>
+    <td class="cell-started">{{if eq $t.StartedTs 0}}<span class="muted">None</span>{{else}}{{fmtTs $t.StartedTs}}{{end}}</td>
+    <td class="cell-updated">{{fmtTs $t.LastUpdatedTs}}</td>
+    <td class="cell-state"><span class="badge state-{{$t.State}}">{{$t.State}}</span></td>
+    {{/* Desktop column and phone card alike (#216): computed server-side,
+         refreshed whenever the rows are (SSE / Refresh) -- nothing ticks
+         on the client. */}}
+    <td class="cell-duration">{{taskDuration $t}}</td>
     {{/*
     exitCode (#104). Null — a dash — for anything that hasn't finished, and
     also for a terminal task with no exit status to report: one killed by a
     signal (STOPPED/TIMEDOUT) or cancelled before it ever started.
     */}}
-    <td>{{exitCode $t.ExitCode}}</td>
-    <td>
+    <td class="cell-exit">{{exitCode $t.ExitCode}}</td>
+    <td class="cell-sched">
         {{if eq $t.State "SCHEDULED"}}{{fmtTs $t.ScheduledTs}}
         {{else if eq $t.State "RECURRING"}}{{fmtTs $t.NextFireTs}} <span class="muted">({{$t.CronExpr}})</span>
         {{else}}<span class="muted">&mdash;</span>
         {{end}}
     </td>
-    <td class="row-actions">
+    <td class="cell-context m-only">
+        {{if or (eq $t.State "RUNNING") (eq $t.State "CLAIMED")}}
+            {{if not $t.WorkerId.IsZero}}on worker <a href="/ui/workers/{{hex $t.WorkerId}}">{{shortId $t.WorkerId}}</a>{{end}}
+        {{else if isTerminal $t.State}}
+            {{exitSummary $t.ExitCode}} · finished {{fmtTs $t.LastUpdatedTs}}
+        {{else if eq $t.State "SCHEDULED"}}
+            runs {{fmtTs $t.ScheduledTs}}
+        {{else if eq $t.State "WAITING"}}
+            created {{fmtTs $t.CreatedTs}}
+        {{else}}
+            {{scheduleDesc $t}}
+        {{end}}
+    </td>
+    {{/* Every cancel and every delete asks first, naming the task type
+         (#216). Shared markup, so desktop and phone both get the dialog --
+         a mis-tap is easy and neither is undoable. */}}
+    <td class="cell-actions row-actions">
         {{if isCancelable $t.State}}
         {{if eq $t.State "RUNNING"}}
         <a class="danger"
            hx-put="/task/{{hex $t.Id}}/cancel?force=true"
-           hx-confirm="This task is RUNNING; cancelling will kill its process. Continue?"
+           hx-confirm="This {{$t.TypeId}} task is RUNNING; cancelling will kill its process. Continue?"
            hx-swap="none"
            hx-on::after-request="htmx.trigger('#tasks-rows', 'refresh-rows')">
             Cancel
@@ -55,6 +84,7 @@ throw that away.
         {{else}}
         <a class="danger"
            hx-put="/task/{{hex $t.Id}}/cancel"
+           hx-confirm="Cancel this {{$t.TypeId}} task ({{$t.State}})? It will not run."
            hx-swap="none"
            hx-on::after-request="htmx.trigger('#tasks-rows', 'refresh-rows')">
             Cancel
@@ -64,6 +94,7 @@ throw that away.
         {{if isTerminal $t.State}}
         <a class="danger"
            hx-delete="/task/{{hex $t.Id}}"
+           hx-confirm="Delete this {{$t.TypeId}} task ({{shortId $t.Id}}) and its results? This cannot be undone."
            hx-swap="none"
            hx-on::after-request="htmx.trigger('#tasks-rows', 'refresh-rows')">
             Delete
@@ -72,6 +103,6 @@ throw that away.
     </td>
 </tr>
 {{else}}
-<tr><td colspan="11" class="muted">No tasks.</td></tr>
+<tr><td colspan="12" class="muted">No tasks.</td></tr>
 {{end}}
 {{end}}

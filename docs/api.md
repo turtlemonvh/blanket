@@ -862,10 +862,19 @@ restart forever.
 and the `/ui/partials/*` HTML fragments the pages swap in. These return
 HTML, not JSON, and are an implementation detail of the UI rather than a
 client-facing API — see [usage.md](usage.md#web-ui) for what the pages
-do, and `server/server.go` for the full route list. Three groups are
-worth knowing about, because they mirror JSON endpoints above:
+do, and `server/server.go` for the full route list. A few are worth
+knowing about — the manifest because browsers fetch it on their own, the
+rest because they mirror JSON endpoints above:
 
 ```
+GET /ui/manifest.webmanifest    # the PWA web app manifest
+                                # (application/manifest+json) that makes
+                                # the UI installable on a phone: start_url
+                                # and scope /ui/, display standalone, and
+                                # 192/512/maskable icons under
+                                # /ui/static/. Its `name` carries the
+                                # instance name (ui.instanceName, else the
+                                # hostname). No service worker is served.
 GET /ui/partials/schedule-preview?cron=<expr>
                                 # the live human-readable rendering of a
                                 # cron expression shown under a cron

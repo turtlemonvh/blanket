@@ -25,9 +25,11 @@ stdout", so the default view is not merely equivalent but identical.
                 hx-swap="innerHTML">{{.Label}}</button>
         {{end}}
     </div>
-    <label class="log-pin">
-        <input type="checkbox" id="pin-bottom" checked> Pin to bottom
-    </label>
+    <div class="log-options">
+        <label class="log-pin">
+            <input type="checkbox" id="pin-bottom" checked> Pin to bottom
+        </label>
+    </div>
 </div>
 
 {{/*
@@ -64,8 +66,10 @@ order and says nothing, because there is nothing to warn about.
 {{end}}
 
 <script>
-// Keep the pane pinned to its newest line while the "Pin to bottom" box is
-// checked. Runs on every swap of this partial (htmx executes scripts in
+// Oldest line first, newest at the bottom -- the same on a phone and a
+// desktop (#216 review). The pane is top-aligned, so a short log sits at
+// the top; once it overflows, "Pin to bottom" keeps the newest line in
+// view. Runs on every swap of this partial (htmx executes scripts in
 // swapped-in content), and the listener dies with the <pre> it is bound to.
 (function () {
   var el = document.getElementById('task-log');
@@ -75,6 +79,7 @@ order and says nothing, because there is nothing to warn about.
     if (!pin || pin.checked) el.scrollTop = el.scrollHeight;
   }
   el.addEventListener('htmx:sseMessage', toBottom);
+  if (pin) pin.addEventListener('change', toBottom);
   toBottom();
 })();
 </script>

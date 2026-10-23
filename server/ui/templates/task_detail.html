@@ -7,6 +7,14 @@
 
     <h3>{{.Task.TypeId}} · <span class="muted">{{hex .Task.Id}}</span></h3>
 
+    {{/* Phone only (#216): what a phone visit is for -- state, how long,
+         and the log one tap away -- before the full metadata table. */}}
+    <p class="task-summary m-only">
+        <span class="badge state-{{.Task.State}}">{{.Task.State}}</span>
+        {{with taskDuration .Task}}<span class="task-duration" aria-label="duration">{{.}}</span>{{end}}
+        <a class="btn" href="#task-log-view">Log ↓</a>
+    </p>
+
     {{/* Renders nothing unless this task was spawned by a series (#98). */}}
     {{template "series-card" .Series}}
 
@@ -22,7 +30,10 @@
             started — so a dash here means "no exit status", never "0".
             */}}
             <tr><td>Exit Code</td><td>{{exitCode .Task.ExitCode}}</td></tr>
-            <tr><td>Progress</td><td>{{.Task.Progress}}%</td></tr>
+            {{/* Server-computed, same as the task list's Duration column (#216). */}}
+            <tr><td>Duration</td><td>{{with taskDuration .Task}}{{.}}{{else}}<span class="muted">&mdash;</span>{{end}}</td></tr>
+            {{/* Hidden on phones (#216): it is only what the task reports. */}}
+            <tr class="d-only"><td>Progress</td><td>{{.Task.Progress}}%</td></tr>
             <tr><td>Created</td><td>{{fmtTs .Task.CreatedTs}}</td></tr>
             <tr><td>Started</td><td>{{if eq .Task.StartedTs 0}}<span class="muted">None</span>{{else}}{{fmtTs .Task.StartedTs}}{{end}}</td></tr>
             <tr><td>Last Updated</td><td>{{fmtTs .Task.LastUpdatedTs}}</td></tr>

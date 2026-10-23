@@ -103,6 +103,11 @@ func SetConfigDefaults() {
 	viper.SetDefault("mcp.validateStrict", false)
 	viper.SetDefault("mcp.maxLogLines", 200)
 
+	// The name the web UI's header and the installed PWA show for this
+	// instance (turtlemonvh/blanket#216). Empty means the machine's
+	// hostname, which is enough to tell two blankets apart on one phone.
+	viper.SetDefault("ui.instanceName", "")
+
 	// Synchronous ("blocking") task submission -- POST /task/?wait
 	// (turtlemonvh/blanket#27). defaultWait applies to a bare ?wait;
 	// maxWait is a hard cap (a larger ?wait is a 400, not a clamp) and is

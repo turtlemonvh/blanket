@@ -394,16 +394,22 @@ tr:hover td { background: #fafbfc; }
 .exit-code.exit-ok  { background: #e6f4ea; color: var(--ok);     border-color: #b2d8bf; }
 .exit-code.exit-bad { background: #fbe9e9; color: var(--danger); border-color: #ecb9b9; }
 
-/* Toolbar above the pane: the stream toggle on the left, the pin-to-bottom
+/* Toolbar above the pane: the stream toggle on the left, the pin
  * checkbox pushed to the right. */
 .log-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem 0.75rem;
   margin-bottom: 0.5rem;
 }
-.log-toolbar .log-pin {
+.log-toolbar .log-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
   margin-left: auto;
+}
+.log-toolbar .log-pin {
   font-size: 0.85rem;
   color: var(--muted);
   cursor: pointer;
@@ -544,4 +550,206 @@ tr:hover td { background: #fafbfc; }
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+/* ---------------------------------------------------------------------
+ * Phone layout (turtlemonvh/blanket#216).
+ *
+ * A phone visit is for checking on jobs: state and duration first, the
+ * log one tap away. Everything here is a restyle of the same markup the
+ * desktop renders -- below 640px the wide tables become cards and the top
+ * nav gives way to a bottom tab bar. Above it, nothing in this section
+ * applies except hiding the phone-only bits, so the desktop is unchanged.
+ *
+ * Markers used by the templates:
+ *   .m-only        phone-only content (hidden on desktop)
+ *   .d-only        desktop-only content (hidden on phones)
+ *   table.cards    a list table that becomes one card per row
+ *   .card-link     the row's main link; on a card it covers the whole card
+ *   td[data-label] a cell that needs a muted label once its header is gone
+ * ------------------------------------------------------------------- */
+
+.instance-name { color: var(--muted); font-size: 0.85rem; }
+
+.m-only { display: none; }
+.tabbar { display: none; }
+
+@media (max-width: 640px) {
+  /* !important: it has to beat the card rules' table.cards td below. */
+  .d-only { display: none !important; }
+
+  body { padding-bottom: calc(3.4rem + env(safe-area-inset-bottom)); }
+  main { margin: 1rem auto; padding: 0 0.75rem; }
+  .flash-area { padding: 0 0.75rem; }
+
+  /* Top bar keeps just the brand and the instance name. */
+  nav.topbar { padding: 0.6rem 0.75rem; gap: 0.75rem; }
+  nav.topbar > a { display: none; }
+
+  /* --- Bottom tab bar ------------------------------------------------ */
+  .tabbar {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tabbar > a,
+  .tabbar-more > summary {
+    display: block;
+    padding: 0.8rem 0.25rem;
+    text-align: center;
+    color: var(--fg);
+    text-decoration: none;
+    font-size: 0.9rem;
+  }
+  .tabbar > a { flex: 1; }
+  .tabbar-more { flex: 1; position: relative; }
+  .tabbar-more > summary { list-style: none; cursor: pointer; }
+  .tabbar-more > summary::-webkit-details-marker { display: none; }
+  .tabbar .active {
+    color: var(--accent);
+    font-weight: 600;
+    box-shadow: inset 0 2px 0 var(--accent);
+  }
+  .tabbar-menu {
+    position: absolute;
+    right: 0.5rem;
+    bottom: calc(100% + 0.35rem);
+    min-width: 10rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  }
+  .tabbar-menu a {
+    display: block;
+    padding: 0.75rem 0.9rem;
+    color: var(--fg);
+    text-decoration: none;
+  }
+  .tabbar-menu a + a { border-top: 1px solid var(--border); }
+
+  /* --- Two-column settings tables just need to wrap long values ------- */
+  th, td { overflow-wrap: anywhere; }
+
+  /* --- Tables as cards ------------------------------------------------ */
+  table.cards,
+  table.cards tbody { display: block; }
+  table.cards thead { display: none; }
+  table.cards tr {
+    display: block;
+    position: relative;
+    margin-bottom: 0.6rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+  }
+  table.cards tr:hover td { background: transparent; }
+  table.cards th,
+  table.cards td {
+    display: block;
+    padding: 0.1rem 0;
+    border: none;
+    background: transparent;
+  }
+  table.cards .cell-num { display: none; }
+  table.cards td[data-label]::before {
+    content: attr(data-label) " ";
+    color: var(--muted);
+  }
+
+  /* The whole card opens the detail page; the links and actions inside
+   * it sit above that overlay so they still get their own taps. */
+  table.cards .card-link::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+  table.cards .row-actions,
+  table.cards .series-link,
+  table.cards .cell-context a { position: relative; z-index: 1; }
+
+  table.cards .row-actions {
+    display: flex;
+    gap: 1.25rem;
+    margin-top: 0.3rem;
+  }
+  table.cards .row-actions a { margin: 0; padding: 0.35rem 0; }
+
+  /* Task card: state + duration / type + short id / one context line /
+   * actions. Progress % is deliberately not on it. */
+  table.cards tr.task-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "state   duration"
+      "type    id"
+      "context context"
+      "actions actions";
+    gap: 0.2rem 0.75rem;
+    align-items: baseline;
+  }
+  table.cards tr.task-row > * { display: none; }
+  table.cards tr.task-row > .cell-state { display: block; grid-area: state; }
+  table.cards tr.task-row > .cell-duration {
+    display: block;
+    grid-area: duration;
+    text-align: right;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  table.cards tr.task-row > .cell-type { display: block; grid-area: type; font-weight: 600; }
+  table.cards tr.task-row > .cell-id {
+    display: block;
+    grid-area: id;
+    text-align: right;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+  }
+  table.cards tr.task-row > .cell-context {
+    display: block;
+    grid-area: context;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  table.cards tr.task-row > .cell-actions { display: flex; grid-area: actions; }
+  .cell-context .ctx-exit-bad { color: var(--danger); font-weight: 600; }
+
+  /* Worker card: PID + state / tags / started / actions. */
+  table.cards tr.worker-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "pid     state"
+      "tags    tags"
+      "started started"
+      "actions actions";
+    gap: 0.2rem 0.75rem;
+    align-items: baseline;
+  }
+  table.cards tr.worker-row > * { display: none; }
+  table.cards tr.worker-row > .cell-pid { display: block; grid-area: pid; font-weight: 600; }
+  table.cards tr.worker-row > .cell-pid::before { content: "PID "; color: var(--muted); font-weight: normal; }
+  table.cards tr.worker-row > .cell-state { display: block; grid-area: state; }
+  table.cards tr.worker-row > .cell-tags { display: block; grid-area: tags; font-size: 0.85rem; }
+  table.cards tr.worker-row > .cell-started { display: block; grid-area: started; font-size: 0.85rem; }
+  table.cards tr.worker-row > .cell-actions { display: flex; grid-area: actions; }
+
+  /* --- Task detail ---------------------------------------------------- */
+  .task-summary.m-only {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .task-summary .task-duration { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .task-summary .btn { margin-left: auto; text-decoration: none; color: var(--fg); }
+
+  .log-toolbar .log-options { margin-left: 0; }
+  .log-pane { max-height: 60vh; }
 }

@@ -10,11 +10,11 @@ when it was paused instead.
 {{define "upcoming-series-rows"}}
 {{range $i, $s := .Series}}
 <tr>
-    <th scope="row">{{add $i 1}}</th>
-    <td><a href="/ui/tasks/{{$s.Id}}">{{shortId $s.Task.Id}}</a></td>
+    <th scope="row" class="cell-num">{{add $i 1}}</th>
+    <td class="cell-id"><a class="card-link" href="/ui/tasks/{{$s.Id}}">{{shortId $s.Task.Id}}</a></td>
     <td>{{$s.Task.TypeId}}</td>
     <td>{{$s.Description}} <span class="muted"><code>{{$s.Task.CronExpr}}</code></span></td>
-    <td>
+    <td data-label="next">
         {{if $s.Live}}{{fmtTs $s.Task.NextFireTs}}
         {{else}}<span class="muted">Paused {{fmtTs $s.Task.PausedTs}}</span>
         {{end}}

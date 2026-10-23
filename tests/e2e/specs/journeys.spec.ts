@@ -219,9 +219,19 @@ test.describe('Cancel task from list', () => {
     await expect(row).toBeVisible();
     await expect(row.getByText('WAITING')).toBeVisible();
 
+    // Every cancel asks first (#216), naming the task type. Playwright
+    // dismisses dialogs by default, which would make the click a no-op.
+    const confirmed = new Promise<string>((resolve) => {
+      page.once('dialog', async (d) => {
+        resolve(d.message());
+        await d.accept();
+      });
+    });
+
     // The Cancel control in the current UI is an <a> without href, which
     // isn't a "link" in ARIA terms. Match by visible text scoped to the row.
     await row.getByText('Cancel', { exact: true }).click();
+    expect(await confirmed).toContain('echo_task');
 
     await page.getByRole('button', { name: /refresh list/i }).click();
     await expect(row.getByText('STOPPED')).toBeVisible();

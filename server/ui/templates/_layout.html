@@ -2,9 +2,22 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Blanket · {{.Title}}</title>
     <link rel="stylesheet" href="/ui/static/app.css">
+    <!-- Installable as a home-screen app (turtlemonvh/blanket#216). The
+         manifest is generated (server/ui_mobile.go) so the installed name
+         carries the instance name. No service worker on purpose: the data
+         is live, so an offline cache would only serve stale states. The
+         icons are a placeholder "B" until turtlemonvh/blanket#55. -->
+    <link rel="manifest" href="/ui/manifest.webmanifest">
+    <meta name="theme-color" content="#2a6fb0">
+    <link rel="icon" type="image/png" sizes="32x32" href="/ui/static/favicon-32.png">
+    <link rel="apple-touch-icon" href="/ui/static/apple-touch-icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Blanket">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <script src="/ui/static/htmx.min.js"></script>
     <script src="/ui/static/htmx-sse.js"></script>
     <!-- Closes SSE streams on pagehide / reopens on a bfcache restore. See
@@ -23,7 +36,24 @@
         <a href="/ui/task-types">Task Types</a>
         <a href="/ui/about">About</a>
         <span class="spacer"></span>
-        <span class="muted">htmx scaffold</span>
+        {{with instanceName}}<span class="instance-name" aria-label="instance name" title="This blanket instance (ui.instanceName, else the hostname)">{{.}}</span>{{end}}
+    </nav>
+    {{/*
+    Phones get a bottom tab bar instead of the top links (#216); app.css
+    shows exactly one of the two, so desktop is unchanged. "More" holds
+    the pages a phone rarely needs.
+    */}}
+    <nav class="tabbar" aria-label="sections">
+        <a href="/ui/"{{if or (eq .NavPath "/ui/") (hasPrefix .NavPath "/ui/tasks")}} class="active" aria-current="page"{{end}}>Tasks</a>
+        <a href="/ui/upcoming"{{if hasPrefix .NavPath "/ui/upcoming"}} class="active" aria-current="page"{{end}}>Upcoming</a>
+        <a href="/ui/workers"{{if hasPrefix .NavPath "/ui/workers"}} class="active" aria-current="page"{{end}}>Workers</a>
+        <details class="tabbar-more">
+            <summary{{if or (hasPrefix .NavPath "/ui/task-types") (hasPrefix .NavPath "/ui/about")}} class="active"{{end}}>More</summary>
+            <div class="tabbar-menu">
+                <a href="/ui/task-types">Task Types</a>
+                <a href="/ui/about">About</a>
+            </div>
+        </details>
     </nav>
     <!-- Raised by sse-restart-banner.js when a stream reports the server
          is draining for a shutdown/restart; hidden again on reconnect. -->

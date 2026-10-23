@@ -1,23 +1,29 @@
+{{/*
+Below 640px app.css restyles each row as a card (turtlemonvh/blanket#216):
+PID and state on top, then tags and start time (labelled via data-label),
+then the actions. Same markup as the desktop table.
+*/}}
 {{define "workers-rows"}}
 {{range $i, $w := .Workers}}
-<tr>
-    <th scope="row">{{add $i 1}}</th>
-    <td><a href="/ui/workers/{{hex $w.Id}}">{{$w.Pid}}</a></td>
-    <td>{{join $w.Tags ", "}}</td>
-    <td>{{fmtTs $w.StartedTs}}</td>
-    <td class="muted">{{$w.Logfile}}</td>
-    <td>{{$w.CheckInterval}}s</td>
+<tr class="worker-row">
+    <th scope="row" class="cell-num">{{add $i 1}}</th>
+    <td class="cell-pid"><a class="card-link" href="/ui/workers/{{hex $w.Id}}">{{$w.Pid}}</a></td>
+    <td class="cell-tags" data-label="tags">{{join $w.Tags ", "}}</td>
+    <td class="cell-started" data-label="started">{{fmtTs $w.StartedTs}}</td>
+    <td class="cell-logfile muted">{{$w.Logfile}}</td>
+    <td class="cell-interval">{{$w.CheckInterval}}s</td>
     {{/* One state column rather than a yes/no "Stopped" one: a worker can
          be LOST (heartbeat stale, per the reaper) without being stopped,
          and that is the case worth seeing at a glance. */}}
-    <td>{{if $w.Stopped}}<span class="badge state-STOPPED">stopped</span>
+    <td class="cell-state">{{if $w.Stopped}}<span class="badge state-STOPPED">stopped</span>
         {{else if $w.Lost}}<span class="badge state-LOST" title="No heartbeat; see the worker's detail page">lost</span>
         {{else}}<span class="badge state-ACTIVE">active</span>{{end}}</td>
-    <td class="row-actions">
+    <td class="cell-actions row-actions">
         {{if $w.Stopped}}
         <a hx-put="/worker/{{hex $w.Id}}/restart" hx-swap="none"
            hx-on::after-request="htmx.ajax('GET', '/ui/partials/workers-rows', '#workers-rows')">Restart</a>
         <a class="danger" hx-delete="/worker/{{hex $w.Id}}" hx-swap="none"
+           hx-confirm="Delete the record of stopped worker PID {{$w.Pid}}? This cannot be undone."
            hx-on::after-request="htmx.ajax('GET', '/ui/partials/workers-rows', '#workers-rows')">Delete</a>
         {{else}}
         <a class="danger" hx-put="/worker/{{hex $w.Id}}/stop" hx-swap="none"

@@ -329,6 +329,7 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 
 	// HTMX + Go-template UI.
 	r.StaticFS("/ui/static", uiStaticFS())
+	r.GET("/ui/manifest.webmanifest", s.uiManifest) // PWA manifest (#216)
 	r.GET("/ui/", s.uiTasksPage)
 	r.GET("/ui/tasks/:id", s.uiTaskDetailPage) // also serves the series detail view for a cron template
 	r.GET("/ui/upcoming", s.uiUpcomingPage)
