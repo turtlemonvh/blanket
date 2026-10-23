@@ -133,6 +133,24 @@ bundle:
 test-upgrade:
 	bash scripts/test/upgrade.sh
 
+# Put origin/master on the maintainer's dev server (turtlemonvh/blanket#227):
+# fetch, build a bundle from a throwaway worktree at DEV_REF, and run the
+# INSTALLED binary's `blanket upgrade --bundle` against it. Dev tooling only;
+# see the header of scripts/deploy_dev.sh. Every path is a variable so it can
+# be aimed at a throwaway server, e.g.
+#     make deploy-dev DEV_BLANKET=/tmp/x/blanket DEV_CONFIG=/tmp/x/c.json DEV_PORT=18773
+DEV_BLANKET ?= $(HOME)/.local/bin/blanket
+DEV_CONFIG ?= $(HOME)/.config/blanket/config.json
+DEV_PORT ?= 8773
+DEV_REF ?= origin/master
+DEV_REMOTE ?= origin
+DEV_UPGRADE_FLAGS ?=
+
+deploy-dev:
+	DEV_BLANKET='$(DEV_BLANKET)' DEV_CONFIG='$(DEV_CONFIG)' DEV_PORT='$(DEV_PORT)' \
+	DEV_REF='$(DEV_REF)' DEV_REMOTE='$(DEV_REMOTE)' DEV_UPGRADE_FLAGS='$(DEV_UPGRADE_FLAGS)' \
+		bash scripts/deploy_dev.sh
+
 install-playwright:
 	cd tests/e2e && npm install && npx playwright install --with-deps chromium
 
@@ -314,4 +332,4 @@ docker-shell: docker-image
 docker-clean:
 	-docker volume rm blanket-dev-cache blanket-npm-cache
 
-.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine test-upgrade checksums bundle install-playwright vet fmt check-fmt clean licenses docker-image docker-pull docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-release docker-shell docker-clean docker-licenses
+.PHONY: setup linux darwin windows test test-race test-integration test-browser test-api-e2e test-smoke test-restart test-migrate test-restart-machine test-upgrade checksums bundle deploy-dev install-playwright vet fmt check-fmt clean licenses docker-image docker-pull docker-check-fmt docker-test docker-test-race docker-test-browser docker-test-smoke docker-build docker-release docker-shell docker-clean docker-licenses

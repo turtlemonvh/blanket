@@ -64,8 +64,17 @@ func TestSameVersion(t *testing.T) {
 // before any new response field would have existed.
 func TestVersionFromBanner(t *testing.T) {
 	cases := map[string]string{
-		"blanket v0.5.0 (built 2026-09-06 11:14 PM EDT)":       "v0.5.0",
-		"blanket v1.0.0-rc1 (built 2026-09-06)":                "v1.0.0-rc1",
+		"blanket v0.5.0 (built 2026-09-06 11:14 PM EDT)": "v0.5.0",
+		"blanket v1.0.0-rc1 (built 2026-09-06)":          "v1.0.0-rc1",
+		// `git describe --tags` builds -- what `make deploy-dev` installs
+		// (turtlemonvh/blanket#227). The describe suffix rides through as
+		// the prerelease, so the whole string comes back intact.
+		"blanket v0.3.0-57-gabc1234 (built 2026-10-23 1:02 PM UTC)":       "v0.3.0-57-gabc1234",
+		"blanket v0.3.0-57-gabc1234-dirty (built 2026-10-23 1:02 PM UTC)": "v0.3.0-57-gabc1234-dirty",
+		// `git describe --always` in a clone with no tags is a bare hash,
+		// which is not a version: verification skips the check rather than
+		// failing it, the same as for a dev build.
+		"blanket abc1234 (built 2026-10-23)":                   "",
 		"blanket (dev) branch=master commit=abc (built today)": "",
 		"":                        "",
 		"something else entirely": "",
@@ -74,5 +83,22 @@ func TestVersionFromBanner(t *testing.T) {
 		if got := VersionFromBanner(banner); got != want {
 			t.Errorf("VersionFromBanner(%q) = %q, want %q", banner, got, want)
 		}
+	}
+}
+
+// A `git describe` version is its own release as far as SameVersion is
+// concerned: two different commits past the same tag are different, and
+// the same describe string is the same. That is what makes a re-run of
+// `make deploy-dev` on an unchanged master a no-op, and a run after a new
+// merge an upgrade (turtlemonvh/blanket#227).
+func TestSameVersion_GitDescribe(t *testing.T) {
+	if !SameVersion("v0.3.0-57-gabc1234", "v0.3.0-57-gabc1234") {
+		t.Error("the same describe string is the same version")
+	}
+	if SameVersion("v0.3.0-57-gabc1234", "v0.3.0-58-gdef5678") {
+		t.Error("a later commit is a different version")
+	}
+	if SameVersion("v0.3.0", "v0.3.0-57-gabc1234") {
+		t.Error("a build past a tag is not that tag")
 	}
 }

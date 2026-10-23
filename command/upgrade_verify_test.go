@@ -33,6 +33,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/turtlemonvh/blanket/lib/httpx"
 )
 
 // fakeOps is a stand-in for GET /ops/restart/status whose answer can
@@ -268,4 +269,78 @@ func TestPortStaysQuiet(t *testing.T) {
 	_, port := startFakeOps(t, status("someone", "v9.9.0"))
 	assert.False(t, portStaysQuiet(port, 5*time.Second),
 		"something is answering, so the CLI must not start a second server")
+}
+
+// ---------------------------------------------------------------------------
+// git describe versions (turtlemonvh/blanket#227)
+// ---------------------------------------------------------------------------
+
+// `make deploy-dev` installs a bundle built from origin/master, whose
+// version is `git describe --tags --always` -- `v0.3.0-57-gabc1234`, not a
+// tag. The binary's banner is built from that string by versionBanner, and
+// the wait has to read it back out and accept it, or every dev deploy would
+// end in "a server came back but reports ..." after a perfectly good swap.
+//
+// The old server answering on the release it was built from is still
+// refused; that half of the check is not loosened by any of this.
+func TestWaitForNewServer_AcceptsAGitDescribeVersion(t *testing.T) {
+	for _, want := range []string{"v0.3.0-57-gabc1234", "v0.3.0-57-gabc1234-dirty"} {
+		t.Run(want, func(t *testing.T) {
+			newBanner := versionBanner(want, "HEAD", "abc1234", "2026-10-23 1:02 PM UTC")
+			old := status("the-old-process", "v0.3.0")
+			replacement := restartStatus{InstanceId: "the-replacement", Version: newBanner}
+			_, port := startFakeOps(t, old, old, replacement)
+
+			st, err := waitForNewServer(port, "the-old-process", want, 10*time.Second)
+			require.NoError(t, err)
+			assert.Equal(t, "the-replacement", st.InstanceId)
+			assert.True(t, serverIsVersion(st, want))
+		})
+	}
+}
+
+// The other direction: a different process that answers on the *release*
+// version is not a describe build that happens to be past it.
+func TestWaitForNewServer_RefusesTheTagAGitDescribeBuildIsPast(t *testing.T) {
+	_, port := startFakeOps(t, status("stray-process", "v0.3.0"))
+
+	_, err := waitForNewServer(port, "the-old-process", "v0.3.0-57-gabc1234", 600*time.Millisecond)
+	var wrong *wrongVersionError
+	require.ErrorAs(t, err, &wrong)
+	assert.Equal(t, "v0.3.0", wrong.Got)
+}
+
+// ---------------------------------------------------------------------------
+// Slow ops calls (turtlemonvh/blanket#227)
+// ---------------------------------------------------------------------------
+
+// POST /ops/restart/drain writes nothing until the drained workers have
+// exited, which can be hours. Through the shared client the call died at
+// httpx.ResponseHeaderTimeout (5s) whatever deadline it was given, and the
+// upgrade failed with the binary already swapped. The long-call client must
+// wait out a server slower than that header timeout; the ordinary one is
+// shown failing against the same server, so the test proves the difference
+// rather than passing on a fast fixture.
+func TestOpsCallLong_OutlastsTheResponseHeaderTimeout(t *testing.T) {
+	slow := httpx.ResponseHeaderTimeout + 500*time.Millisecond
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ops/restart/drain", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(slow)
+		_, _ = w.Write([]byte(`{"drained":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	port := portOf(t, srv.URL)
+
+	t.Run("long", func(t *testing.T) {
+		t.Parallel()
+		b, err := opsCallLong(port, http.MethodPost, "/ops/restart/drain", nil, slow+10*time.Second)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"drained":true}`, string(b))
+	})
+	t.Run("ordinary", func(t *testing.T) {
+		t.Parallel()
+		_, err := opsCallTimeout(port, http.MethodPost, "/ops/restart/drain", nil, slow+10*time.Second)
+		require.Error(t, err, "the shared client's header timeout is shorter than this server")
+	})
 }

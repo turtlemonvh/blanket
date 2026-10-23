@@ -249,7 +249,20 @@ func (c *WorkerConf) Run() error {
 		setDaemonAttrs(cmd)
 
 		// FIXME: Redirect the first couple seconds of stdout here to check that process started ok
-		cmd.Start()
+		if err := cmd.Start(); err != nil {
+			log.WithFields(log.Fields{
+				"err":  err.Error(),
+				"path": path,
+			}).Error("Problem starting daemonized worker")
+			return err
+		}
+		// Reap the worker when it exits. The server is the parent of every
+		// worker it launches, and without a Wait each one that exits stays
+		// a zombie of the server for the server's whole lifetime
+		// (turtlemonvh/blanket#227). In the `blanket worker -d` CLI the
+		// parent exits straight away and init reaps instead, so this
+		// goroutine simply never finishes there.
+		go func() { _ = cmd.Wait() }()
 
 		log.WithFields(log.Fields{
 			"tags":          c.Tags,

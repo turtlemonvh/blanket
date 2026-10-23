@@ -187,6 +187,36 @@ var errServerDown = errors.New("no blanket server is answering")
 
 // opsCall makes one request to a loopback ops endpoint.
 func opsCall(ctx context.Context, port int, method, path string, body []byte) ([]byte, error) {
+	return opsCallWith(ctx, httpx.Client(), port, method, path, body)
+}
+
+// longOpsClient is httpx's shared client without its ResponseHeaderTimeout,
+// for the ops calls that are slow *by design* and answer only when they are
+// done: POST /ops/restart/drain blocks until the drained workers exit (up to
+// restart.drainTimeout, which may be hours), and POST /ops/backup until the
+// database is copied. Through the shared client both failed after 5s with
+// "timeout awaiting response headers" whatever deadline the caller set,
+// which turned any drain that had to wait for a worker into a failed upgrade
+// (turtlemonvh/blanket#227). The caller's context deadline is still the
+// bound; only the header timer is dropped.
+var longOpsClient = func() *http.Client {
+	t, ok := httpx.Client().Transport.(*http.Transport)
+	if !ok {
+		return &http.Client{}
+	}
+	t = t.Clone()
+	t.ResponseHeaderTimeout = 0
+	return &http.Client{Transport: t}
+}()
+
+// opsCallLong is opsCallTimeout for the calls longOpsClient exists for.
+func opsCallLong(port int, method, path string, body []byte, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return opsCallWith(ctx, longOpsClient, port, method, path, body)
+}
+
+func opsCallWith(ctx context.Context, client *http.Client, port int, method, path string, body []byte) ([]byte, error) {
 	url := fmt.Sprintf("http://localhost:%d%s", port, path)
 	var rdr io.Reader
 	if body != nil {
@@ -201,7 +231,7 @@ func opsCall(ctx context.Context, port int, method, path string, body []byte) ([
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	res, err := httpx.Client().Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w on port %d: %v", errServerDown, port, err)
 	}
