@@ -1,35 +1,35 @@
 # Task Flow
 
-This page documents the workflow that tasks go through, and the state
-machines for tasks and workers.
+The state machines for tasks and workers, the endpoints that drive each
+transition, and the background loops that reconcile what a crash leaves
+behind. Request and response shapes are in [api.md](api.md).
 
 ## Task states
 
 | State | Description |
 | ------ | ------- |
-| SCHEDULED | Task was submitted with a future `notBefore`; not yet in the queue. See "Scheduling" below. |
-| RECURRING | Task is a recurring template (submitted with `cron`); never runs itself, only spawns children. See "Scheduling" below. |
-| PAUSED | A RECURRING template that's been paused (`PUT /task/:id/pause`); carries a `pausedTs`. Never fires while paused; `PUT /task/:id/resume` returns it to RECURRING. See "Scheduling" below. |
-| WAITING | Task has been posted but is not being worked on. The task is in the queue. |
-| CLAIMED | A worker has requested this task. The task is now out of the queue and state is maintained only in the database. |
-| RUNNING | The worker has executed the task preconditions (such as grabbing task type state, copying files) and the main command is now running. The worker may send additional updates during this state. |
-| ERROR | The worker has encountered an error while running the task. Any non-zero status code is interpreted as an error. |
-| SUCCESS | The worker has finished task execution. |
-| STOPPED | The worker has received a command to stop execution of this task and the command has been killed. |
-| TIMEDOUT | The task took longer than the allowed time and was killed. |
+| SCHEDULED | Submitted with a future `notBefore`; not yet in the queue. See [Scheduling](#scheduling-notbefore-and-cron). |
+| RECURRING | A recurring template (submitted with `cron`); never runs itself, only spawns children. |
+| PAUSED | A RECURRING template that was paused; carries `pausedTs` and never fires until resumed. |
+| WAITING | Posted and in the queue, not yet claimed. |
+| CLAIMED | A worker has claimed it; it is out of the queue and tracked only in the database. |
+| RUNNING | The worker has run the preconditions (task type state, template files) and the main command is running. The worker may send progress updates. |
+| SUCCESS | The command exited 0. |
+| ERROR | The command exited non-zero, or the worker hit an error running it. |
+| STOPPED | Cancelled by a user; a running command was killed. |
+| TIMEDOUT | Exceeded its timeout and was killed. |
 
-Valid states are listed in `tasks.ValidTaskStates` (`tasks/tasks.go`);
-terminal states in `ValidTerminalTaskStates`.
+Valid states are `tasks.ValidTaskStates` (`tasks/tasks.go`); terminal
+states are `ValidTerminalTaskStates`.
 
 ## Task state machine
 
-A task moves through one of two terminal paths: it is claimed and run
-to completion (`SUCCESS` / `ERROR` / `TIMEDOUT`), or it is cancelled
-(`STOPPED`) — either before a worker claims it, or after the worker
-sees the cancellation tombstone and aborts. A RECURRING template has a
-third path: it can be cancelled (`STOPPED`, record kept) or deleted
-(record removed) directly, without ever running itself, and can cycle
-through PAUSED any number of times first.
+A task takes one of two terminal paths: claimed and run to completion
+(`SUCCESS` / `ERROR` / `TIMEDOUT`), or cancelled (`STOPPED`), either
+before a worker claims it or after the worker sees the cancellation and
+kills the command. A RECURRING template has a third: cancelled (record
+kept) or deleted (record removed) without ever running, after any number
+of trips through PAUSED.
 
 ```mermaid
 stateDiagram-v2
@@ -65,12 +65,15 @@ stateDiagram-v2
     STOPPED --> [*]
 ```
 
-### Where a synchronous caller attaches (turtlemonvh/blanket#27)
+`exitCode` is set on the `RUNNING → SUCCESS/ERROR` transition, from the
+status the worker reads after `cmd.Wait()`. Transitions where the process
+was killed (`STOPPED`, `TIMEDOUT`) leave it `null`.
 
-`POST /task/?wait` changes nothing about the state machine above. The
-task is saved, queued, claimed, run, and finished by exactly the same
-transitions; the only difference is that the submitting request stays
-open instead of returning at `WAITING`.
+### How `POST /task/?wait` observes the state machine
+
+`?wait` (turtlemonvh/blanket#27) changes nothing above: the task is
+saved, queued, claimed, run and finished by the same transitions; only
+the submitting request stays open instead of returning at `WAITING`.
 
 ```
 POST /task/?wait ──> WAITING ──> CLAIMED ──> RUNNING ──> SUCCESS/ERROR/TIMEDOUT
@@ -79,239 +82,150 @@ POST /task/?wait ──> WAITING ──> CLAIMED ──> RUNNING ──> SUCCESS
                               200 + completion payload
 ```
 
-Mechanically, the handler subscribes to the server's task-event hub
-*before* enqueueing (so a task that finishes unusually fast can't slip
-through the gap), then wakes on the hub, on a ~1s fallback ticker, on the
-request context being cancelled, or on the wait deadline — re-reading the
-task record on every wake and stopping when it reads a terminal state.
-The hub carries no payload and is a global broadcast, so the record is
-always the source of truth; the notification is only a hint that
-something changed.
+The handler subscribes to the server's task-event hub *before* enqueueing
+(so a task that finishes unusually fast cannot slip through), then wakes
+on the hub, a ~1s fallback ticker, request cancellation, or the deadline,
+re-reading the record each time and stopping at a terminal state. The hub
+carries no payload; the record is the source of truth. So the wait
+expiring changes nothing (504, keep polling), and a disconnected client
+changes nothing either (the handler releases its subscription).
 
-Three consequences worth noting:
+`&stream`, or `GET /task/:id/log` with `Accept: application/x-ndjson`,
+attaches the same loop and reports each transition as a `state` event,
+`log` events once the task is `CLAIMED` and its files exist, and a
+terminal `result` event. See
+[api.md](api.md#stream-a-task-as-it-runs-post-taskwaitstream).
 
-- **The wait expiring changes nothing.** The task keeps running through
-  its normal transitions; the caller gets a 504 with the id and goes back
-  to polling.
-- **A disconnected client changes nothing either.** The handler returns,
-  releases its subscription, and leaves the task alone.
-- **`exitCode` is set on the `RUNNING → SUCCESS/ERROR` transition**, from
-  the process status the worker reads after `cmd.Wait()`. Transitions
-  where the process was killed (`STOPPED`, `TIMEDOUT`) leave it `null` —
-  there is no exit status of the task's own to report.
+### Scheduling: `notBefore` and `cron`
 
-Adding `&stream` (or opening `GET /task/:id/log` with
-`Accept: application/x-ndjson`) attaches the same loop to the same
-transitions and reports each one as it is observed, rather than only the
-last: one `state` event per transition, `log` events once the task
-reaches `CLAIMED` and its log files exist, and a terminal `result` event
-carrying the completion payload. It observes the state machine; it does
-not change it. See
-[api.md](api.md#streaming-submission-post-taskwaitstream) for the event
-schema.
+By default a submitted task is immediately claimable (`WAITING`). Two
+`POST /task/` fields change that (turtlemonvh/blanket#61; shapes in
+[api.md](api.md#submit-a-task-post-task)):
 
-### Scheduling: `scheduledTs` / recurring tasks (turtlemonvh/blanket#61)
+- **`notBefore`** delays a one-shot task. A future time saves it as
+  `SCHEDULED` with `scheduledTs` set and **not** in the queue. Otherwise
+  it is a normal record: visible via `GET /task/:id`, cancelable without
+  `force`.
+- **`cron`** makes it a `RECURRING` **template**, never queued or run
+  itself. It carries `cronExpr` and `nextFireTs`; when that time arrives
+  the scheduler spawns a **child task** (fresh id, own log and result
+  dir, the template's type/env/tags, `parentId` set to the template) that
+  goes through the ordinary `WAITING` lifecycle, then advances
+  `nextFireTs`.
 
-By default a submitted task is immediately eligible to be claimed
-(`WAITING`, in the queue). Two request fields on `POST /task/` change
-that — see [api.md](api.md#tasks) for the exact field shapes:
+Both are ordinary BoltDB rows, so they survive a restart: the scheduler
+loop finds whatever is due and acts on it.
 
-- **`notBefore`** delays a one-shot task. If the resolved time is in the
-  future, the task is saved to the database in state `SCHEDULED` with
-  `scheduledTs` set, but is **not** added to the queue. It's otherwise a
-  normal task record — visible via `GET /task/:id`, cancelable via `PUT
-  /task/:id/cancel` (no `force` needed, same as `WAITING`).
-- **`cron`** turns the submitted task into a `RECURRING` **template**. A
-  template is never itself queued or run. Instead it carries `cronExpr`
-  and `nextFireTs`; when `nextFireTs` is reached the scheduler spawns a
-  **child task** — a fresh id, its own log/result directory, the
-  template's type/env/tags, and `parentId` set to the template's id — and
-  that child goes through the ordinary `WAITING` → ... lifecycle above.
-  The template then advances `nextFireTs` to the next cron occurrence and
-  waits again.
+### Pause, resume, cancel, or reschedule a series
 
-Both `SCHEDULED` tasks and `RECURRING` templates are ordinary rows in the
-task database (BoltDB), so they survive a server restart with no special
-handling: on restart the scheduler loop simply finds whatever is already
-due and acts on it.
+- **Pause** (`PUT /task/:id/pause`, `RECURRING` only) moves the template
+  to `PAUSED` and records `pausedTs`. The fire step only looks at
+  `RECURRING` templates, so nothing more is needed.
+- **Resume** (`PUT /task/:id/resume`, `PAUSED` only) returns it to
+  `RECURRING`, clears `pausedTs`, and recomputes `nextFireTs` from now,
+  so a long pause does not fire a backlog of missed occurrences.
+- **Cancel** (`PUT /task/:id/cancel`, on `RECURRING`/`PAUSED` as well as
+  `WAITING`/`SCHEDULED`) moves it to `STOPPED` and keeps the record, so it
+  still appears in the series' history. It never fires again.
+- **Delete** (`DELETE /task/:id`) removes the record outright. Either way
+  of stopping a template leaves children it already spawned running.
+- **Change schedule** (`PUT /task/:id/schedule`): `{"cron": "..."}` on a
+  `RECURRING` or `PAUSED` template (`nextFireTs` is recomputed from now
+  unless paused, in which case on resume), or `{"notBefore": "..."}` on a
+  `SCHEDULED` task (same formats as submit; must still be in the future).
+  Any other body/state combination is 400; an invalid value is 400 with
+  the parser's message; a missing id is 404.
 
-#### Series lifecycle: pause, resume, cancel, change schedule
+### Friendly schedule text: `scheduleDescription`
 
-A `RECURRING` template — and, for a couple of these, a `SCHEDULED`
-one-shot task — can be managed after submission:
+Every task response carries a computed `scheduleDescription`, derived
+from `state`/`cronExpr`/`scheduledTs` and never stored
+(`tasks.ScheduleDescriptionFor`, `tasks/schedule.go`):
 
-```
-PUT /task/:id/pause              # RECURRING -> PAUSED; sets pausedTs
-PUT /task/:id/resume             # PAUSED -> RECURRING; clears pausedTs,
-                                  # recomputes nextFireTs from now
-PUT /task/:id/cancel             # WAITING/SCHEDULED/RECURRING/PAUSED -> STOPPED
-                                  # (RUNNING needs ?force=true, as always)
-DELETE /task/:id                 # removes the record outright
-PUT /task/:id/schedule           # {"cron": "..."} on a RECURRING/PAUSED
-                                  # template, or {"notBefore": "..."} on a
-                                  # SCHEDULED one-shot task
-```
-
-- **Pause** (`PUT /task/:id/pause`, valid only on `RECURRING`) moves the
-  template to `PAUSED` and records `pausedTs`. A `PAUSED` template is
-  never fired — the scheduler loop's fire step only ever looks at
-  templates in state `RECURRING` in the first place (see below), so
-  nothing extra is needed to make pausing take effect.
-- **Resume** (`PUT /task/:id/resume`, valid only on `PAUSED`) moves it
-  back to `RECURRING`, clears `pausedTs`, and recomputes `nextFireTs`
-  from the current time — so a template paused for a long stretch
-  doesn't immediately fire a backlog of "missed" occurrences on resume.
-- **Cancel** (`PUT /task/:id/cancel`, now valid on `RECURRING` and
-  `PAUSED` too, in addition to the original `WAITING`/`SCHEDULED`)
-  transitions the template to `STOPPED` — the record is kept (so it
-  still shows up in a series' history/detail view) but it will never
-  fire again, for the same reason pausing works: only `RECURRING`
-  templates are ever fired.
-- **Delete** (`DELETE /task/:id`) still works exactly as before: it
-  removes the record outright rather than leaving a `STOPPED` tombstone.
-  Either way of stopping a template — cancel or delete — leaves any
-  child it already spawned running to its own completion, unaffected;
-  see "Past runs" below for listing those children.
-- **Change schedule** (`PUT /task/:id/schedule`) edits the schedule of a
-  live series without resubmitting it: a JSON body of `{"cron": "..."}`
-  is valid on a `RECURRING` or `PAUSED` template (same cron format as
-  submit; `nextFireTs` is recomputed from now if the template isn't
-  paused — a paused template's `nextFireTs` is recomputed on resume
-  instead), or `{"notBefore": "..."}` on a `SCHEDULED` one-shot task
-  (same accepted formats as submit — duration/RFC3339/unix-seconds — and
-  the resolved time must still be in the future). Any other combination
-  of body and current state returns 400; an invalid cron/notBefore value
-  returns 400 with the parser's message. A missing task id returns 404
-  via the usual `ItemNotFoundError` convention.
-
-#### Friendly schedule text
-
-Every task response (`GET /task/:id`, `GET /task/`, and `POST /task/`'s
-response) includes a computed `scheduleDescription` field, derived from
-`state`/`cronExpr`/`scheduledTs` — nothing extra is stored for it:
-
-- `SCHEDULED`: `"Once, at <scheduledTs formatted as RFC3339, local time>"`.
-- `RECURRING` / `PAUSED` / a cancelled (`STOPPED`) template: an English
-  description of the cron expression (e.g. `"Every 5 minutes"`), via
-  [`github.com/lnquy/cron`](https://github.com/lnquy/cron) — annotated
-  `" (paused)"` / `" (stopped)"` for those two states so the text is
-  self-explanatory on its own (e.g. in `blanket ps` or an MCP tool
-  result) without the state column alongside it.
-  See `tasks.ScheduleDescriptionFor` (`tasks/schedule.go`).
-- Anything else (including a `STOPPED` task that was never
-  scheduled/recurring): `""`.
+- `SCHEDULED`: `"Once, at <scheduledTs as RFC3339, local time>"`.
+- `RECURRING` / `PAUSED` / a cancelled template: an English rendering of
+  the cron expression via
+  [`github.com/lnquy/cron`](https://github.com/lnquy/cron), e.g.
+  `"Every 5 minutes"`, suffixed `" (paused)"` / `" (stopped)"` so the text
+  stands alone in `blanket ps` or an MCP result.
+- Anything else, including a `STOPPED` task that was never scheduled:
+  `""`.
 
 `GET /schedule/describe?cron=<expr>` returns the same description plus
-the next three upcoming fire times, for a create form's live preview —
-see [api.md](api.md#tasks) for the response shape.
+the next three fire times
+([api.md](api.md#describe-a-schedule-get-scheduledescribe)).
 
-#### Past runs
+### Past runs of a series: `?parentId=`
 
-`GET /task/?parentId=<template-id>` lists a series' spawned child
-runs — every ordinary task whose `parentId` matches the given template,
-regardless of the template's own current state (`RECURRING`, `PAUSED`,
-or `STOPPED`). Combine with the usual `states`/`limit`/etc. filters on
-the same endpoint (e.g. `?parentId=<id>&states=ERROR`) to narrow further.
+`GET /task/?parentId=<template-id>` lists a series' child runs regardless
+of the template's current state, combinable with the other list filters
+(`?parentId=<id>&states=ERROR`). The series detail page's "Past runs"
+table is built on it; the inverse link is the series card on a child's
+detail page ([usage.md](usage.md#web-ui)).
 
-This is what the series detail page's "Past runs" table is built on, and
-the inverse link (a run back to the series that spawned it) is the series
-card on a task's detail page — see [usage.md](usage.md#web-ui).
+### Scheduler loop
 
-#### Scheduler loop
+One background goroutine, started from `ServerConfig.Serve()` via
+`startBackgroundLoops` (`server/scheduler.go`), ticks every
+`scheduler.interval` (default `2s`) and:
 
-A single background goroutine, started from `ServerConfig.Serve()` via
-`startBackgroundLoops` (`server/scheduler.go`), ticks on a configurable
-interval (`scheduler.interval` config key, default `2s`) and each tick:
+1. **Promotes due `SCHEDULED` tasks** to `WAITING` and adds them to the
+   queue. Safe to repeat: the DB write is an overwrite and the queue add
+   upserts by id, so an overlapping tick or a mid-promotion restart cannot
+   double-queue a task.
+2. **Fires due `RECURRING` templates** (never `PAUSED` or `STOPPED`):
+   spawns the child, then advances `nextFireTs`. A crash between the two
+   fires an equivalent child again on restart — at-least-once, not
+   exactly-once. Cron-driven task types should tolerate an occasional
+   duplicate, as a `cron(8)` script should.
 
-1. **Promotes due `SCHEDULED` tasks**: finds every `SCHEDULED` task whose
-   `scheduledTs` has passed, flips it to `WAITING`, and adds it to the
-   queue. Safe to run more than once for the same task — the DB write is
-   a plain overwrite and the queue add upserts by task id — so an
-   overlapping tick or a restart mid-promotion can't double-queue a task.
-2. **Fires due `RECURRING` templates**: finds every template in state
-   `RECURRING` (not `PAUSED`, not `STOPPED`) whose `nextFireTs` has
-   passed, spawns a child task for it, and only then advances
-   `nextFireTs`. If the server crashes between spawning the child and
-   advancing `nextFireTs`, the template is found due again on restart
-   and fires an equivalent child a second time — an at-least-once
-   guarantee, not exactly-once. Task types driven by cron should be
-   written to tolerate an occasional duplicate run, the same way a
-   `cron(8)`-driven script generally should.
+`startBackgroundLoops` takes one more line per periodic loop;
+[the reaper](#the-reaper) is the second one.
 
-`startBackgroundLoops` is written so a second periodic loop can be added
-alongside the scheduler with one more line — see the FIXME it replaced in
-`server/server.go`. [The reaper](#the-reaper) (stalled workers/tasks,
-unclaimed-queue cleanup) is the second one, and is started there too.
+### Scan limit: `scheduler.maxScheduled`
 
-#### Scan limit: `scheduler.maxScheduled`
+Both scheduler queries, and the count check below, are bounded by
+`scheduler.maxScheduled` (default `10000`,
+`ServerConfig.SchedulerMaxScheduled`). There is no pagination beyond it:
+each tick scans at most that many rows per query, which fits batch
+scheduling rather than a high-volume cron system.
 
-Both scheduler-loop queries above (and the count check below) are bounded
-by a single config key, `scheduler.maxScheduled` (default `10000`) —
-`ServerConfig.SchedulerMaxScheduled`, wired through the same
-config/viper path as `scheduler.interval`. There's no pagination beyond
-this limit: each scheduler tick scans at most that many rows per query,
-fine at the scale this feature targets (batch task scheduling, not a
-high-volume cron system), but a deployment leaning on scheduling far more
-heavily than that would need these loops to page through results
-instead.
+The same number is a hard cap: `POST /task/` and the MCP
+`blanket_submit_task` tool return **429** when a future-`notBefore` or
+`cron` submission would bring the live `SCHEDULED` + `RECURRING` +
+`PAUSED` count to the limit. The count uses the same bounded `Limit`
+(`ServerConfig.scheduledLiveCount`), so it never scans more rows than
+that. An immediately-`WAITING` submission never counts.
 
-The same number doubles as a hard cap: `POST /task/` (and the MCP
-`blanket_submit_task` tool) returns **HTTP 429** with a JSON error body
-when accepting a `notBefore`-in-the-future or `cron` submission would
-bring the count of live `SCHEDULED` + `RECURRING` + `PAUSED` tasks to or
-past the limit. That count is itself a bounded query rather than an
-unbounded scan: it uses the same `scheduler.maxScheduled`-sized
-`Limit` the scheduler's own queries use, so it never examines more than
-`scheduler.maxScheduled` rows regardless of how many exist beyond that
-(`ServerConfig.scheduledLiveCount`, `server/scheduler.go`). An
-immediately-`WAITING` submission (no schedule, or a past `notBefore`)
-never counts against this limit.
+### Cancel a running task: `?force=true`
 
-### Stopping a RUNNING task
+`PUT /task/:id/cancel` on a `WAITING` task is a pure database transition.
+On a `RUNNING` task the process is a child of some *worker*, which the
+server cannot signal directly, so cancelling requires an explicit
+`?force=true`; without it the endpoint is 400 and the task is untouched.
 
-`PUT /task/:id/cancel` on a WAITING task is a pure database transition — the
-task was never claimed, so there's nothing else to signal. On a RUNNING task
-it's more consequential: the task's OS process is a subprocess of some
-*worker*, not the server, so the server can't kill it directly. Cancelling a
-RUNNING task therefore requires an explicit `?force=true`; without it the
-endpoint returns 400 and leaves the task alone.
+With `force=true` the server flips the record to `STOPPED` and the worker
+does the rest: `ProcessOne` (`worker/worker.go`) runs a monitor goroutine
+that polls the task's state every `CheckInterval` and, on seeing
+`STOPPED`, kills the subprocess (`cmd.Process.Kill()`). No server-to-worker
+RPC is involved, so the process may run for up to one `CheckInterval`
+after the cancel call.
 
-With `force=true`, the server does its half — flip the task to `STOPPED` in
-the database — and relies on the worker to do the rest. Each worker's
-`ProcessOne` (`worker/worker.go`) runs a monitor goroutine alongside the
-subprocess that polls the task's state every `CheckInterval` (same interval
-the worker already uses for its claim loop); when it observes `STOPPED` it
-kills the subprocess (`cmd.Process.Kill()`) and returns. So "stopping" a
-RUNNING task is: server sets the tombstone, worker's next poll notices it and
-kills the process — no direct server-to-worker RPC involved. Worst case, the
-subprocess keeps running for up to one `CheckInterval` after the cancel call
-before it's killed.
+### Idempotent `run`/`finish` and the `runId` fencing token
 
-### Idempotent transitions and the `runId` fencing token
-
-`PUT /task/:id/run` and `PUT /task/:id/finish` are retried by the worker
-(turtlemonvh/blanket#23 phase 1), so both are idempotent. Each execution
-attempt carries a **fencing token**, `runId`, that the worker generates
-immediately before starting the child process and repeats on every
-transition for that run:
-
-- A repeat carrying the **same** token is a 200 no-op — the worker asked
-  for something already done and simply never heard the answer.
-- A **different** token is a 409: two runners believe they own this task.
-  The worker never retries a 409.
-- An **empty** token is legacy-permissive, so workers built before the
-  token keep working until the schema bump in phase 4 of #23.
-
-The first terminal state a task reaches is the one that sticks. A user's
-`STOPPED` therefore beats the `ERROR` the worker reports a moment later
-when the killed child exits — and the worker is told 200, not an error, so
-it stops retrying and cleans up. The full table is in
-[api.md](api.md#tasks).
+The worker retries `PUT /task/:id/run` and `PUT /task/:id/finish`
+(turtlemonvh/blanket#23 phase 1), so both are idempotent on `runId`, a
+token generated just before the child starts: a repeat with the same
+token is a 200 no-op, a different token is a 409 the worker never
+retries, and an empty token is legacy-permissive until the phase 4 schema
+bump. The first terminal state a task reaches sticks, so a user's
+`STOPPED` beats the `ERROR` the worker reports when the killed child
+exits, and the worker is told 200 so it stops retrying. The response
+table is in [api.md](api.md#runid-the-fencing-token-for-one-run).
 
 ### Task output files
 
-A task's result dir holds three output files while it runs — two the
-child process writes itself, and one the worker writes about them:
+A task's result dir holds three output files:
 
 ```
 <resultDir>/blanket.stdout.log        # raw bytes the task wrote to stdout
@@ -319,19 +233,14 @@ child process writes itself, and one the worker writes about them:
 <resultDir>/blanket.combined.ndjson   # how the two interleaved
 ```
 
-The first two are exactly what they have always been — the task's own
-bytes, unmodified — and every API surface that reports a task's output
-reads them.
+The first two are the task's own bytes, unmodified, and every API surface
+that reports output reads them. The third answers the one question they
+cannot: **what order did the task produce this in?** Two independent
+files carry no shared ordering, so a reader can only group them (all of
+stdout, then all of stderr) — which is why the web UI's combined view
+used to replay history grouped while showing live lines interleaved.
 
-The third exists because they can't answer one question:
-**what order did the task produce this in?** Two files written
-independently carry no shared ordering, so a reader merging them can only
-group — all of stdout, then all of stderr. That is why the web UI's
-combined log view used to replay history grouped while showing live lines
-interleaved: the same output looked different depending on whether you
-were watching when it happened.
-
-So the worker **tails** the two files as they are written and appends one
+The worker **tails** the two files as they are written and appends one
 JSON object per completed line, in the order it saw them land:
 
 ```
@@ -340,107 +249,83 @@ JSON object per completed line, in the order it saw them land:
 {"ts":1756900001410,"stream":"stdout","seq":2,"line":"done"}
 ```
 
-`ts` is unix **milliseconds** (the event envelope's is seconds; ordering
-is the point here), `seq` counts within one stream from 1, and the field
-names are `server.LogEvent`'s so the file and the structured `log` event
-can't drift apart. Partial lines are buffered until their newline
-arrives, and whatever is left unterminated when the task ends is flushed
-as a final record.
+`ts` is unix **milliseconds** (the event envelope's is seconds), `seq`
+counts within one stream from 1, and the field names are
+`server.LogEvent`'s so the file and the structured `log` event cannot
+drift. Partial lines are buffered until their newline; whatever is
+unterminated when the task ends is flushed as a final record.
 
-#### Why tail the files instead of copying the streams
-
-The obvious implementation is to put the worker between the child and the
-files — `cmd.Stdout = io.MultiWriter(logFile, recorder)` — and it was the
-first one tried. It is wrong, because it changes what the child's stdout
-*is*: an `*os.File` that os/exec hands straight to the child becomes a
-pipe the worker owns.
-
-A pipe has an owner that goes away. A task that starts a process and
-exits (a daemon launcher, `nohup … &`, anything under `setsid`) leaves
-that process holding the pipe's write end, and `cmd.Wait()` then blocks
-until it closes — which may be never. Bounding that with `cmd.WaitDelay`
-trades the hang for something worse: a couple of seconds after the task
-exits, os/exec closes the pipe under the orphan, its output is gone, and
-the next write can kill it with `SIGPIPE`. Writing into a file has no
-owner: the orphan goes on appending to `blanket.stdout.log` for as long
-as it lives, which is what blanket did before any of this existed and
-what it still does. **Missing logs are worse than missing ordering** —
-especially with worker restarts about to become routine
-(turtlemonvh/blanket#23).
-
-So the child gets the two files, exactly as before, and the worker opens
-a tailer per stream (`lib/follow`; fsnotify on unix, polling on Windows)
-right after the process starts.
-
-#### The grace window, and the one thing it costs
-
-When `cmd.Wait()` returns, the worker keeps tailing until both files have
-been quiet for **400ms**, bounded at **3s** (both `timeMultiplier`-scaled;
-they mirror `logDrainGrace`/`logDrainMax` in `server/serve_stream.go`).
-The last lines of a task routinely land a moment after the process is
-gone. It then Sync()s the files, stops the tailers, reads whatever bytes
-they had not reached yet straight off the end of each file, and closes the
-record — so nothing written up to that point is missing from it, in order.
-
-That happens **before** the worker writes the `exited` outcome journal
-entry or calls `PUT /task/:id/finish`. A task the UI shows as FINISHED
-therefore always has a complete combined log; the `both` pane can never
-show a truncated history that quietly fills in afterwards.
-
-The limitation, and it is the only one: **a process that outlives the
-grace window is not in the combined record.** Its output keeps landing in
-`blanket.stdout.log` / `blanket.stderr.log`, so the per-stream log views,
-`GET /task/:id/log`, the completion payload and
-`GET /results/:taskId/...` all show it in full — but the `both` view's
-ordering record stopped at the moment the task finished.
-
-"The order the worker saw them land" is the honest description of that
-ordering, and the limit of what it can be: it is the same basis the live
-log view shows lines on, not a kernel-level total order. A task that
-writes to both streams at once and exits leaves the two tailers to be
-scheduled in whatever order the runtime picks. What the file guarantees is
-that a task's replayed history and its live output are ordered the same
-way, which is the thing that was actually wrong.
+"The order the worker saw them land" is the limit of what this can be:
+the same basis as the live log view, not a kernel-level total order. A
+task that writes to both streams at once and exits leaves the two tailers
+to be scheduled in whatever order the runtime picks. What the file
+guarantees is that replayed history and live output are ordered the same
+way.
 
 `workers.combinedLog` (default `true`) turns the recording off. Nothing
-else changes when it does — the child's stdout and stderr are the two log
-files either way, so a task runs, finishes and logs identically; there is
-just no third file, and no tailer per running task. Readers fall back
-automatically, so a task run by a knob-off worker and a task run before
-the record existed look the same to the UI.
+else changes: the child's streams are the two log files either way, there
+is just no third file and no tailer per task, and readers fall back to
+the grouped view, as they do for tasks run before the record existed.
+
+#### Why the worker tails the files instead of piping the streams
+
+Putting the worker between the child and the files
+(`cmd.Stdout = io.MultiWriter(logFile, recorder)`) was the first
+implementation, and it changes what the child's stdout *is*: an
+`*os.File` handed straight to the child becomes a pipe the worker owns. A
+task that starts a process and exits (a daemon launcher, `nohup … &`,
+anything under `setsid`) leaves that process holding the write end, so
+`cmd.Wait()` blocks until it closes — maybe never. `cmd.WaitDelay` trades
+the hang for worse: a couple of seconds after the task exits, os/exec
+closes the pipe under the orphan, its output is gone, and the next write
+can kill it with `SIGPIPE`. A file has no owner: the orphan keeps
+appending to `blanket.stdout.log`, as it always has. **Missing logs are
+worse than missing ordering.** So the child gets the files and the
+worker opens a tailer per stream (`lib/follow`; fsnotify on unix, polling
+on Windows) right after the process starts.
+
+#### The grace window after exit
+
+When `cmd.Wait()` returns, the worker keeps tailing until both files have
+been quiet for **400ms**, bounded at **3s** (`timeMultiplier`-scaled;
+mirroring `logDrainGrace`/`logDrainMax` in `server/serve_stream.go`),
+since the last lines routinely land after the process is gone. It then
+`Sync()`s the files, stops the tailers, reads any bytes they had not
+reached, and closes the record — all **before** writing the `exited`
+journal entry or calling `PUT /task/:id/finish`, so a task the UI shows
+as finished always has a complete combined log.
+
+The one limitation: **a process that outlives the grace window is not in
+the combined record.** Its output still lands in the per-stream files, so
+`GET /task/:id/log`, the completion payload and `GET /results/:taskId/...`
+show it in full, but the `both` view's ordering record stopped when the
+task finished.
 
 ### Outcome journal
 
-While a task is running, its worker keeps a small journal next to the
-task's logs:
+While a task runs, its worker keeps a small journal next to the logs:
 
 ```
 <resultDir>/blanket.outcome.json
 ```
 
-It exists so the real outcome of a run survives the worker process. If a
-worker is killed — an upgrade, an OOM, a power cut — between the child
-exiting and the server acknowledging the finish, the task record still says
-`RUNNING` and the outcome would otherwise be gone. Guessing at it is not
-acceptable: misclassifying a finished three-hour render as `ERROR` is
-exactly the failure [design.md](design.md) says not to have.
+It lets the real outcome survive the worker process. If a worker is
+killed (an upgrade, an OOM, a power cut) between the child exiting and
+the server acknowledging the finish, the record still says `RUNNING`;
+guessing is not acceptable, since misclassifying a finished three-hour
+render as `ERROR` is exactly the failure [design.md](design.md) rules out.
 
-The worker **never reads the journal back**. Its consumer is
-[the reaper](#the-reaper), which makes the two fully decoupled: nothing on
-the running path depends on the journal being readable, so every write to
-it fails open (logged at warn, task unaffected).
-
-Writes are atomic — temp file in the same directory, `fsync`, `rename`,
-then `fsync` of the directory — so a reader after a crash sees either the
-previous contents or the new ones, never a mix.
-
-Lifecycle:
+The worker **never reads the journal back**; its consumer is
+[the reaper](#the-reaper). Nothing on the running path depends on it, so
+every write fails open (logged at warn, task unaffected). Writes are
+atomic: temp file in the same directory, `fsync`, `rename`, `fsync` of
+the directory.
 
 | When | `state` | Meaning if found later |
 | --- | --- | --- |
-| `cmd.Start()` succeeded | `running` | The worker died with the task in flight. Check whether `pid` is still alive before doing anything. |
-| child exited | `exited` | The outcome is known (`exitCode`, `exitedTs`) and was never reported. This is the case worth recovering. |
-| server acknowledged the finish | `reported` | The worker died between the ack and the unlink. Nothing to recover; the file can just be removed. |
+| `cmd.Start()` succeeded | `running` | The worker died with the task in flight. Check whether `pid` is still alive first. |
+| child exited | `exited` | The outcome (`exitCode`, `exitedTs`) is known and was never reported. The case worth recovering. |
+| server acknowledged the finish | `reported` | The worker died between the ack and the unlink. Nothing to recover. |
 | — | *(file deleted)* | Normal completion. |
 
 Schema (`worker.OutcomeJournal`, `worker/journal.go`):
@@ -460,49 +345,34 @@ Schema (`worker.OutcomeJournal`, `worker/journal.go`):
 }
 ```
 
-- `version` — bumped only on an incompatible schema change.
-- `runId` — the same fencing token sent on the run/finish transitions, so a
-  reader can tell whether the journal describes the run the task record is
-  currently about or a stale earlier attempt.
-- `pid` / `pidStartTs` — the **child** process, not the worker.
-  `pidStartTs` is its start time in unix seconds, read from
-  [`lib/proclive`](#pid-liveness-and-the-same-host-assumption) right after
-  `cmd.Start()`. It guards against pid reuse: a pid that exists but
-  started at a different moment belongs to a different process. It is `0`
-  ("unknown") in journals written before phase 3 of #23 and on any
-  platform that cannot report one, and a reader must treat a zero value
-  as *inconclusive* — neither alive nor dead — rather than assuming the
-  pid is this process.
-- `exitCode` — `0` for success, the process's code for a non-zero exit,
-  `-1` when it was killed by a signal (a timeout kill or a user cancel).
-  It is the *same* status read the worker reports on
-  `PUT /task/:id/finish?exitCode=` (turtlemonvh/blanket#27), taken once
-  after `cmd.Wait()`, so the journal and the task record can never
-  disagree. Only the encoding of "killed by a signal" differs: the
-  journal writes `-1`, the task record writes `null`, because a task's
-  `exitCode` field has to keep "unknown" distinguishable from a genuine
-  exit 0.
+- `version` is bumped only on an incompatible change.
+- `runId` is the fencing token of the run, so a reader can tell whether
+  the journal describes the run the record is about or a stale attempt.
+- `pid` / `pidStartTs` are the **child**, not the worker. `pidStartTs` is
+  read from [`lib/proclive`](#pid-liveness-and-the-same-host-assumption)
+  right after `cmd.Start()` and guards against pid reuse. It is `0`
+  ("unknown") in journals from before phase 3 of #23 and on platforms
+  that cannot report one; a reader must treat zero as *inconclusive*.
+- `exitCode` is `0`, the process's non-zero code, or `-1` for a signal
+  kill (timeout or cancel). It is the same status the worker reports on
+  `PUT /task/:id/finish?exitCode=`, read once after `cmd.Wait()`; only
+  the encoding of "killed by a signal" differs (`-1` here, `null` on the
+  task record, which must keep "unknown" distinct from exit 0).
 
 ## Worker state machine
 
-Workers have a simpler model: a single `Stopped` boolean on the
-`WorkerConf` (`worker/worker.go`). A running worker polls the queue
-on its `CheckInterval`; setting `Stopped = true` (via
-`PUT /worker/:id/stop` or the worker process exiting) takes it out
-of the claim loop. Workers can only be deleted once stopped.
+A worker is a single server-owned `Stopped` boolean on its `WorkerConf`
+(`worker/worker.go`). A running worker polls the queue on its
+`CheckInterval`; `Stopped = true` (via `PUT /worker/:id/stop` or the
+process exiting) takes it out of the claim loop. Workers can only be
+deleted once stopped.
 
-`Stopped` is **server-owned**. `PUT /worker/:id` merges at the field level
-rather than overwriting the record (turtlemonvh/blanket#23 phase 1): the
-worker owns `pid`, `pidStartTs`, `logfile`, `startedTs`, `tags` and
-`checkInterval`, and the server owns `stopped`, `stoppedReason`,
-`lastHeardTs`, `lost`, and the respawn bookkeeping (`respawnIntent`,
-`respawnAttempts`, `lastRespawnTs`). Without that split, a worker re-registering —
-which it always does with `stopped: false` — silently undid a stop that
-had just landed, and carried on claiming tasks. It also means restarting a
-worker has to clear the flag server-side, which is what
-`PUT /worker/:id/restart` now does before relaunching the process.
-(`lost` is the one server-owned field a re-registration *clears*: a worker
-that checks back in is itself evidence of life.)
+`PUT /worker/:id` merges at the field level (turtlemonvh/blanket#23 phase
+1) with the ownership split listed in
+[api.md](api.md#launch-update-restart-delete-a-worker). Without it a
+worker re-registering with `stopped: false` silently undid a stop that
+had just landed, and it is why `PUT /worker/:id/restart` must clear the
+flag server-side before relaunching.
 
 ```mermaid
 stateDiagram-v2
@@ -519,40 +389,38 @@ stateDiagram-v2
     STOPPED --> [*]: DELETE /worker/:id
 ```
 
-(The claim loop itself — what `RUNNING` is doing between transitions — is
-its own diagram in the next section.)
+The claim loop — what `RUNNING` does between transitions — is drawn in
+[Worker claim loop](#worker-claim-loop).
 
-`lost` is a **flag, not a state**: a worker whose heartbeat has gone stale
-carries `lost: true` while `stopped` stays whatever it was. It shows in
-the UI as a badge and changes nothing else — see [The reaper](#the-reaper)
-below for why a lost-but-live worker is deliberately left running.
-`respawnIntent` is a flag in the same sense — `STOPPED_PENDING_RESPAWN`
-above is `stopped: true, respawnIntent: true`, drawn as a state only
-because it behaves like one.
+`lost` is a **flag, not a state**: a worker whose heartbeat has gone
+stale carries `lost: true` while `stopped` stays whatever it was. It
+shows as a UI badge and changes nothing else; see
+[the reaper](#the-reaper) for why a lost-but-live worker is left running.
+`respawnIntent` is a flag in the same sense: `STOPPED_PENDING_RESPAWN`
+above is `stopped: true, respawnIntent: true`, drawn as a state because
+it behaves like one.
 
 ### Respawn intent and stop reasons
 
 A restart's drain (`POST /ops/restart/drain`, see
 [upgrade.md](upgrade.md#the-restart-state-machine)) stops every running
-worker and records **`respawnIntent: true`** on each — in one database
-transaction with the restart's own state change, because a crash between
-the two would leave either workers nothing intends to restart, or an
-intent to restart workers that were never stopped.
+worker and records **`respawnIntent: true`** on each, in one database
+transaction with the restart's own state change, so a crash between the
+two cannot leave workers nothing intends to restart or an intent for
+workers that were never stopped.
 
-The intent is cleared **after** a successful spawn, never before. That
-makes respawn at-least-once, which is the right direction to be wrong in:
-losing a worker on an upgrade is silent and permanent, while spawning one
-twice is loud and self-correcting — and the pid-liveness check on the next
-pass catches the duplicate before it happens. Two more guards bound it: a
-cap of 3 attempts (counted *before* each fork, so it converges even if the
-fork is what kills the server) and a 30s minimum interval between
-attempts, so a server crash-looping under a supervisor cannot fork the
-fleet on every boot.
+The intent is cleared **after** a successful spawn, never before: respawn
+is at-least-once, because losing a worker on an upgrade is silent and
+permanent while spawning one twice is loud and self-correcting (and the
+pid-liveness check catches the duplicate). Two guards bound it: a cap of
+3 attempts, counted *before* each fork so it converges even if the fork
+is what kills the server, and a 30s minimum interval, so a server
+crash-looping under a supervisor cannot fork the fleet on every boot.
 
-Which brings in **`stoppedReason`**. A drained worker stops by calling
-`PUT /worker/:id/stop` — the same call an operator makes. Without something
-on the wire to tell them apart, a worker exiting cleanly would cancel the
-very respawn the drain had just scheduled:
+A drained worker stops by calling `PUT /worker/:id/stop`, the same call
+an operator makes, so **`stoppedReason`** tells them apart; without it a
+worker exiting cleanly would cancel the respawn the drain had just
+scheduled:
 
 | `reason` on the stop | Sent by | Effect on `respawnIntent` |
 | -------------------- | ------- | ------------------------- |
@@ -561,136 +429,114 @@ very respawn the drain had just scheduled:
 | `reaper: …` | the reaper | Untouched (the reaper is suppressed during a restart anyway). |
 | *(absent)* | an operator, the UI, the MCP tool | **Cleared.** A deliberate stop mid-restart outranks the restart's plan. |
 
-### Heartbeat
+### Heartbeat and `lastHeardTs`
 
-Each claim-loop iteration, a worker sends `PUT /worker/:id/heartbeat`.
-The **server** stamps `lastHeardTs` from its own clock inside the
-transaction; there is no way for a worker to supply one. Every reaper
-decision is arithmetic on that number, and a worker-supplied timestamp
-would turn clock skew into either a reaper that never fires or one that
-fires on healthy workers.
+Each claim-loop iteration sends `PUT /worker/:id/heartbeat`. The
+**server** stamps `lastHeardTs` from its own clock inside the
+transaction; a worker-supplied timestamp would turn clock skew into a
+reaper that never fires or one that fires on healthy workers. The
+response fields are in [api.md](api.md#heartbeat-put-workeridheartbeat):
 
-The response carries three things (see [api.md](api.md#workers)):
+- `stopped` lands a drain within one check interval, which is what makes
+  draining workers during an upgrade viable.
+- `serverInstanceId` tells a worker the server restarted underneath it.
+  The worker logs that and does not *act* on it: a worker rides out a
+  server outage without being told, and a restart that wants workers gone
+  stops them explicitly through the drain.
 
-- `stopped` — so a drain lands within one check interval rather than
-  waiting on some other poll. This is what makes draining workers viable
-  during an upgrade.
-- `serverInstanceId` — identifies the server *process*. A worker that sees
-  it change knows the server restarted underneath it, and logs that. It
-  still does not *act* on it: phase 1's premise is that a worker rides out
-  a server outage without needing to be told, and phase 5 kept it that way
-  — a restart that wants workers gone stops them explicitly through the
-  drain rather than hoping each of them notices.
-- `serverStartedTs` — when that process started serving.
-
-The same instance id and start time are on `GET /config/`, so "did the
-server restart?" is answerable without sending a heartbeat.
-
-A failed heartbeat does not back the claim loop off and is not fatal:
+A failed heartbeat is not fatal and does not back the claim loop off:
 missing one costs nothing until enough are missed for the reaper to
-notice, which is exactly the signal the reaper exists to act on.
+notice, which is the signal the reaper exists to act on.
 
 ## The reaper
 
-A background loop (`server/reaper.go`, scheduled from
-`startBackgroundLoops` alongside the scheduler and cancelled at shutdown
-step (e)) reconciles the state a crash leaves behind: workers that stopped
-heartbeating, tasks whose worker died mid-run, and queue entries whose
-claim was never acked.
+A background loop (`server/reaper.go`, started from `startBackgroundLoops`
+and cancelled at shutdown) reconciles what a crash leaves behind: workers
+that stopped heartbeating, tasks whose worker died mid-run, and queue
+entries whose claim was never acked.
 
 Its governing rule is that **a false positive destroys real work**.
-Recording a finished three-hour render as `ERROR` is worse than leaving it
-`RUNNING` forever, because the first is silent and the second is visible.
-So it fails safe toward "alive" everywhere: it never acts on an
+Recording a finished three-hour render as `ERROR` is worse than leaving
+it `RUNNING` forever, because the first is silent and the second is
+visible. So it fails safe toward "alive": it never acts on an
 inconclusive liveness answer, never infers a task's outcome, and never
 deletes a worker record.
 
-### Decision table
+### Reaper decision tables: workers, tasks, queue
 
 Workers (`CleanupStalledWorkers`):
 
 | Heartbeat | Pid liveness | What happens |
 | --- | --- | --- |
 | fresh | — | nothing |
-| stale past `reaper.workerStaleAfter` | conclusively **alive** | `lost: true` for the UI. Never stopped, never deleted, its tasks untouched — killing it could orphan a running task's child. |
-| stale past `reaper.workerStaleAfter` | conclusively **dead** | `lost: true` + `stopped: true`, with a `stoppedReason`. The record is kept, so its logfile stays reachable. |
+| stale past `reaper.workerStaleAfter` | conclusively **alive** | `lost: true` for the UI. Never stopped or deleted, its tasks untouched — killing it could orphan a running task's child. |
+| stale past `reaper.workerStaleAfter` | conclusively **dead** | `lost: true` + `stopped: true`, with a `stoppedReason`. The record is kept so its logfile stays reachable. |
 | stale past `reaper.workerStaleAfter` | **inconclusive** | `lost: true` only… |
-| stale past `reaper.workerDeadAfter` | **inconclusive** | …and only then `stopped: true`. Heartbeat silence alone is much weaker evidence than a dead process, so it takes five times as long to act on. |
+| stale past `reaper.workerDeadAfter` | **inconclusive** | …and only then `stopped: true`. Heartbeat silence is much weaker evidence than a dead process, so it takes five times as long to act on. |
 | any | any, but already `stopped` | nothing |
 
-Tasks in `CLAIMED`/`RUNNING` that are stale past `reaper.taskStaleAfter`
+Tasks in `CLAIMED`/`RUNNING` stale past `reaper.taskStaleAfter`
 (`CleanupStalledTasks`). The outcome journal is read **before** anything
 is inferred:
 
 | Evidence | What happens |
 | --- | --- |
-| journal in `exited` or `reported` | The real outcome is applied through the same idempotent `PUT /task/:id/finish` path the worker uses, carrying the journal's `runId`: `SUCCESS` for exit 0, `ERROR` otherwise, with the journal's exit code (its `-1` becomes a `null` `exitCode`, as always). |
-| journal in `running`, child pid alive or inconclusive | Left alone. A task's child process can outlive its worker. |
-| journal in `running`, child pid conclusively dead | Left alone, and logged. The child died without recording an outcome, so there is no outcome to recover — anything written here would be invented. An operator can cancel it. |
-| journal describes a different `runId` | Left alone; it is a stale earlier attempt. |
-| no journal, task is `CLAIMED`, no pid recorded, and its worker is conclusively gone (dead pid, or record deleted) | The task provably never started, so it is **requeued**: back to `WAITING`, worker id and `runId` cleared, `requeueCount` incremented. |
-| …but `requeueCount` has reached `reaper.maxRequeues` | Failed to `ERROR` instead. A task that kills whichever worker claims it — an OOM, a driver that takes the box down — would otherwise be requeued forever, taking out every worker in turn. |
+| journal in `exited` or `reported` | The real outcome is applied through the same idempotent `PUT /task/:id/finish` path the worker uses, carrying the journal's `runId`: `SUCCESS` for exit 0, `ERROR` otherwise, with the journal's exit code (`-1` becomes a `null` `exitCode`). |
+| journal in `running`, child pid alive or inconclusive | Left alone. A task's child can outlive its worker. |
+| journal in `running`, child pid conclusively dead | Left alone, and logged. The child died without recording an outcome, so anything written here would be invented. An operator can cancel it. |
+| journal describes a different `runId` | Left alone; a stale earlier attempt. |
+| no journal, task `CLAIMED`, no pid recorded, worker conclusively gone (dead pid, or record deleted) | Provably never started, so **requeued**: back to `WAITING`, worker id and `runId` cleared, `requeueCount` incremented. |
+| …but `requeueCount` has reached `reaper.maxRequeues` | Failed to `ERROR` instead. A task that kills whichever worker claims it would otherwise take out every worker in turn. |
 | anything else | Left alone, and logged. |
 
 Queue entries whose claim was never acked (`CleanupUnclaimedTasks`):
 
 | The task in the database | What happens |
 | --- | --- |
-| `CLAIMED` or beyond | The claim really happened and only the ack was lost: the queue entry is dropped. Re-running could duplicate work that already had side effects. |
-| still `WAITING`/`SCHEDULED`, or no record at all | The claim never completed: the entry's worker id is cleared so somebody else can pick it up. |
+| `CLAIMED` or beyond | The claim happened and only the ack was lost: the entry is dropped. Re-running could duplicate work with side effects. |
+| still `WAITING`/`SCHEDULED`, or no record | The claim never completed: the entry's worker id is cleared so someone else can pick it up. |
 
 ### Why a restart doesn't trigger a mass reap
 
-During a restart — the entire point of #23 — every worker looks stale at
-once, through no fault of its own. Three layers protect that moment:
+During a restart every worker looks stale at once. Three layers protect
+that moment:
 
-1. **Staleness is measured from `max(lastHeardTs, baseline)`**, where the
-   baseline is when this server process started serving. Every worker gets
-   a full, fresh window after a restart, and it re-arms automatically if a
-   second restart follows.
-2. **A wall-clock versus monotonic-clock divergence between two passes
-   skips the pass** and re-arms the baseline. This is the closed-laptop-lid
-   case, which layer 1 does not cover: the server slept too, so its start
-   time is now hours in the past.
-3. **A pending restart suppresses passes entirely** (phase 5's restart
-   state machine sets the flag).
+1. **Staleness is measured from `max(lastHeardTs, baseline)`**, the
+   baseline being when this server process started serving. Every worker
+   gets a fresh window after a restart, re-armed if another follows.
+2. **A wall-clock versus monotonic-clock divergence between passes skips
+   the pass** and re-arms the baseline: the closed-laptop-lid case, where
+   the server slept too and its start time is hours in the past.
+3. **A pending restart suppresses passes entirely** (the restart state
+   machine sets the flag).
 
 ### Pid liveness and the same-host assumption
 
 **Blanket's workers are same-host only.** Every worker→server call
-hardcodes `http://localhost:{port}`, and pid liveness (`lib/proclive`) —
-the reaper's strongest signal — is meaningful only for a process on this
-machine.
+hardcodes `http://localhost:{port}`, and pid liveness (`lib/proclive`),
+the reaper's strongest signal, is only meaningful for a process on this
+machine. The two signals split along that line: the **heartbeat is
+portable** (plain HTTP, would work from another host); **pid liveness is
+same-host**, and is what turns "gone quiet" into "definitely gone".
 
-The two signals are deliberately split by that property:
-
-- The **heartbeat is portable**. It is an ordinary HTTP call and would
-  work unchanged from another host.
-- **Pid liveness is same-host**, and it is what turns "this worker has
-  gone quiet" into "this worker is definitely gone".
-
-`proclive.IsAlive` returns *both* whether a pid is alive and whether that
-answer is conclusive, and wherever it cannot answer — an unsupported
-platform, a record with no `pidStartTs`, a permissions failure — **the
-reaper falls back to heartbeat staleness alone**, against the longer
-`reaper.workerDeadAfter` threshold. That fallback is the path a remote
-worker would take today, with nothing false concluded about it.
-
-Making remote workers a supported configuration would revisit: the
-hardcoded `localhost` in the worker's call sites; whether pid liveness is
-attempted at all for an off-host worker (a pid from another machine must
-never be checked against *this* machine's process table — the reuse risk
-is total); clock skew between hosts, which the server-stamped
-`lastHeardTs` already insulates the reaper from; and
-`PUT /worker/:id/stop?force=true`, which signals a local pid and has no
-off-host equivalent. None of that is designed for today, and none of it is
+`proclive.IsAlive` returns both whether a pid is alive and whether the
+answer is conclusive. Wherever it cannot answer — an unsupported
+platform, no `pidStartTs`, a permissions failure — **the reaper falls
+back to heartbeat staleness alone**, against the longer
+`reaper.workerDeadAfter`. A remote worker would take that path today
+with nothing false concluded about it. Supporting remote workers would
+revisit the hardcoded `localhost`, whether to attempt pid liveness at all
+off-host (a foreign pid must never be checked against this machine's
+process table), cross-host clock skew (already insulated by the
+server-stamped `lastHeardTs`), and `PUT /worker/:id/stop?force=true`,
+which signals a local pid. None of that is designed for today; none is
 foreclosed.
 
-### Configuration
+### Reaper configuration: `reaper.*` keys
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `reaper.enabled` | `true` | The off switch. It exists because the failure this code guards against — destroyed task state — is also the failure it could itself cause, and debugging a suspected false positive shouldn't require a downgrade. |
+| `reaper.enabled` | `true` | The off switch. The failure this code guards against — destroyed task state — is also the one it could cause, and debugging a suspected false positive should not require a downgrade. |
 | `reaper.interval` | `30s` | How often a pass runs. |
 | `reaper.workerStaleAfter` | `2m` | When a silent worker is marked `lost`. Nothing is stopped or rewritten at this threshold. |
 | `reaper.workerDeadAfter` | `10m` | The only threshold that stops a worker on heartbeat silence alone, i.e. when pid liveness was inconclusive. |
@@ -698,37 +544,28 @@ foreclosed.
 | `reaper.maxRequeues` | `3` | The poison-task cap. |
 
 Every duration is scaled by `timeMultiplier` at use, so a compressed test
-run moves the interval and every threshold together and cannot false-reap.
+run moves the interval and every threshold together.
 
 ## Worker claim loop
 
-`WorkerConf.ProcessTasks` (`worker/worker.go`) is the loop a worker runs
-while in the `RUNNING` state above. Each iteration: refresh
-the worker's own config from the server (so a `stop` request lands
-before the next claim attempt), try to claim a task, and — if one was
-claimed — run it via `ProcessOne` before looping again. Every step is
-a plain HTTP call to the server (`tasks/task_client.go`); the worker
-process never touches BoltDB directly. An empty queue or a transient
-error is not fatal — the loop sleeps `CheckInterval` and retries. No
-sleep happens after successfully processing a task, so the worker
-drains a backlog without waiting out the interval between each one.
+`WorkerConf.ProcessTasks` (`worker/worker.go`) is what a worker runs
+while `RUNNING`. Each iteration refreshes the worker's own config from
+the server (so a `stop` lands before the next claim), sends a
+[heartbeat](#heartbeat-and-lastheardts) and acts on its `stopped` flag,
+tries to claim a task, and runs any it gets via `ProcessOne` before
+looping. Every step is an HTTP call (`tasks/task_client.go`); the worker
+never touches BoltDB. An empty queue or a transient error sleeps
+`CheckInterval` and retries; no sleep follows a processed task, so a
+backlog drains without waiting out the interval.
 
-Every sleep in the loop is jittered (turtlemonvh/blanket#23 phase 1). An
-ordinary poll waits a full `CheckInterval` plus up to a quarter of one; a
-failed iteration waits a **full-jitter** backoff instead —
-`rand(0, min(CheckInterval << n, 30s))` — which also spreads out the first
-poll after a reconnect. The failure this defends against is a server
-restart, which every worker on the machine sees at the same instant:
-without jitter they reconnect in lockstep and stay that way.
-
-A `SIGTERM` sets a local stop flag as well as asking the server to mark the
-worker stopped, so the loop exits even when the server is permanently
-unreachable — the shutdown path is bounded rather than dependent on a
-round trip.
-
-Each successful iteration also sends a [heartbeat](#heartbeat), and acts on
-the `stopped` flag in its response — which is what bounds drain latency to
-one check interval.
+Every sleep is jittered (turtlemonvh/blanket#23 phase 1): an ordinary
+poll waits `CheckInterval` plus up to a quarter more; a failed iteration
+waits a **full-jitter** backoff, `rand(0, min(CheckInterval << n, 30s))`.
+This defends against a server restart, which every worker on the machine
+sees at the same instant and would otherwise reconnect from in lockstep.
+A `SIGTERM` sets a local stop flag as well as asking the server to mark
+the worker stopped, so the loop exits even when the server is
+permanently unreachable.
 
 ```mermaid
 sequenceDiagram
@@ -777,91 +614,50 @@ sequenceDiagram
     end
 ```
 
-## Basic task flow
+## Basic task flow, step by step
 
-This is what the workflow looks like without any user intervention or
-failures.
+The happy path, with the server and at least one worker running:
 
-### 0. Preconditions / Assumptions
+1. **User posts a task** with `POST /task/` and gets its id back. The
+   task is written to the database first, then added to the queue.
+2. **A worker claims a task.** Workers do not ask for specific tasks;
+   `POST /task/claim/:workerId` matches the worker's tags against the
+   queue, saves the match as `CLAIMED`, acks the queue entry, and returns
+   the task.
+3. **The worker starts it**: loads the task type, creates an isolated
+   execution directory, copies and fills in any template files, starts
+   the command, and sends `PUT /task/:id/run`. During execution it may
+   send `PUT /task/:id/progress`.
+4. **The worker finishes it** with `PUT /task/:id/finish` and asks for
+   another task.
 
-We start out with the assumptions that:
-
-1. Blanket itself is running.
-2. Workers are running, and they can consume tasks.
-
-### 1. User posts task
-
-User sends `POST /task/`. They receive back an id for their task.
-The task is put in both the database and the queue. The write to the
-database is performed first.
-
-### 2. Worker claims task
-
-Workers do not claim specific tasks. They send a specification of their
-capabilities to the server via `POST /task/claim/:workerId`. The server
-responds by executing a series of actions:
-
-1. Find a task that matches that worker's capability in the queue.
-2. Insert that task into the database in the `CLAIMED` state, and ack the message from the queue.
-3. Return the task id of the claimed task to the worker.
-
-### 3. Worker begins task execution
-
-Upon receipt of this task id from the server, the worker starts
-performing its own series of actions to advance the task state:
-
-1. Grab the task type information.
-2. Create an isolated execution directory for the task. Copy any template files in this directory and fill them out.
-3. Start executing the main task command.
-4. Send a `PUT /task/:id/run` back to the server to request the server advances the task state to `RUNNING`.
-
-> Note that **the task config is not locked when the task is added**,
-> but when it is executed. If you change the input files in the time
-> between when a task is added and when it is executed, you will
-> execute the new version of the task. This may change in the future.
-
-During execution, the worker may send multiple requests to
-`PUT /task/:id/progress` to update the percent completion of the task,
-or adjust other task attributes.
-
-### 4. Worker completes task execution
-
-Assuming the task execution completes without any errors, timing out,
-or being stopped by the user, the worker will then:
-
-1. Send a request to `PUT /task/:id/finish` to mark the task as complete.
-2. Ask the server for another task.
+> **The task config is locked when the task executes, not when it is
+> added.** Changing a type's input files between submission and execution
+> runs the new version. This may change in the future.
 
 ## Log tailing (`lib/tailed_file`)
 
-`GET /worker/:id/log` (`server/serve_workers.go`) streams a worker's log
-file to the browser over SSE by calling `tailed_file.Follow(path)`,
-which is backed by a single `TailedFileCollection`: the first subscriber
-for a given path starts a `TailedFile` — a `lib/follow` goroutine that
-seeks to end-of-file minus `DefaultFileOffset` (5000 bytes, or the
-start of the file if it's smaller) and polls for new lines — and later
-subscribers on the same path reuse it. A `TailedFile` keeps the last
-`DefaultLinesKept` (100) lines in a ring buffer (`PastLines`), so a new
-subscriber can be **backfilled** with recent history instead of only
-seeing lines written after it subscribed. The file stops being tailed
-5 seconds after its last subscriber unsubscribes (`StopIfNoSubscribers`).
+`GET /worker/:id/log` (`server/serve_workers.go`) streams a worker's
+logfile over SSE via `tailed_file.Follow(path)`, backed by one
+`TailedFileCollection`: the first subscriber for a path starts a
+`TailedFile` — a `lib/follow` goroutine that seeks to end-of-file minus
+`DefaultFileOffset` (5000 bytes, or the start if smaller) and polls for
+new lines — and later subscribers reuse it. A `TailedFile` keeps the last
+`DefaultLinesKept` (100) lines in a ring buffer (`PastLines`) to backfill
+new subscribers, and stops 5 seconds after its last subscriber leaves
+(`StopIfNoSubscribers`).
 
-`GET /task/:id/log` (`server/serve_tasks.go`, `server/serve_stream.go`)
-used to share this same path, and no longer does
-(turtlemonvh/blanket#123): with a `TailedFile` shared between every
-subscriber of a path, how much history a *new* subscriber saw was an
-accident of who else was already tailing it — the whole file cold, or
-only the ring's last 100 lines warm. It now calls
-`tailed_file.ReplayAndFollow(path, n)` (`lib/tailed_file/replay.go`)
-instead: an unshared read of up to `n` (500, `DEFAULT_LOG_TAIL_LINES`)
-of the file's own complete lines, remembering the exact byte offset that
-read stopped at, followed by a private `lib/follow` follower started at that
-offset. Every connection gets the same defined window regardless of who
-else is tailing the same file, and nothing is replayed twice or dropped
-at the seam. The UI's `/ui/sse/tasks/:id/log` route
-(`server/ui_logs.go`) already worked this way, for the same reason
-(turtlemonvh/blanket#104); the diagram below still describes
-`GET /worker/:id/log`, the one caller `Follow`'s shared ring still has.
+`GET /task/:id/log` no longer shares this path (turtlemonvh/blanket#123):
+with one tailer per path, how much history a new subscriber saw depended
+on who else was already tailing — the whole file cold, or the ring's last
+100 lines warm. It uses `tailed_file.ReplayAndFollow(path, n)`
+(`lib/tailed_file/replay.go`) instead: an unshared read of up to `n`
+(500, `DEFAULT_LOG_TAIL_LINES`) complete lines, then a private follower
+from the exact byte offset that read stopped at, so every connection gets
+the same window and nothing is replayed twice or dropped. The UI's
+`/ui/sse/tasks/:id/log` (`server/ui_logs.go`) already worked this way
+(turtlemonvh/blanket#104). The diagram describes `GET /worker/:id/log`,
+the one remaining caller of the shared ring.
 
 ```mermaid
 sequenceDiagram
