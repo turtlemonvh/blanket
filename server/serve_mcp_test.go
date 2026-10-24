@@ -92,6 +92,44 @@ func TestMcpDocs_UnknownPage(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// mcpInstructions sends agents to blanket_docs(page="authoring"); that
+// must keep returning the whole guide, not a table of contents.
+func TestMcpDocs_AuthoringIsWhole(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	raw, err := docs.Page("authoring")
+	assert.NoError(t, err)
+	res, _, err := s.mcpDocs(context.Background(), nil, blanketDocsArgs{Page: "authoring"})
+	assert.NoError(t, err)
+	assert.Equal(t, raw, res.Content[0].(*mcp.TextContent).Text)
+}
+
+func TestMcpDocs_SearchThenSection(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	res, _, err := s.mcpDocs(context.Background(), nil, blanketDocsArgs{Query: "malformed id 400"})
+	assert.NoError(t, err)
+	assert.Contains(t, res.Content[0].(*mcp.TextContent).Text, `page="api" section="#errors"`)
+
+	res, _, err = s.mcpDocs(context.Background(), nil, blanketDocsArgs{Page: "api", Section: "#errors"})
+	assert.NoError(t, err)
+	assert.True(t, strings.HasPrefix(res.Content[0].(*mcp.TextContent).Text, "## Errors"))
+
+	res, _, err = s.mcpDocs(context.Background(), nil, blanketDocsArgs{Page: "api"})
+	assert.NoError(t, err)
+	assert.Contains(t, res.Content[0].(*mcp.TextContent).Text, "here are its sections instead")
+}
+
+func TestMcpDocs_NoArgs(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpDocs(context.Background(), nil, blanketDocsArgs{})
+	assert.ErrorContains(t, err, "authoring")
+}
+
 func TestMcpTaskTypes_List(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()
@@ -122,6 +160,30 @@ func TestMcpTaskTypes_UnknownName(t *testing.T) {
 
 	_, _, err := s.mcpTaskTypes(context.Background(), nil, blanketTaskTypesArgs{Name: "nope"})
 	assert.Error(t, err)
+}
+
+// An unknown name points at the nearest real ones (turtlemonvh/blanket#229).
+// blanket_submit_task and blanket_run_task get the same hint, since all
+// three go through tasks.FetchTaskType.
+func TestMcpTaskTypes_UnknownNameSuggestsClosest(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+
+	_, _, err := s.mcpTaskTypes(context.Background(), nil, blanketTaskTypesArgs{Name: "echo-task"})
+	assert.ErrorContains(t, err, "did you mean: echo_task")
+
+	_, _, err = s.mcpSubmitTask(context.Background(), nil, blanketSubmitTaskArgs{Type: "echotask"})
+	assert.ErrorContains(t, err, "did you mean: echo_task")
+}
+
+func TestMcpDocs_UnknownPageSuggestsClosest(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpDocs(context.Background(), nil, blanketDocsArgs{Page: "authring"})
+	assert.ErrorContains(t, err, "did you mean: authoring")
 }
 
 func TestMcpTasks_List(t *testing.T) {
@@ -168,6 +230,7 @@ func TestMcpTasks_Detail(t *testing.T) {
 	assert.NoError(t, err)
 	text := res.Content[0].(*mcp.TextContent).Text
 	assert.Contains(t, text, tsk.Id.Hex())
+	assert.Contains(t, text, "resultDir: "+tsk.ResultDir+"\n")
 	assert.Contains(t, text, "log tail")
 }
 
@@ -269,6 +332,57 @@ func TestMcpWriteTaskType_OverwriteMessage(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Contains(t, res2.Content[0].(*mcp.TextContent).Text, "overwrote")
+}
+
+// The overwrite guard (turtlemonvh/blanket#229): with
+// tasks.requireExplicitTypeOverwrite unset an existing file is replaced
+// as before; with it set, replacing one needs overwrite=true.
+func TestMcpWriteTaskType_OverwriteGuard(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	cleanupType := setupTestTaskType(t)
+	defer cleanupType()
+	defer viper.Set("tasks.requireExplicitTypeOverwrite", nil)
+
+	ctx := context.Background()
+	typeToml := func(word string) string {
+		return "command = \"echo " + word + "\"\nexecutor = \"bash\"\ntags = [\"exec:bash\"]\ndescription = \"says " + word + "\"\ndocumentation = \"none needed\"\n"
+	}
+	write := func(word string, overwrite bool) string {
+		res, _, err := s.mcpWriteTaskType(ctx, nil, blanketWriteTaskTypeArgs{
+			Name: "guarded_task", Toml: typeToml(word), Overwrite: overwrite,
+		})
+		assert.NoError(t, err)
+		return res.Content[0].(*mcp.TextContent).Text
+	}
+	onDisk := func() string {
+		b, err := os.ReadFile(path.Join(viper.GetStringSlice("tasks.typesPaths")[0], "guarded_task.toml"))
+		assert.NoError(t, err)
+		return string(b)
+	}
+
+	// Key unset: overwrites, no flag needed.
+	assert.Contains(t, write("one", false), "wrote")
+	assert.Contains(t, write("two", false), "overwrote")
+	assert.Contains(t, onDisk(), "echo two")
+
+	viper.Set("tasks.requireExplicitTypeOverwrite", true)
+
+	// Key set, no flag: refused, the file is untouched, and the refusal
+	// says how to get past it.
+	text := write("three", false)
+	assert.Contains(t, text, "refused to write")
+	assert.Contains(t, text, "overwrite=true")
+	assert.Contains(t, onDisk(), "echo two")
+
+	// Key set, flag given: replaced.
+	assert.Contains(t, write("four", true), "overwrote")
+	assert.Contains(t, onDisk(), "echo four")
+
+	// Key set, but nothing to overwrite: a new file needs no flag.
+	res, _, err := s.mcpWriteTaskType(ctx, nil, blanketWriteTaskTypeArgs{Name: "fresh_task", Toml: typeToml("hi")})
+	assert.NoError(t, err)
+	assert.Contains(t, res.Content[0].(*mcp.TextContent).Text, "wrote")
 }
 
 func TestMcpWriteTaskType_WritesOnSuccess(t *testing.T) {
@@ -533,6 +647,68 @@ func TestMCPModeGating(t *testing.T) {
 		clientSession.Close()
 		serverSession.Wait()
 	}
+}
+
+// TestMCPToolAnnotations checks the hints each tool advertises in
+// tools/list (turtlemonvh/blanket#229), read back through a real client
+// so it covers what goes on the wire, not just the Go structs.
+func TestMCPToolAnnotations(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	viper.Set("mcp.mode", "all")
+	defer viper.Set("mcp.mode", nil)
+
+	ctx := context.Background()
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	serverSession, err := s.buildMCPServer().Connect(ctx, serverTransport, nil)
+	assert.NoError(t, err)
+	defer serverSession.Wait()
+	clientSession, err := mcp.NewClient(&mcp.Implementation{Name: "test-client"}, nil).Connect(ctx, clientTransport, nil)
+	assert.NoError(t, err)
+	defer clientSession.Close()
+
+	res, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{})
+	assert.NoError(t, err)
+
+	type hints struct{ readOnly, destructive, idempotent bool }
+	read := hints{readOnly: true}
+	additive := hints{}
+	destructive := hints{destructive: true}
+	want := map[string]hints{
+		"blanket_docs":            read,
+		"blanket_task_types":      read,
+		"blanket_tasks":           read,
+		"blanket_workers":         read,
+		"blanket_submit_task":     additive,
+		"blanket_run_task":        additive,
+		"blanket_launch_worker":   additive,
+		"blanket_write_task_type": destructive,
+		"blanket_cancel_task":     destructive,
+		"blanket_stop_worker":     destructive,
+	}
+
+	seen := 0
+	for _, tool := range res.Tools {
+		w, ok := want[tool.Name]
+		if !ok {
+			continue
+		}
+		seen++
+		a := tool.Annotations
+		if !assert.NotNil(t, a, "%s has no annotations", tool.Name) {
+			continue
+		}
+		assert.Equal(t, w.readOnly, a.ReadOnlyHint, "%s readOnlyHint", tool.Name)
+		assert.Equal(t, w.idempotent, a.IdempotentHint, "%s idempotentHint", tool.Name)
+		if !w.readOnly {
+			// destructiveHint defaults to true when absent, so a
+			// non-read tool must state it either way.
+			if assert.NotNil(t, a.DestructiveHint, "%s destructiveHint unset", tool.Name) {
+				assert.Equal(t, w.destructive, *a.DestructiveHint, "%s destructiveHint", tool.Name)
+			}
+		}
+	}
+	assert.Equal(t, len(want), seen, "every tool should be registered in mode all")
 }
 
 func TestToolListFitsContextBudget(t *testing.T) {

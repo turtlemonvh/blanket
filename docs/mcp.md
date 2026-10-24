@@ -32,11 +32,11 @@ Ten tools, gated by `mcp.mode`:
 
 | Tool | Args | Tier |
 | --- | --- | --- |
-| `blanket_docs` | `page` | readonly |
+| `blanket_docs` | `query?`, `page?`, `section?` | readonly |
 | `blanket_task_types` | `name?` | readonly |
 | `blanket_tasks` | `id?`, `states?`, `types?`, `limit?`, `log_lines?` | readonly |
 | `blanket_workers` | `id?`, `log_lines?` | readonly |
-| `blanket_write_task_type` | `name`, `toml` | create |
+| `blanket_write_task_type` | `name`, `toml`, `overwrite?` | create |
 | `blanket_submit_task` | `type`, `env?`, `notBefore?`, `cron?` | create |
 | `blanket_run_task` | `type`, `env?`, `waitSeconds?` | create |
 | `blanket_launch_worker` | `tags`, `count?` | create |
@@ -44,6 +44,39 @@ Ten tools, gated by `mcp.mode`:
 | `blanket_stop_worker` | `id`, `delete?` | all |
 
 `create` mode includes `readonly`'s tools; `all` includes both.
+
+### Tool annotations
+
+Each tool carries MCP
+[tool annotations](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
+in `tools/list`, so a client can auto-approve the reads and warn before a
+destructive call:
+
+| Tools | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
+| --- | --- | --- | --- |
+| `blanket_docs`, `blanket_task_types`, `blanket_tasks`, `blanket_workers` | `true` | — | `false` |
+| `blanket_submit_task`, `blanket_run_task`, `blanket_launch_worker` | `false` | `false` | `false` |
+| `blanket_write_task_type`, `blanket_cancel_task`, `blanket_stop_worker` | `false` | `true` | `false` |
+
+`blanket_write_task_type` is marked destructive, unlike the rest of the
+`create` tier, because it can replace an existing task type's file (see
+`tasks.requireExplicitTypeOverwrite` below to make that need an explicit
+`overwrite=true`).
+
+The spec has clients treat annotations as untrusted hints, so they are
+an aid to a client's approval prompts, not a security boundary.
+`mcp.mode` is still what decides which tools exist at all.
+
+### Errors and task detail
+
+- An unknown task type name (`blanket_task_types`, `blanket_submit_task`,
+  `blanket_run_task`) or doc page key (`blanket_docs`) errors with
+  `did you mean: ...?` naming the three closest valid names by edit
+  distance, so a typo costs one retry rather than a listing call.
+- `blanket_tasks(id=...)` includes a `resultDir:` line: the task's result
+  directory on the worker's machine. An agent on that machine can read
+  the task's output files directly; fetching them from another machine
+  is [#235](https://github.com/turtlemonvh/blanket/issues/235).
 
 ### `blanket_submit_task` vs `blanket_run_task`
 
@@ -79,27 +112,60 @@ Every tool returns plain text (compact tables for lists, a labeled
 key-value block for a single item), not JSON — this keeps the response
 small and just as readable to an agent.
 
+### `blanket_docs`: search, page, section
+
+The docs are searchable and fetchable a section at a time, so more
+guidance can live in them without costing context up front
+(turtlemonvh/blanket#230):
+
+- **`query`** returns the 5 best-matching sections across every page:
+  page key, section id, heading, and a ~200-character snippet.
+- **`page`** alone returns the whole page if it is at most 12,000
+  characters (`authoring`, which the server instructions point at, is
+  well under). A bigger page (`api`, `flow`, `upgrade`, `usage`) returns
+  a table of contents — section ids, headings, sizes — plus its opening
+  text.
+- **`page` + `section`** returns that section, `##` sections including
+  their `###` subsections. One over the cap returns its subsections'
+  table of contents instead: refused and redirected, never truncated.
+
+Section ids are GitHub-style heading anchors (`#errors`), the same ones
+the docs link to; the leading `#` is optional. Search is BM25 over the
+`#`/`##`/`###` sections in `lib/docs`, heading terms weighted ×3, a
+lowercase alphanumeric tokenizer with a short stop-word list and no
+stemming. The index lives in memory only: the server starts building it
+in the background at startup (a few milliseconds, about 1 MB), and a
+search that arrives first waits for that build rather than seeing an
+empty index.
+
 ## Context cost
 
-`tools/list` plus the server's instructions text is kept under **5,000
-characters (~1,250 tokens)** in the default `mcp.mode = "all"` — the
+`tools/list` plus the server's instructions text is kept under **6,000
+characters (~1,500 tokens)** in the default `mcp.mode = "all"` — the
 worst case, since narrower modes register fewer tools. This is a
 test-enforced budget (`TestToolListFitsContextBudget`), not just a
 target; the actual measured size is logged by that test on every run.
-As of this writing that measured size is 4,976 characters -- 24 short
-of the budget, which is the tightest it has ever been. Adding another
-doc page means trimming something first; issue #44 tracks the wider
-fix (tool search / dynamic discovery).
+As of this writing that measured size is 5,822 characters -- 178 short
+of the budget. Adding another doc page means trimming something first.
+Server-side tool search was considered in #44 and rejected (clients
+already do it); the fix for guidance outgrowing the budget is
+section-level `blanket_docs` search (#230, above), which costs only its
+arguments up front.
 
-The budget has been raised twice, each time for a tool surface that grew
-rather than prose that sprawled: 4,000 → 4,400 when
+The budget has been raised three times, each time for a tool surface
+that grew rather than prose that sprawled: 4,000 → 4,400 when
 `blanket_submit_task` gained `notBefore`/`cron` and
 `blanket_cancel_task`'s description grew to cover the new task states it
-can cancel (turtlemonvh/blanket#61's pause/resume/schedule rework), and
+can cancel (turtlemonvh/blanket#61's pause/resume/schedule rework);
 4,400 → 5,000 for the tenth tool, `blanket_run_task`
 (turtlemonvh/blanket#27) — submit-and-wait is the interaction an agent
-actually wants, and a tool it can't see is worth nothing. Descriptions
-were trimmed first; the raise covers what was left.
+actually wants, and a tool it can't see is worth nothing, and
+descriptions were trimmed first; and 5,000 → 6,000 for
+[tool annotations](#tool-annotations) and `blanket_write_task_type`'s
+`overwrite` argument (turtlemonvh/blanket#229), which took the measured
+size from 4,986 to 5,822. About 750 of those characters are the
+annotations objects themselves: go-sdk serializes every hint field on
+every tool, and there is no prose in them to trim.
 
 When a new tool or argument trips that test, the levers are, in order:
 trim the `jsonschema:"..."` argument descriptions, then the tool
@@ -110,8 +176,7 @@ saving, and not a lever to give back. Raising the constant is the last
 resort, and only for a tool surface that genuinely grew.
 
 If you're tight on context budget elsewhere, set `mcp.mode = "readonly"`
-to cut this further, or wait for the tool-search / dynamic-discovery
-mode tracked in issue #44 if the tool count grows.
+to cut this further.
 
 ## Setup
 
@@ -184,4 +249,15 @@ mcp.mode            "all"   # readonly | create | all
 mcp.writeTypesPath  ""      # defaults to the first tasks.typesPaths entry
 mcp.validateStrict  false   # also refuse blanket_write_task_type on warnings
 mcp.maxLogLines     200     # hard cap on log_lines, regardless of what's asked
+
+tasks.requireExplicitTypeOverwrite  false  # replacing an existing task type file needs overwrite=true
 ```
+
+`tasks.requireExplicitTypeOverwrite` lives under `tasks.` rather than
+`mcp.` because it is a rule about task-type files, not about one
+interface: `blanket_write_task_type` honors it today, and a REST
+task-type write endpoint, when one is added, is meant to honor the same
+key. With it `false` (the default), `blanket_write_task_type` replaces an
+existing file and says `overwrote`; with it `true`, the call is refused
+with a message naming `overwrite=true` unless that argument is set.
+Writing a new file never needs the flag.

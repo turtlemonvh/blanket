@@ -1,5 +1,7 @@
 // Package docs serves the markdown pages under docs/ (keyed by short name)
-// to the blanket_docs MCP tool.
+// to the blanket_docs MCP tool, whole or one section at a time, and
+// searches them with an in-memory BM25 index over their sections
+// (index.go).
 //
 // go:embed can't reach files above its own package directory, so this
 // package can't embed ../docs/*.md itself -- see #66. Instead main (the
@@ -14,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/turtlemonvh/blanket/lib"
 )
 
 // pages maps the short keys used by the blanket_docs MCP tool to filenames
@@ -38,11 +42,13 @@ var (
 
 // SetFS registers the filesystem containing the markdown doc pages (the
 // contents of docs/, not docs/ itself). Call it once at startup before
-// Page is used; it may also be called again in tests.
+// Page is used; it may also be called again in tests, which discards
+// any index built from the previous filesystem.
 func SetFS(f fs.FS) {
 	mu.Lock()
 	defer mu.Unlock()
 	files = f
+	state = &indexState{}
 }
 
 // Keys returns the valid page keys, sorted, for building the blanket_docs
@@ -56,12 +62,20 @@ func Keys() []string {
 	return keys
 }
 
+// unknownPageError is the error Page and Read return for an unrecognized
+// key: it names the closest real keys (turtlemonvh/blanket#229) and lists
+// them all.
+func unknownPageError(key string) error {
+	return fmt.Errorf("unknown doc page %q; did you mean: %s? valid pages are: %s",
+		key, strings.Join(lib.ClosestMatches(key, Keys(), 3), ", "), strings.Join(Keys(), ", "))
+}
+
 // Page returns the raw contents of the doc page for key, or an error
 // listing valid keys if key is unrecognized.
 func Page(key string) (string, error) {
 	filename, ok := pages[key]
 	if !ok {
-		return "", fmt.Errorf("unknown doc page %q; valid pages are: %s", key, strings.Join(Keys(), ", "))
+		return "", unknownPageError(key)
 	}
 
 	mu.RLock()

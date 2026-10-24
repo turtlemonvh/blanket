@@ -38,6 +38,7 @@ func main() {
 		log.Fatalf("could not load embedded docs: %v", err)
 	}
 	docs.SetFS(docsSub)
+	docs.Warm() // build the search index off the startup path
 
 	command.Run(VERSION, BRANCH, COMMIT, BUILD_DATE)
 }

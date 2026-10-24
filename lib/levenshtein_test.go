@@ -42,3 +42,28 @@ func TestLevenshtein_Symmetric(t *testing.T) {
 		}
 	}
 }
+
+func TestClosestMatches(t *testing.T) {
+	candidates := []string{"overview", "authoring", "schema", "tags", "usage", "api"}
+
+	got := ClosestMatches("authring", candidates, 3)
+	if len(got) != 3 || got[0] != "authoring" {
+		t.Errorf("ClosestMatches(authring) = %v, want authoring first of 3", got)
+	}
+
+	// Case-insensitive, and ties break alphabetically for a stable message.
+	got = ClosestMatches("TAGS", []string{"zags", "tags", "bags"}, 3)
+	want := []string{"tags", "bags", "zags"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ClosestMatches(TAGS) = %v, want %v", got, want)
+		}
+	}
+
+	if got := ClosestMatches("x", []string{"a"}, 3); len(got) != 1 {
+		t.Errorf("fewer candidates than n should return them all, got %v", got)
+	}
+	if got := ClosestMatches("x", nil, 3); len(got) != 0 {
+		t.Errorf("no candidates should return none, got %v", got)
+	}
+}
