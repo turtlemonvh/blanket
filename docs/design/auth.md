@@ -28,7 +28,7 @@ below are what is still open.
 | 5 | Browser sessions | Bolt-backed sessions, HttpOnly SameSite=Lax cookie; CSRF token on *every* cookie-authenticated non-GET request | Signed cookie; CSRF on `/ui/*` only | Another port on the same host is same-site, so Lax alone lets a form POST `/task/` | yes |
 | 6 | Worker tokens | Minted per worker, bound to its id, set only on the child's `cmd.Env`, stripped before any task runs | One shared token | Tasks inherit the worker's env (`tasks/tasks.go:196`) | yes |
 | 7 | Token lifetime | No expiry unless `--expires`; last-used shown | 90-day default | Silent expiry breaks agent configs | yes |
-| 8 | Login rules | A passkey is a full sign-in; failed passwords add backoff capped at 30s, never a lockout; TOTP secrets stored in the DB | Passkey as one factor; hard lockout; secrets encrypted by an on-disk key | Passkeys are two-factor already; lockouts let anyone lock out the admin; you preferred the DB to key files | yes |
+| 8 | Login rules | A passkey is a full sign-in; failed passwords add backoff capped at 30s, never a lockout; TOTP secrets stored in the DB | Passkey as one factor; hard lockout; key-encrypted secrets | Passkeys are two-factor already; lockouts let anyone lock out the admin; TOTP must be reversible, unlike hashed passwords and tokens | yes |
 
 ### What changes for you
 
@@ -136,7 +136,8 @@ These are new Bolt buckets. Creating them is migration v<N+1> in
 `lib/bolt/migrations.go`: additive, with the automatic pre-migration backup.
 
 - `users`: id, name, role preset, argon2id hash, TOTP secret (stored as
-  is, row 8), recovery code hashes, failed-login count and backoff-until,
+  is, row 8: the server must compute codes from it, so it can't be hashed
+  the way passwords and tokens are; DB backups therefore hold it too), recovery code hashes, failed-login count and backoff-until,
   created, disabled.
 - `tokens`: SHA-256(token) → id, name, owner (a user id, or a worker id for
   worker tokens), scopes, restrictions, created, expires, lastUsed.
