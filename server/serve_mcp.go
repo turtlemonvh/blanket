@@ -96,6 +96,7 @@ func (s *ServerConfig) buildMCPServer() *mcp.Server {
 	s.registerReadonlyMCPTools(srv, mode)
 	s.registerCreateMCPTools(srv, mode)
 	s.registerDestructiveMCPTools(srv, mode)
+	s.registerMCPPrompts(srv, mode)
 
 	return srv
 }
