@@ -110,6 +110,13 @@ func SetConfigDefaults() {
 	viper.SetDefault("mcp.validateStrict", false)
 	viper.SetDefault("mcp.maxLogLines", 200)
 
+	// Whether writing a task type over an existing file needs an explicit
+	// overwrite flag (turtlemonvh/blanket#229). Under tasks.* rather than
+	// mcp.* because it governs task-type files, whichever interface writes
+	// them. Off by default: blanket_write_task_type replaces files as it
+	// always has.
+	viper.SetDefault("tasks.requireExplicitTypeOverwrite", false)
+
 	// The name the web UI's header and the installed PWA show for this
 	// instance (turtlemonvh/blanket#216). Empty means the machine's
 	// hostname, which is enough to tell two blankets apart on one phone.

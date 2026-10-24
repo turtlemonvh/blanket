@@ -113,7 +113,7 @@ func Search(query string, n int) ([]Result, error) {
 // of contents if the text is over MaxChars.
 func Read(page, section string) (View, error) {
 	if _, ok := pages[page]; !ok {
-		return View{}, fmt.Errorf("unknown doc page %q; valid pages are: %s", page, strings.Join(Keys(), ", "))
+		return View{}, unknownPageError(page)
 	}
 	idx, err := defaultIndex()
 	if err != nil {
