@@ -92,6 +92,44 @@ func TestMcpDocs_UnknownPage(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// mcpInstructions sends agents to blanket_docs(page="authoring"); that
+// must keep returning the whole guide, not a table of contents.
+func TestMcpDocs_AuthoringIsWhole(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	raw, err := docs.Page("authoring")
+	assert.NoError(t, err)
+	res, _, err := s.mcpDocs(context.Background(), nil, blanketDocsArgs{Page: "authoring"})
+	assert.NoError(t, err)
+	assert.Equal(t, raw, res.Content[0].(*mcp.TextContent).Text)
+}
+
+func TestMcpDocs_SearchThenSection(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	res, _, err := s.mcpDocs(context.Background(), nil, blanketDocsArgs{Query: "malformed id 400"})
+	assert.NoError(t, err)
+	assert.Contains(t, res.Content[0].(*mcp.TextContent).Text, `page="api" section="#errors"`)
+
+	res, _, err = s.mcpDocs(context.Background(), nil, blanketDocsArgs{Page: "api", Section: "#errors"})
+	assert.NoError(t, err)
+	assert.True(t, strings.HasPrefix(res.Content[0].(*mcp.TextContent).Text, "## Errors"))
+
+	res, _, err = s.mcpDocs(context.Background(), nil, blanketDocsArgs{Page: "api"})
+	assert.NoError(t, err)
+	assert.Contains(t, res.Content[0].(*mcp.TextContent).Text, "here are its sections instead")
+}
+
+func TestMcpDocs_NoArgs(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpDocs(context.Background(), nil, blanketDocsArgs{})
+	assert.ErrorContains(t, err, "authoring")
+}
+
 func TestMcpTaskTypes_List(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()

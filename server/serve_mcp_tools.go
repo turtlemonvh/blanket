@@ -33,16 +33,39 @@ type blanketDocsArgs struct {
 	// here too cost ~70 characters of the tools/list budget
 	// (turtlemonvh/blanket#44) to say the same thing twice, and the two
 	// copies had already drifted apart from each other and from
-	// lib/docs.
-	Page string `json:"page" jsonschema:"doc page key; the tool description lists the valid values"`
+	// lib/docs. page carries no description at all for the same reason
+	// (turtlemonvh/blanket#230 needed the room for query and section).
+	Query   string `json:"query,omitempty" jsonschema:"search terms"`
+	Page    string `json:"page,omitempty"`
+	Section string `json:"section,omitempty" jsonschema:"section id, e.g. #errors"`
 }
 
+// mcpDocs searches the docs (query), or reads a page or one section of it
+// (turtlemonvh/blanket#230). Pages and sections over docs.MaxChars come
+// back as a table of contents rather than truncated text.
 func (s *ServerConfig) mcpDocs(ctx context.Context, req *mcp.CallToolRequest, args blanketDocsArgs) (*mcp.CallToolResult, any, error) {
-	content, err := docs.Page(args.Page)
+	if args.Query != "" {
+		res, err := docs.Search(args.Query, 5)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(res) == 0 {
+			return textResult(fmt.Sprintf("no sections match %q; pages are: %s", args.Query, strings.Join(docs.Keys(), ", ")))
+		}
+		var b strings.Builder
+		for _, r := range res {
+			fmt.Fprintf(&b, "page=%q section=%q  %s\n  %s\n\n", r.Page, r.ID, r.Heading, r.Snippet)
+		}
+		return textResult(b.String())
+	}
+	if args.Page == "" {
+		return nil, nil, fmt.Errorf("pass query to search, or page (one of: %s)", strings.Join(docs.Keys(), ", "))
+	}
+	v, err := docs.Read(args.Page, args.Section)
 	if err != nil {
 		return nil, nil, err
 	}
-	return textResult(content)
+	return textResult(v.Text())
 }
 
 type blanketTaskTypesArgs struct {
