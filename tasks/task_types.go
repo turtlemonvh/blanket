@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
@@ -45,13 +46,22 @@ func FetchTaskType(typeName string) (*TaskType, error) {
 		return &foundType, err
 	}
 
+	names := make([]string, 0, len(tts))
 	for _, tt := range tts {
 		if tt.GetName() == typeName {
 			return &tt, nil
 		}
+		names = append(names, tt.GetName())
 	}
 
-	return &foundType, fmt.Errorf("No task of type '%s' could be located", typeName)
+	// Name the closest real types (turtlemonvh/blanket#229): a caller who
+	// typed "echo-task" for "echo_task" -- an agent especially -- fixes
+	// it in one step instead of listing every type to find out.
+	msg := fmt.Sprintf("No task of type '%s' could be located", typeName)
+	if near := lib.ClosestMatches(typeName, names, 3); len(near) > 0 {
+		msg += fmt.Sprintf("; did you mean: %s?", strings.Join(near, ", "))
+	}
+	return &foundType, errors.New(msg)
 }
 
 // Read types from config directory

@@ -149,6 +149,10 @@ func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, a
 		fmt.Fprintf(&b, "state: %s\n", task.State)
 		fmt.Fprintf(&b, "progress: %d%%\n", task.Progress)
 		fmt.Fprintf(&b, "workerId: %s\n", task.WorkerId.Hex())
+		// The task's output files live here, on the worker's machine.
+		// An agent on that same machine can read them directly; one
+		// elsewhere can't, yet (turtlemonvh/blanket#235).
+		fmt.Fprintf(&b, "resultDir: %s\n", task.ResultDir)
 		fmt.Fprintf(&b, "tags: %s\n", strings.Join(task.Tags, ", "))
 		fmt.Fprintf(&b, "createdTs: %d\n", task.CreatedTs)
 		fmt.Fprintf(&b, "lastUpdatedTs: %d\n", task.LastUpdatedTs)
@@ -236,6 +240,9 @@ func (s *ServerConfig) mcpWorkers(ctx context.Context, req *mcp.CallToolRequest,
 type blanketWriteTaskTypeArgs struct {
 	Name string `json:"name" jsonschema:"task type name (without .toml)"`
 	Toml string `json:"toml" jsonschema:"TOML contents of the task type"`
+	// Only consulted when tasks.requireExplicitTypeOverwrite is true;
+	// otherwise an existing file is replaced as it always was.
+	Overwrite bool `json:"overwrite,omitempty" jsonschema:"replace an existing type; the server may require it"`
 }
 
 func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRequest, args blanketWriteTaskTypeArgs) (*mcp.CallToolResult, any, error) {
@@ -284,6 +291,15 @@ func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRe
 	writePath := path.Join(writeDir, args.Name+".toml")
 	_, statErr := os.Stat(writePath)
 	existed := statErr == nil
+	// The overwrite guard (turtlemonvh/blanket#229, item 6 of #44). It
+	// lives under tasks.* rather than mcp.* because it is a rule about
+	// task-type files, not about this tool: a REST write endpoint, when
+	// there is one, honors the same key.
+	if existed && !args.Overwrite && viper.GetBool("tasks.requireExplicitTypeOverwrite") {
+		return textResult(fmt.Sprintf(
+			"refused to write %q: %s already exists and this server sets tasks.requireExplicitTypeOverwrite; call again with overwrite=true to replace it\n",
+			args.Name, writePath))
+	}
 	if err := os.WriteFile(writePath, []byte(args.Toml), 0644); err != nil {
 		return nil, nil, err
 	}

@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/turtlemonvh/blanket/lib"
 )
 
 // pages maps the short keys used by the blanket_docs MCP tool to filenames
@@ -60,12 +62,20 @@ func Keys() []string {
 	return keys
 }
 
+// unknownPageError is the error Page and Read return for an unrecognized
+// key: it names the closest real keys (turtlemonvh/blanket#229) and lists
+// them all.
+func unknownPageError(key string) error {
+	return fmt.Errorf("unknown doc page %q; did you mean: %s? valid pages are: %s",
+		key, strings.Join(lib.ClosestMatches(key, Keys(), 3), ", "), strings.Join(Keys(), ", "))
+}
+
 // Page returns the raw contents of the doc page for key, or an error
 // listing valid keys if key is unrecognized.
 func Page(key string) (string, error) {
 	filename, ok := pages[key]
 	if !ok {
-		return "", fmt.Errorf("unknown doc page %q; valid pages are: %s", key, strings.Join(Keys(), ", "))
+		return "", unknownPageError(key)
 	}
 
 	mu.RLock()
