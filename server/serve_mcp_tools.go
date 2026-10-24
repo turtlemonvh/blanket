@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -121,11 +122,11 @@ func clampLogLines(n int) int {
 }
 
 type blanketTasksArgs struct {
-	Id       string   `json:"id,omitempty" jsonschema:"task id; if set, returns detail with a log tail"`
+	Id       string   `json:"id,omitempty" jsonschema:"task id, for detail"`
 	States   []string `json:"states,omitempty" jsonschema:"filter by task state"`
 	Types    []string `json:"types,omitempty" jsonschema:"filter by type name"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"max tasks to list, default 20, max 100"`
-	LogLines int      `json:"log_lines,omitempty" jsonschema:"log tail lines when id set, default 50"`
+	LogLines int      `json:"log_lines,omitempty" jsonschema:"tail lines with id, default 50"`
 }
 
 func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, args blanketTasksArgs) (*mcp.CallToolResult, any, error) {
@@ -193,6 +194,115 @@ func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, a
 		fmt.Fprintf(&b, "%-24s %-16s %-8s %d%%\n", t.Id.Hex(), t.TypeId, t.State, t.Progress)
 	}
 	return textResult(b.String())
+}
+
+const (
+	// mcpLogLineChars caps each line blanket_task_logs returns; one
+	// minified-JSON or progress-bar line can otherwise be a whole page.
+	mcpLogLineChars = 2000
+	// mcpLogPageChars is the page size blanket_task_logs refuses past
+	// (~10k tokens), rather than cutting the page short.
+	mcpLogPageChars = 40000
+)
+
+type blanketTaskLogsArgs struct {
+	Id     string `json:"id" jsonschema:"task id"`
+	Stream string `json:"stream,omitempty" jsonschema:"stdout (default) or stderr"`
+	Grep   string `json:"grep,omitempty" jsonschema:"RE2 regex"`
+	// A pointer so an explicit 0 (no context) differs from unset (2).
+	Context *int `json:"context,omitempty" jsonschema:"lines around a match, default 2, max 10"`
+	Offset  int  `json:"offset,omitempty" jsonschema:"0-based; <0 counts from the end"`
+	Limit   int  `json:"limit,omitempty" jsonschema:"default 50"`
+}
+
+// mcpTaskLogs is the way to read more of a task log than blanket_tasks'
+// short tail (turtlemonvh/blanket#231): page it, or grep it on the
+// server so only the matching lines reach the model. Deliberately not
+// MCP resources -- #44 dropped those so agents aren't encouraged to pull
+// a whole log into context. The search itself is SearchLog, kept out of
+// this handler so a REST endpoint can reuse it.
+func (s *ServerConfig) mcpTaskLogs(ctx context.Context, req *mcp.CallToolRequest, args blanketTaskLogsArgs) (*mcp.CallToolResult, any, error) {
+	if !objectid.IsObjectIdHex(args.Id) {
+		return nil, nil, fmt.Errorf("%q is not a valid task id", args.Id)
+	}
+	stream := args.Stream
+	if stream == "" {
+		stream = "stdout"
+	}
+	var file string
+	switch stream {
+	case "stdout":
+		file = TaskStdoutLogFile
+	case "stderr":
+		file = TaskStderrLogFile
+	default:
+		return nil, nil, fmt.Errorf("stream must be stdout or stderr, not %q", stream)
+	}
+
+	opts := LogSearchOptions{
+		Context:      LogSearchDefaultContext,
+		Offset:       args.Offset,
+		Limit:        clampLogLines(args.Limit),
+		MaxLineChars: mcpLogLineChars,
+		MaxPageChars: mcpLogPageChars,
+	}
+	if args.Context != nil {
+		opts.Context = *args.Context
+	}
+	if args.Grep != "" {
+		re, err := regexp.Compile(args.Grep)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid grep regex (Go RE2 syntax): %v", err)
+		}
+		opts.Grep = re
+	}
+
+	task, err := s.DB.GetTask(objectid.ObjectIdHex(args.Id))
+	if err != nil {
+		return nil, nil, err
+	}
+	logPath := path.Join(task.ResultDir, file)
+	res, err := SearchLog(logPath, opts)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, fmt.Errorf("task %s has no %s log yet (state %s)", args.Id, stream, task.State)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return textResult(formatLogSearch(stream, args.Grep, opts, res))
+}
+
+// formatLogSearch renders a page in grep -n -C style: "N:" for a match
+// (or any line, without grep), "N-" for context, "--" between
+// non-adjacent groups, then the offset to ask for next.
+func formatLogSearch(stream, grep string, opts LogSearchOptions, res *LogSearchResult) string {
+	var b strings.Builder
+	switch {
+	case grep != "" && res.Count == 0:
+		fmt.Fprintf(&b, "%s: no matches for /%s/ at offset %d (%d matches in %d lines)\n", stream, grep, res.Start, res.TotalMatches, res.TotalLines)
+	case grep != "":
+		fmt.Fprintf(&b, "%s: matches %d-%d of %d for /%s/ (%d lines)\n", stream, res.Start+1, res.Start+res.Count, res.TotalMatches, grep, res.TotalLines)
+	case res.Count == 0:
+		fmt.Fprintf(&b, "%s: no lines at offset %d (%d lines)\n", stream, res.Start, res.TotalLines)
+	default:
+		fmt.Fprintf(&b, "%s: lines %d-%d of %d\n", stream, res.Start+1, res.Start+res.Count, res.TotalLines)
+	}
+	prev := 0
+	for _, l := range res.Lines {
+		if grep != "" && prev > 0 && l.Num != prev+1 {
+			b.WriteString("--\n")
+		}
+		sep := "-"
+		if l.Match || grep == "" {
+			sep = ":"
+		}
+		fmt.Fprintf(&b, "%d%s%s\n", l.Num, sep, l.Text)
+		prev = l.Num
+	}
+	if res.NextOffset >= 0 {
+		fmt.Fprintf(&b, "more: offset=%d\n", res.NextOffset)
+	}
+	return b.String()
 }
 
 type blanketWorkersArgs struct {

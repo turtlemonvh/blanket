@@ -608,7 +608,7 @@ func TestMCPModeGating(t *testing.T) {
 	defer viper.Set("mcp.mode", nil)
 
 	wantByMode := map[string][]string{
-		"readonly": {"blanket_docs", "blanket_task_types", "blanket_tasks", "blanket_workers"},
+		"readonly": {"blanket_docs", "blanket_task_types", "blanket_tasks", "blanket_task_logs", "blanket_workers"},
 		"create":   {"blanket_docs", "blanket_write_task_type", "blanket_submit_task", "blanket_launch_worker"},
 		"all":      {"blanket_cancel_task", "blanket_stop_worker"},
 	}
@@ -678,6 +678,7 @@ func TestMCPToolAnnotations(t *testing.T) {
 		"blanket_docs":            read,
 		"blanket_task_types":      read,
 		"blanket_tasks":           read,
+		"blanket_task_logs":       read,
 		"blanket_workers":         read,
 		"blanket_submit_task":     additive,
 		"blanket_run_task":        additive,
