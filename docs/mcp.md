@@ -105,6 +105,38 @@ in the background at startup (a few milliseconds, about 1 MB), and a
 search that arrives first waits for that build rather than seeing an
 empty index.
 
+## Prompts
+
+One prompt, registered in `create` and `all` modes:
+
+| Prompt | Args | Tier |
+| --- | --- | --- |
+| `new_task_type` | `description` (optional) | create |
+
+`new_task_type` expands to the authoring workflow: read
+`blanket_docs(page="authoring")`, draft the TOML, save it with
+`blanket_write_task_type` and fix whatever validation reports, check
+`blanket_workers` for a matching worker (or start one with
+`blanket_launch_worker`), then smoke-test with `blanket_run_task`.
+
+Claude Code lists it as `/blanket:new_task_type` (the `blanket` part is
+whatever name you registered the server under);
+`/mcp__blanket__new_task_type` also works. Other clients surface prompts
+their own way. `description` is optional because some clients, Claude
+Code among them, split prompt arguments on whitespace, so a multi-word
+description may arrive as its first word. The prompt text tells the
+agent to treat a description as possibly truncated, check it against the
+conversation, and ask the user if the task is still unclear.
+
+It is create-tier because every step after the first calls a create-tier
+tool; in `readonly` mode the workflow couldn't be carried out, so the
+prompt isn't offered. Prompts aren't part of `tools/list` — a client
+fetches the text only when the user invokes one — so they don't count
+against the context budget below.
+
+The `blanket-task-type` Claude Code skill carries the same workflow for
+sessions without this server connected, using the `blanket` CLI instead.
+
 ## Context cost
 
 `tools/list` plus the server's instructions text is kept under **5,000
