@@ -120,7 +120,7 @@ func (s *ServerConfig) registerReadonlyMCPTools(srv *mcp.Server, mode string) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "blanket_docs",
 		Description: fmt.Sprintf(
-			"Fetch a blanket doc page (%s). Read 'authoring' before writing a task type.",
+			"Search blanket docs, or read a page (%s) or one section of it.",
 			strings.Join(docs.Keys(), ", ")),
 	}, s.mcpDocs)
 	mcp.AddTool(srv, &mcp.Tool{

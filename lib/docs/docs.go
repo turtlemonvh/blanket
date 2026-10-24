@@ -1,5 +1,7 @@
 // Package docs serves the markdown pages under docs/ (keyed by short name)
-// to the blanket_docs MCP tool.
+// to the blanket_docs MCP tool, whole or one section at a time, and
+// searches them with an in-memory BM25 index over their sections
+// (index.go).
 //
 // go:embed can't reach files above its own package directory, so this
 // package can't embed ../docs/*.md itself -- see #66. Instead main (the
@@ -38,11 +40,13 @@ var (
 
 // SetFS registers the filesystem containing the markdown doc pages (the
 // contents of docs/, not docs/ itself). Call it once at startup before
-// Page is used; it may also be called again in tests.
+// Page is used; it may also be called again in tests, which discards
+// any index built from the previous filesystem.
 func SetFS(f fs.FS) {
 	mu.Lock()
 	defer mu.Unlock()
 	files = f
+	state = &indexState{}
 }
 
 // Keys returns the valid page keys, sorted, for building the blanket_docs

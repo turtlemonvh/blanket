@@ -32,7 +32,7 @@ Ten tools, gated by `mcp.mode`:
 
 | Tool | Args | Tier |
 | --- | --- | --- |
-| `blanket_docs` | `page` | readonly |
+| `blanket_docs` | `query?`, `page?`, `section?` | readonly |
 | `blanket_task_types` | `name?` | readonly |
 | `blanket_tasks` | `id?`, `states?`, `types?`, `limit?`, `log_lines?` | readonly |
 | `blanket_workers` | `id?`, `log_lines?` | readonly |
@@ -79,6 +79,32 @@ Every tool returns plain text (compact tables for lists, a labeled
 key-value block for a single item), not JSON — this keeps the response
 small and just as readable to an agent.
 
+### `blanket_docs`: search, page, section
+
+The docs are searchable and fetchable a section at a time, so more
+guidance can live in them without costing context up front
+(turtlemonvh/blanket#230):
+
+- **`query`** returns the 5 best-matching sections across every page:
+  page key, section id, heading, and a ~200-character snippet.
+- **`page`** alone returns the whole page if it is at most 12,000
+  characters (`authoring`, which the server instructions point at, is
+  well under). A bigger page (`api`, `flow`, `upgrade`, `usage`) returns
+  a table of contents — section ids, headings, sizes — plus its opening
+  text.
+- **`page` + `section`** returns that section, `##` sections including
+  their `###` subsections. One over the cap returns its subsections'
+  table of contents instead: refused and redirected, never truncated.
+
+Section ids are GitHub-style heading anchors (`#errors`), the same ones
+the docs link to; the leading `#` is optional. Search is BM25 over the
+`#`/`##`/`###` sections in `lib/docs`, heading terms weighted ×3, a
+lowercase alphanumeric tokenizer with a short stop-word list and no
+stemming. The index lives in memory only: the server starts building it
+in the background at startup (a few milliseconds, about 1 MB), and a
+search that arrives first waits for that build rather than seeing an
+empty index.
+
 ## Context cost
 
 `tools/list` plus the server's instructions text is kept under **5,000
@@ -86,10 +112,12 @@ characters (~1,250 tokens)** in the default `mcp.mode = "all"` — the
 worst case, since narrower modes register fewer tools. This is a
 test-enforced budget (`TestToolListFitsContextBudget`), not just a
 target; the actual measured size is logged by that test on every run.
-As of this writing that measured size is 4,976 characters -- 24 short
+As of this writing that measured size is 4,986 characters -- 14 short
 of the budget, which is the tightest it has ever been. Adding another
-doc page means trimming something first; issue #44 tracks the wider
-fix (tool search / dynamic discovery).
+doc page means trimming something first. Server-side tool search was
+considered in #44 and rejected (clients already do it); the fix for
+guidance outgrowing the budget is section-level `blanket_docs` search
+(#230, above), which costs only its arguments up front.
 
 The budget has been raised twice, each time for a tool surface that grew
 rather than prose that sprawled: 4,000 → 4,400 when
@@ -110,8 +138,7 @@ saving, and not a lever to give back. Raising the constant is the last
 resort, and only for a tool surface that genuinely grew.
 
 If you're tight on context budget elsewhere, set `mcp.mode = "readonly"`
-to cut this further, or wait for the tool-search / dynamic-discovery
-mode tracked in issue #44 if the tool count grows.
+to cut this further.
 
 ## Setup
 
