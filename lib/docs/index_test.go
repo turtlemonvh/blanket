@@ -16,10 +16,8 @@ func TestSearch_RealQuestions(t *testing.T) {
 	cases := []struct {
 		query, page, idPart string
 	}{
-		// api.md has no heading of its own for cancel; the endpoint
-		// is listed under "## Tasks".
-		{"how do I cancel a running task", "api", "#tasks"},
-		{"how do I cancel a running task", "flow", "#stopping-a-running-task"},
+		{"how do I cancel a running task", "api", "#cancel-a-task-put-taskidcancel"},
+		{"how do I cancel a running task", "flow", "#cancel-a-running-task-forcetrue"},
 		{"worker tags superset", "tags", ""},
 		{"malformed id 400", "api", "#errors"},
 		{"how do I start a worker", "", "worker"},

@@ -174,11 +174,11 @@ func TestDeleteWorker_InvalidId(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-// TestDeleteWorker_MissingIdIsNoop is deleteWorker's idempotent-delete
-// counterpart to TestDeleteTask_MissingIdIsNoop: a well-formed id naming
-// no worker is not an error, same as deleting one that exists (see
-// deleteWorkerById -> DB.DeleteWorker, a bolt delete of an absent key).
-func TestDeleteWorker_MissingIdIsNoop(t *testing.T) {
+// TestDeleteWorker_MissingIdIs404: the stopped-guard has to load the
+// worker, so a well-formed id naming no worker is a 404 (#246), even with
+// a body claiming "stopped". This ended the endpoint's old
+// idempotent-delete 200.
+func TestDeleteWorker_MissingIdIs404(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()
 	r := s.GetRouter()
@@ -190,7 +190,79 @@ func TestDeleteWorker_MissingIdIsNoop(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// TestDeleteWorker_RunningWorkerNoBodyIs400 is #246's regression test: a
+// bodyless DELETE (what the UI sends) used to skip the stopped-guard and
+// delete a running worker unconditionally.
+func TestDeleteWorker_RunningWorkerNoBodyIs400(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}, Stopped: false}
+	assert.NoError(t, s.DB.UpdateWorker(&w))
+
+	req, _ := http.NewRequest("DELETE", "/worker/"+w.Id.Hex(), nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Cannot delete a worker that has not been stopped")
+
+	_, err := s.DB.GetWorker(w.Id)
+	assert.NoError(t, err, "a running worker must survive a bodyless DELETE")
+}
+
+// TestDeleteWorker_BodyCannotOverrideStopped: the caller no longer gets to
+// report the worker's state. A body claiming "stopped" for a running
+// worker is ignored.
+func TestDeleteWorker_BodyCannotOverrideStopped(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}, Stopped: false}
+	assert.NoError(t, s.DB.UpdateWorker(&w))
+
+	body, err := json.Marshal(&worker.WorkerConf{Id: w.Id, Stopped: true})
+	assert.NoError(t, err)
+
+	req, _ := http.NewRequest("DELETE", "/worker/"+w.Id.Hex(), bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	_, err = s.DB.GetWorker(w.Id)
+	assert.NoError(t, err)
+}
+
+// TestDeleteWorker_StopThenDeleteNoBody is the UI/Playwright sequence: a
+// stop through the API, then a bodyless delete. The stop marks the record
+// stopped synchronously, so the delete is allowed straight away and
+// answers a single clean 200.
+func TestDeleteWorker_StopThenDeleteNoBody(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+	r := s.GetRouter()
+
+	w := worker.WorkerConf{Id: objectid.NewObjectId(), Tags: []string{"exec:bash"}, Stopped: false}
+	assert.NoError(t, s.DB.UpdateWorker(&w))
+
+	req, _ := http.NewRequest("PUT", "/worker/"+w.Id.Hex()+"/stop", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
+
+	req, _ = http.NewRequest("DELETE", "/worker/"+w.Id.Hex(), nil)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"id": "`+w.Id.Hex()+`"}`, rec.Body.String())
+
+	_, err := s.DB.GetWorker(w.Id)
+	assert.Error(t, err)
 }
 
 // --- GET /worker/:id ---

@@ -97,7 +97,7 @@ The path is **relative to the task's result directory** — the same
 directory the task runs in, so a task that writes `result.json` in its
 working directory needs no path at all. It is read once the task reaches
 a terminal state, parsed as JSON, and returned as the `result` field of a
-[synchronous submission's](api.md#synchronous-submission-post-taskwait)
+[synchronous submission's](api.md#wait-for-a-task-to-finish-post-taskwait)
 completion payload.
 
 * A missing file yields `result: null` and is **not** an error — a task

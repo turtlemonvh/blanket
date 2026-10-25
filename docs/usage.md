@@ -83,7 +83,7 @@ longer than `tasks.sync.maxWait` (default 300s) is rejected with a 400
 rather than silently clamped. A task type can declare a
 [`result_file`](task_type_definitions.md#result_file) to have a JSON
 artifact parsed into the response's `result` field. See
-[api.md](api.md#synchronous-submission-post-taskwait) for the full
+[api.md](api.md#wait-for-a-task-to-finish-post-taskwait) for the full
 payload, the response table, and the `tasks.sync.*` config keys.
 
 Two caveats: workers poll for work, so even a trivial task takes roughly
@@ -160,14 +160,14 @@ The same stream is available over HTTP as `POST /task/?wait&stream`
 (NDJSON by default, SSE with `Accept: text/event-stream`), and
 `GET /task/:id/log` serves it for an already-running task with
 `Accept: application/x-ndjson`. See
-[api.md](api.md#streaming-submission-post-taskwaitstream) for the event
+[api.md](api.md#stream-a-task-as-it-runs-post-taskwaitstream) for the event
 schema.
 
 ## Scheduling tasks
 
 Delay a one-shot task, or make it recurring, with `notBefore` / `cron`
 (REST) or `--not-before` / `--cron` (CLI) — mutually exclusive. See
-[task_flow.md](task_flow.md#scheduling-scheduledts--recurring-tasks-turtlemonvhblanket61)
+[task_flow.md](task_flow.md#scheduling-notbefore-and-cron)
 for the full state machine.
 
 ```bash
@@ -238,7 +238,7 @@ Every task response includes a `scheduleDescription` field — a friendly
 rendering of its schedule (e.g. `"Every 5 minutes"`, `"Once, at
 2026-09-05T08:00:00-04:00"`), shown in the `SCHEDULE` column of
 `blanket ps`'s default output. See
-[task_flow.md](task_flow.md#friendly-schedule-text) for details, and its
+[task_flow.md](task_flow.md#friendly-schedule-text-scheduledescription) for details, and its
 ["Scan limit"](task_flow.md#scan-limit-schedulermaxscheduled) section for
 the `scheduler.maxScheduled` cap (`POST /task/` returns 429 once hit).
 
