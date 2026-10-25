@@ -315,7 +315,7 @@ func splitSections(page, md string) []Section {
 				break
 			}
 		}
-		id := anchor(h.text)
+		id := Anchor(h.text)
 		if c := seen[id]; c > 0 {
 			seen[id]++
 			id = fmt.Sprintf("%s-%d", id, c)
@@ -330,9 +330,10 @@ func splitSections(page, md string) []Section {
 	return out
 }
 
-// anchor is GitHub's heading-to-anchor rule: lowercase, drop everything
-// but letters, digits, spaces, '-' and '_', then spaces become '-'.
-func anchor(heading string) string {
+// Anchor is GitHub's heading-to-anchor rule, without the '#': lowercase,
+// drop everything but letters, digits, spaces, '-' and '_', then spaces
+// become '-'. Exported for the UI's docs renderer (server/ui_docs.go).
+func Anchor(heading string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(heading) {
 		switch {
@@ -419,4 +420,22 @@ func snippet(text string, terms []string, width int) string {
 		out += "..."
 	}
 	return out
+}
+
+// Sections returns page's sections in document order -- the same ones
+// Search ranks and links to by ID, so a renderer can give its headings
+// matching anchors.
+func Sections(page string) ([]Section, error) {
+	if _, ok := pages[page]; !ok {
+		return nil, unknownPageError(page)
+	}
+	idx, err := defaultIndex()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Section, 0, len(idx.byPage[page]))
+	for _, i := range idx.byPage[page] {
+		out = append(out, idx.sections[i])
+	}
+	return out, nil
 }
