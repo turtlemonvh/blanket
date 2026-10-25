@@ -378,19 +378,31 @@ func (c *WorkerConf) SetLogfileName() error {
 	if c.Logfile != "" {
 		return nil
 	}
+	name, err := c.TemplateLogfile()
+	if err != nil {
+		return err
+	}
+	c.Logfile = name
+	return nil
+}
 
+// TemplateLogfile is the log file workers.logfileNameTemplate names for
+// this worker, ignoring any Logfile already set. The server uses it both
+// to decide where a worker it launches logs (it never takes a path from a
+// request) and to decide which file the worker-log routes may serve: a
+// stored Logfile is only honored when it is this path
+// (turtlemonvh/blanket#101 review, M1).
+func (c WorkerConf) TemplateLogfile() (string, error) {
 	tmpl, err := template.New("logfile").Parse(viper.GetString("workers.logfileNameTemplate"))
 	if err != nil {
-		return err
+		return "", err
 	}
+	c.Logfile = ""
 	var logfileNameBts bytes.Buffer
-	err = tmpl.Execute(&logfileNameBts, c)
-	if err != nil {
-		return err
+	if err := tmpl.Execute(&logfileNameBts, &c); err != nil {
+		return "", err
 	}
-
-	c.Logfile = logfileNameBts.String()
-	return nil
+	return logfileNameBts.String(), nil
 }
 
 // Registers itself in the database
