@@ -261,11 +261,18 @@ func (s *ServerConfig) AuthEnabled() bool {
 	return s.authOn
 }
 
-// refreshAuthEnabled drops the cached answer after a token change.
+// refreshAuthEnabled drops the cached answer after a token change. If that
+// change switched auth on or off, it also closes every MCP session, since
+// a session's binding to a caller is fixed when it opens (see
+// closeMCPSessions). An answer that wasn't cached yet counts as a change.
 func (s *ServerConfig) refreshAuthEnabled() {
 	s.authMu.Lock()
+	wasKnown, was := s.authKnown, s.authOn
 	s.authKnown = false
 	s.authMu.Unlock()
+	if now := s.AuthEnabled(); !wasKnown || now != was {
+		s.closeMCPSessions()
+	}
 }
 
 func (s *ServerConfig) lastUsedBatcher() *auth.LastUsedBatcher {

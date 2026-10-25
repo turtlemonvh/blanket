@@ -42,8 +42,13 @@ caller's `tools/list` shows only the tools its token's scopes allow:
 `mcp.mode` still decides which tools exist. Scopes only narrow it, so an
 operator token on a `readonly` server sees the five read tools. A token's
 type and task restrictions apply inside the tools too: a token limited to
-`transcribe` can't submit anything else, and it lists only the tasks it may
-read.
+`transcribe` can't submit anything else or write any other task type, and
+it lists only the tasks it may read.
+
+Each MCP session is bound to the token that opened it. Turning auth on or
+off (`blanket auth init` or `disable`) closes every open session, so a
+client connected before the change gets a 404 for its session and
+reconnects, this time with its token.
 
 ## What's exposed
 

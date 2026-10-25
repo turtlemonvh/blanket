@@ -668,6 +668,13 @@ grep -q "$auth_task_id" "$WORKDIR/auth-ps.out" || fail "blanket ps with auth on 
 "$BINARY" --config "$CONFIG" auth init --code AAAA-AAAA > /dev/null 2>&1 \
     && fail "a second auth init succeeded"
 
+# Disable is local only: another admin token, even from loopback, is
+# refused. Only the credentials-file token turns auth off.
+other_admin="$("$BINARY" --config "$CONFIG" token create --name smoke-other-admin --scopes admin 2> /dev/null)" \
+    || fail "blanket token create failed"
+status="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $other_admin" "$BASE/auth/disable")"
+[[ "$status" == "403" ]] || fail "POST /auth/disable with a non-credentials-file admin token should be 403, got $status"
+
 "$BINARY" --config "$CONFIG" auth disable --yes > "$WORKDIR/auth-disable.out" 2>&1 \
     || fail "blanket auth disable failed: $(cat "$WORKDIR/auth-disable.out")"
 status="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/task/")"

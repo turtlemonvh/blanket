@@ -470,7 +470,8 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.DELETE("/token/:id", s.revokeToken)
 
 	// Bootstrap (turtlemonvh/blanket#101): init is open but needs the
-	// setup code; disable needs an admin token. See server/serve_auth.go.
+	// setup code; disable needs the credentials-file admin token, from loopback.
+	// See server/serve_auth.go.
 	r.GET("/auth/status", s.authStatus)
 	r.POST("/auth/init", s.authInit)
 	r.POST("/auth/disable", s.authDisable)

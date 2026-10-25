@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -183,6 +184,53 @@ func (s *ServerConfig) mcpCaller(req *mcp.CallToolRequest) (*auth.Principal, err
 	}
 	return auth.AuthOffPrincipal(), nil
 }
+
+// closeMCPSessions ends every open MCP session and drops the per-scope
+// server cache. Called when auth switches on or off: a session opened
+// while auth was off was created with no TokenInfo, so go-sdk bound it to
+// no user, and any token could later drive it -- against the auth-off
+// server, whose tools/list shows every tool (turtlemonvh/blanket#101
+// review, L4). Closing a session removes its id from the streamable
+// handler, so a client holding one gets 404 and starts a new session,
+// which binds to its token as usual.
+//
+// ServerSession.Close waits for in-flight calls (a blanket_run_task can
+// wait minutes), so the sessions close in parallel and this returns after
+// mcpSessionCloseWait at most. Close refuses new requests on a session
+// straight away, so a session still draining can't be used either.
+func (s *ServerConfig) closeMCPSessions() {
+	s.mcpMu.Lock()
+	servers := s.mcpServers
+	s.mcpServers = nil
+	s.mcpMu.Unlock()
+
+	var wg sync.WaitGroup
+	n := 0
+	for _, srv := range servers {
+		for sess := range srv.Sessions() {
+			n++
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_ = sess.Close()
+			}()
+		}
+	}
+	if n == 0 {
+		return
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(mcpSessionCloseWait):
+		log.WithField("sessions", n).Warn("auth changed: some MCP sessions are still draining in-flight calls")
+	}
+	log.WithField("sessions", n).Warn("auth changed: closed every open MCP session; clients reconnect with their token")
+}
+
+// mcpSessionCloseWait bounds how long closeMCPSessions waits.
+const mcpSessionCloseWait = 2 * time.Second
 
 // mcpServerFor returns the cached MCP server for p's scope set, building it
 // on first use. The auth-off principal shares one server.

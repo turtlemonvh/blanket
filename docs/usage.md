@@ -545,10 +545,20 @@ reading those task ids. Any token can read and cancel the tasks it created
 itself. See [api.md](api.md#authentication) for exactly what each scope
 opens.
 
+**`--types` is not a sandbox.** Tasks run as the blanket user, and for now
+workers authenticate with the admin credentials file, so any task can read
+that file and act as admin. A type-restricted token is only as confined as
+the commands its allowed types run. If one of them runs something the
+caller can influence (a script path, a shell snippet, an unchecked
+argument), treat the token as admin. turtlemonvh/blanket#257 tracks the fix.
+
 `blanket auth status` shows whether auth is on. `blanket auth disable`
-revokes every token and turns it off again. Run it on the server's host:
-with the server stopped, it needs no token, which also makes it the way
-back in if the admin token is lost.
+revokes every token and turns it off again. It works only on the server's
+host. With the server running it sends the token from the credentials file
+over loopback, and the server refuses any other token, including other
+admin tokens, so leave `--token` and `BLANKET_TOKEN` unset. With the
+server stopped it needs no token, which also makes it the way back in if
+the admin token is lost.
 
 What phase 1 doesn't do yet (turtlemonvh/blanket#101):
 

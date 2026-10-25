@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -381,6 +382,17 @@ func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRe
 	}
 	if strings.ContainsAny(args.Name, `/\`) || args.Name == "." || args.Name == ".." {
 		return nil, nil, fmt.Errorf("name must be a bare task type name, not a path")
+	}
+	// A type restriction narrows types:write the way it narrows submit: a
+	// token limited to listed types may only write those
+	// (turtlemonvh/blanket#101 review, L7). Otherwise it could rewrite a
+	// type it is not allowed to submit, for a broader token to run.
+	caller, err := s.mcpCaller(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !caller.AuthOff() && len(caller.Token.Types) > 0 && !slices.Contains(caller.Token.Types, args.Name) {
+		return nil, nil, fmt.Errorf("this token may only write task types %s", strings.Join(caller.Token.Types, ", "))
 	}
 
 	tt, readErr := tasks.ReadTaskType(strings.NewReader(args.Toml))
