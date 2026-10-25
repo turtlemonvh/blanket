@@ -12,9 +12,9 @@ Every `:id` route (task or worker) follows one rule: a malformed id, one
 that fails to parse as an `objectid.ObjectId` (not valid hex, wrong
 length), is a **400**; a well-formed id naming no record is a **404**.
 A malformed id is a bug in the caller and a missing one may just mean
-"already deleted"; neither is ever a 500. `DELETE /task/:id` and
-`DELETE /worker/:id` are the deliberate exception: both are idempotent
-deletes and answer 200 for a well-formed id naming nothing.
+"already deleted"; neither is ever a 500. `DELETE /task/:id` is the
+deliberate exception: it is an idempotent delete and answers 200 for a
+well-formed id naming nothing.
 
 Most JSON handlers report errors as `{"error": "<message>"}`; a few
 (streaming/tail endpoints, the web UI) return plain text.
@@ -480,7 +480,7 @@ PUT    /worker/:id              # registration + status updates from the worker
 PUT    /worker/:id/heartbeat    # liveness ping; no body
 PUT    /worker/:id/stop         # stop after the current task
 PUT    /worker/:id/restart      # relaunch a stopped worker
-DELETE /worker/:id              # remove from the DB; only once stopped
+DELETE /worker/:id              # remove from the DB; 400 unless stopped, 404 if missing
 ```
 
 The worker state machine is in
@@ -502,10 +502,9 @@ owns `stopped`, `stoppedReason`, `lastHeardTs`, `lost`, and the respawn
 bookkeeping (`respawnIntent`, `respawnAttempts`, `lastRespawnTs`). A
 re-registration clears `lost`, the one server-owned field it may touch.
 
-`DELETE /worker/:id` checks the stopped guard against the request body,
-not the database: a worker deleting itself on exit sends its own record,
-and a body whose `stopped` is not `true` is **400**; a bodiless call (the
-UI's) deletes unconditionally.
+`DELETE /worker/:id` takes no body. It is **400** unless the stored
+record is stopped, **404** if the worker is missing, and **200**
+`{"id": ...}` once deleted.
 
 Worker records carry `pidStartTs` (makes the pid usable as a liveness
 signal despite pid reuse), `lastHeardTs`, `lost` (the reaper believes it

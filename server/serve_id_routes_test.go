@@ -51,11 +51,9 @@ var idRouteCases = []idRouteCase{
 	{"PUT /worker/:id/stop", "PUT", "/worker/%s/stop", http.StatusNotFound},
 	{"PUT /worker/:id/restart", "PUT", "/worker/%s/restart", http.StatusNotFound},
 	{"GET /worker/:id/log/tail", "GET", "/worker/%s/log/tail", http.StatusNotFound},
-	// DELETE /worker/:id is excluded here: unlike DELETE /task/:id it
-	// requires a JSON body (deleteWorker's "is this worker stopped" check),
-	// so a bodyless request 400s on that bind rather than on id
-	// resolution -- see TestDeleteWorker_InvalidId / _MissingIdIsNoop in
-	// serve_workers_test.go for its malformed/missing coverage instead.
+	// Not idempotent like DELETE /task/:id: its stopped-guard loads the
+	// worker, so a missing one is a 404 (#246).
+	{"DELETE /worker/:id", "DELETE", "/worker/%s", http.StatusNotFound},
 
 	// UI (rendered error/flash pattern rather than JSON, but same status codes)
 	{"GET /ui/tasks/:id", "GET", "/ui/tasks/%s", http.StatusNotFound},
