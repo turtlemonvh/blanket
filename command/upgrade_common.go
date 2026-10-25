@@ -199,15 +199,7 @@ func opsCall(ctx context.Context, port int, method, path string, body []byte) ([
 // which turned any drain that had to wait for a worker into a failed upgrade
 // (turtlemonvh/blanket#227). The caller's context deadline is still the
 // bound; only the header timer is dropped.
-var longOpsClient = func() *http.Client {
-	t, ok := httpx.Client().Transport.(*http.Transport)
-	if !ok {
-		return &http.Client{}
-	}
-	t = t.Clone()
-	t.ResponseHeaderTimeout = 0
-	return &http.Client{Transport: t}
-}()
+var longOpsClient = httpx.LongClient()
 
 // opsCallLong is opsCallTimeout for the calls longOpsClient exists for.
 func opsCallLong(port int, method, path string, body []byte, timeout time.Duration) ([]byte, error) {

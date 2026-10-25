@@ -51,14 +51,16 @@ func TestOpensAPre030Database(t *testing.T) {
 	// The meta bucket now exists and reads as version 1.
 	v, err := DB.SchemaVersion()
 	require.NoError(t, err)
-	assert.Equal(t, database.InitialSchemaVersion, v)
+	assert.Equal(t, DefaultRegistry.TargetVersion(), v)
 
-	// No backup was taken, because nothing was migrated. A mandatory
-	// backup on every first open of every old install would be a nasty
-	// surprise on a big database.
+	// Exactly one backup, taken at v1 before the first real migration
+	// (v2, the auth tokens bucket) ran. Before that migration existed this
+	// asserted no backup at all; the backup is the price of migrating, and
+	// it is paid once.
 	backups, err := ListBackups(DefaultBackupDir(path))
 	require.NoError(t, err)
-	assert.Empty(t, backups, "opening an unstamped database migrates nothing, so it backs up nothing")
+	require.Len(t, backups, 1, "migrating a pre-0.3.0 database takes the mandatory backup first")
+	assert.Contains(t, filepath.Base(backups[0]), "blanket-1-")
 
 	// The records come back unchanged, with the fields that did not exist
 	// yet decoding to their zero values rather than to an error.
@@ -102,7 +104,7 @@ func TestOpensAPre030Database(t *testing.T) {
 	require.NoError(t, err)
 	v2, err := DB2.SchemaVersion()
 	require.NoError(t, err)
-	assert.Equal(t, database.InitialSchemaVersion, v2)
+	assert.Equal(t, DefaultRegistry.TargetVersion(), v2)
 	task2, err := DB2.GetTask(fixture.TaskId)
 	require.NoError(t, err)
 	assert.Equal(t, task, task2)

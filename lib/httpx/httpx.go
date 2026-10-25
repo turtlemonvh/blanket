@@ -77,26 +77,40 @@ const (
 // Note there is no http.Client.Timeout: that would also cap streaming
 // responses. Bounding a whole request is the caller's job, via a context
 // deadline (see doOnce).
-var sharedClient = &http.Client{
-	Transport: &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   DialTimeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ResponseHeaderTimeout: ResponseHeaderTimeout,
-		TLSHandshakeTimeout:   DialTimeout,
-		ExpectContinueTimeout: 1 * time.Second,
-		MaxIdleConns:          16,
-		MaxIdleConnsPerHost:   8,
-		IdleConnTimeout:       60 * time.Second,
-	},
+var baseTransport = &http.Transport{
+	DialContext: (&net.Dialer{
+		Timeout:   DialTimeout,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ResponseHeaderTimeout: ResponseHeaderTimeout,
+	TLSHandshakeTimeout:   DialTimeout,
+	ExpectContinueTimeout: 1 * time.Second,
+	MaxIdleConns:          16,
+	MaxIdleConnsPerHost:   8,
+	IdleConnTimeout:       60 * time.Second,
 }
+
+var sharedClient = &http.Client{Transport: &authTransport{base: baseTransport}}
+
+// longClient is sharedClient without ResponseHeaderTimeout, for calls that
+// answer only when they are done (a ?wait submit, an ops drain). The
+// caller's context deadline is what bounds them.
+var longClient = func() *http.Client {
+	t := baseTransport.Clone()
+	t.ResponseHeaderTimeout = 0
+	return &http.Client{Transport: &authTransport{base: t}}
+}()
 
 // Client returns the shared client, for the handful of callers that need to
 // drive an http.Request themselves (streaming responses, say) rather than
 // going through Do/DoOnce.
 func Client() *http.Client {
 	return sharedClient
+}
+
+// LongClient is Client without the response-header timeout; see longClient.
+func LongClient() *http.Client {
+	return longClient
 }
 
 // Result is a successful (2xx) response.

@@ -58,7 +58,7 @@ func TestBackupProducesAnOpenableCopy(t *testing.T) {
 
 	v, err := copyDB.SchemaVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 1, v)
+	assert.Equal(t, DefaultRegistry.TargetVersion(), v)
 }
 
 func TestBackupFilenameCarriesVersionAndAWindowsSafeTimestamp(t *testing.T) {
@@ -71,7 +71,7 @@ func TestBackupFilenameCarriesVersionAndAWindowsSafeTimestamp(t *testing.T) {
 	require.NoError(t, err)
 
 	name := filepath.Base(backupPath)
-	assert.True(t, strings.HasPrefix(name, "blanket-1-"), "got %q", name)
+	assert.True(t, strings.HasPrefix(name, fmt.Sprintf("blanket-%d-", DefaultRegistry.TargetVersion())), "got %q", name)
 	assert.True(t, strings.HasSuffix(name, ".db"), "got %q", name)
 	// Windows filenames cannot contain a colon, so the RFC3339 timestamp
 	// has its colons swapped out. A backup format that works on two of
@@ -208,7 +208,7 @@ func TestFreeSpaceUnknownStillBacksUp(t *testing.T) {
 // advisory.
 func TestMigrationRefusesWhenTheBackupCannotBeTaken(t *testing.T) {
 	path := newTempDBPath(t)
-	db := openRaw(t, path)
+	db := openExisting(t, path)
 
 	err := PrepareDatabase(db, &PrepareOptions{
 		Registry:  MustNewRegistry(testMigration(2)),
