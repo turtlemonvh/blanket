@@ -69,7 +69,11 @@ export default defineConfig({
   webServer: process.env.BLANKET_URL
     ? undefined
     : {
-        command: `${process.env.BLANKET_BIN ?? './blanket-linux-amd64'} -c testdata/blanket.test.json`,
+        // The config puts the database in /tmp/blanket-e2e-data, so the
+        // files the server writes beside it (setup-code, credentials,
+        // backups, the lock sidecar) never land in the repo. Bolt won't
+        // create the directory itself.
+        command: `mkdir -p /tmp/blanket-e2e-data && ${process.env.BLANKET_BIN ?? './blanket-linux-amd64'} -c testdata/blanket.test.json`,
         cwd: '../../',
         url: 'http://localhost:8773',
         reuseExistingServer: true,

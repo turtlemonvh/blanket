@@ -1,5 +1,6 @@
 {
   "port": 8773,
+  "database": "/tmp/blanket-e2e-data/blanket.db",
   "tasks": {
     "typesPaths": ["./testdata/types", "./tests/e2e/types"],
     "resultsPath": "/tmp/blanket-test-results"
