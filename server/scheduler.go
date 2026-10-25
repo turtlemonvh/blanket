@@ -281,6 +281,7 @@ func (s *ServerConfig) fireOnce(tmpl *tasks.Task, now time.Time) error {
 	}
 	child.ParentId = tmpl.Id
 	child.Tags = append([]string{}, tmpl.Tags...)
+	child.CreatedBy = tmpl.CreatedBy
 
 	if err := s.enqueueTask(context.Background(), &child); err != nil {
 		return err

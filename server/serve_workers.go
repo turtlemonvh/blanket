@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
@@ -9,7 +10,9 @@ import (
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/worker"
+	"io"
 	"net/http"
+	"path/filepath"
 	"time"
 )
 
@@ -254,16 +257,34 @@ func (s *ServerConfig) deleteWorker(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId.Hex()))
 }
 
+// launchWorkerRequest is everything a POST /worker/ caller may choose
+// about the worker it launches. It is deliberately not worker.WorkerConf:
+// that struct also carries the worker's id, its log file path and the
+// server-owned lifecycle fields, and binding it straight from the body let
+// a workers:manage token pick the path the new worker os.Create()s --
+// `{"logfile": "<dataDir>/credentials"}` overwrote the admin credential
+// (turtlemonvh/blanket#101 review, M1). The id is generated, the log file
+// comes from workers.logfileNameTemplate, and an unknown field (logfile,
+// id, pid, ...) is a 400 rather than silently dropped, so a caller relying
+// on one finds out.
+type launchWorkerRequest struct {
+	Tags          []string `json:"tags"`
+	CheckInterval float64  `json:"checkInterval"` // seconds; 0 = default
+}
+
 func (s *ServerConfig) launchNewWorker(c *gin.Context) {
-	var err error
 	if s.refuseSpawnWhilePaused(c) {
 		return
 	}
-	w := worker.WorkerConf{}
-	err = c.BindJSON(&w)
-	if err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+	var req launchWorkerRequest
+	dec := json.NewDecoder(c.Request.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil && err != io.EOF {
+		c.String(http.StatusBadRequest, MakeErrorString("invalid worker request: "+err.Error()+
+			" (accepted fields: tags, checkInterval)"))
+		return
 	}
+	w := worker.WorkerConf{Tags: req.Tags, CheckInterval: req.CheckInterval}
 	s.launchWorker(c, &w)
 }
 
@@ -277,6 +298,13 @@ var ErrWorkerNotRegistered = errors.New("worker was not found in the database wi
 // registered worker config.
 func (s *ServerConfig) launchWorkerAndWait(ctx context.Context, w *worker.WorkerConf) (worker.WorkerConf, error) {
 	w.Daemon = true
+	// Never hand a stored or caller-supplied path to the child's
+	// --logfile, which it os.Create()s: the restart and respawn paths pass
+	// the record as stored, and PUT /worker/:id lets a worker-scope caller
+	// write that record. The child derives its log file from
+	// workers.logfileNameTemplate instead (turtlemonvh/blanket#101 review,
+	// M1).
+	w.Logfile = ""
 	if w.CheckInterval == 0 {
 		w.CheckInterval = worker.DEFAULT_CHECK_INTERVAL_SECONDS
 	}
@@ -382,9 +410,42 @@ func (s *ServerConfig) getWorkerLogfile(c *gin.Context) {
 		return
 	}
 
+	logPath, err := workerLogPath(w)
+	if err != nil {
+		c.String(http.StatusNotFound, fmt.Sprintf(`Error: %s`, err.Error()))
+		return
+	}
+
 	// Open file and send all contents
 	// https://godoc.org/github.com/gin-gonic/gin#Context.File
-	c.File(w.Logfile)
+	c.File(logPath)
+}
+
+// errWorkerLogNotServed is workerLogPath's refusal.
+var errWorkerLogNotServed = errors.New("this worker's log file is not the one workers.logfileNameTemplate names, so the server does not serve it; read it on disk")
+
+// workerLogPath is the file the worker-log routes (and the MCP workers
+// tool) may read for w: the path workers.logfileNameTemplate names for
+// it, and only when the stored Logfile is that path.
+//
+// The stored Logfile is written by whoever holds the worker scope
+// (PUT /worker/:id), while these routes answer any read token, so serving
+// it as stored would let the first point the second at any file the
+// server can read -- the credentials file included
+// (turtlemonvh/blanket#101 review, M1). An exact match is stricter than
+// "somewhere under the log directory" on purpose: with the default
+// template that directory is the server's working directory, which may
+// well be the data directory. A worker started by hand with its own
+// --logfile keeps its log on disk only.
+func workerLogPath(w worker.WorkerConf) (string, error) {
+	want, err := w.TemplateLogfile()
+	if err != nil {
+		return "", err
+	}
+	if w.Logfile == "" || filepath.Clean(w.Logfile) != filepath.Clean(want) {
+		return "", errWorkerLogNotServed
+	}
+	return want, nil
 }
 
 // Stream out worker log
@@ -405,7 +466,11 @@ func (s *ServerConfig) streamWorkerLog(c *gin.Context) {
 		return
 	}
 
-	stdoutPath := w.Logfile
+	stdoutPath, err := workerLogPath(w)
+	if err != nil {
+		c.String(http.StatusNotFound, MakeErrorString(err.Error()))
+		return
+	}
 	sub, err := tailed_file.Follow(stdoutPath)
 	if err != nil {
 		c.String(http.StatusInternalServerError, "Error opening logfile stream")

@@ -5,6 +5,82 @@ The blanket server exposes a JSON REST API on the configured port
 HTMX UI, the CLI, and any external client. All bodies are JSON unless
 noted otherwise.
 
+## Authentication
+
+Authentication is **off** until someone sets it up (turtlemonvh/blanket#101;
+the design is `docs/design/auth.md`). While it is off every route is open,
+as it always was, and every response carries `X-Blanket-Auth: off`.
+
+Auth is on exactly when a token that isn't worker-only exists. From then on
+every request needs
+
+```
+Authorization: Bearer blk_...
+```
+
+A missing, malformed, unknown, or expired token gets **401** with a
+`WWW-Authenticate: Bearer` header. A valid token without the route's scope
+gets **403**. Both have a `{"error": "..."}` body. A browser asking for a
+`/ui/` page gets a short HTML page instead, because the web UI has no login
+until a later phase.
+
+Tokens carry **scopes**, usually through a preset:
+
+| Scope | Opens |
+|---|---|
+| `read` | `GET` on tasks, task logs, `/results/*`, task types, workers, worker logs, `/schedule/describe`, `/ui/*`, the SSE streams, `/ops/status/` |
+| `submit` | `POST /task/` (and `?wait`), `POST /ui/tasks` |
+| `tasks:manage` | `DELETE /task/:id`, `PUT /task/:id/{cancel,pause,resume,schedule}`, `PUT /ui/series/:id/*` |
+| `types:write` | MCP `blanket_write_task_type` |
+| `workers:manage` | `POST /worker/`, `PUT /worker/:id/{stop,restart}`, `DELETE /worker/:id`, `POST /ui/workers` |
+| `worker` | `POST /task/claim/:workerid`, `PUT /task/:id/{run,progress,finish}`, `PUT /worker/:id{,/heartbeat}` |
+| `admin` | everything, plus `/token/`, `/config/`, `/ops/*` other than `/ops/status/`, and `/mcp` for now |
+
+Presets: `viewer` = read; `agent` = read, submit; `operator` = read,
+submit, tasks:manage, types:write, workers:manage; `admin` = admin.
+
+A token may also carry **restrictions**. `types` limits `submit` to those
+task types, and limits reads to tasks of them. `tasks` limits reads to
+those task ids. Restricted tokens get filtered results from `GET /task/`,
+and 403 from a task route or `/results/<taskid>/...` outside their
+restrictions. The UI pages, SSE streams and worker logs show many tasks at
+once, so they refuse restricted tokens.
+
+> **Warning: a type restriction is not a sandbox.** It limits which task
+> types a token may submit, not what those tasks can do once they run. A
+> task runs as the blanket user, and while workers authenticate with the
+> host's admin credentials file (until per-worker tokens, auth phase 2),
+> any task can read `<dataDir>/credentials` and so act as admin. A
+> type-restricted token is only as confined as the commands its allowed
+> types run: if any of them runs a command the caller can influence (a
+> script path, a shell snippet, an unvalidated argument), treat the token
+> as admin-equivalent. The structural fix is tracked in
+> turtlemonvh/blanket#257.
+
+The About page (`/ui/about`) shows the resolved settings and the config
+file only to an admin token, matching `GET /config/`. Other tokens see the
+version alone.
+
+A token can always read the tasks it created, and cancel them without
+`tasks:manage`. Each task records its creator as `createdBy`.
+
+Always open: `/version`, `/`, `/ui/static/*`, `/ui/manifest.webmanifest`.
+A route missing from the table in `server/auth.go` needs `admin`.
+
+```
+GET    /token/        # list tokens (never their values)          admin
+POST   /token/        # mint one; the value is in the response once admin
+                      # body: {"name": "...", "scopes": ["agent"],
+                      #        "types": [...], "tasks": [...],
+                      #        "expires": "90d"}
+DELETE /token/:id     # revoke; 409 for the last admin token      admin
+```
+
+The `/token/` routes need a real admin token even while auth is off, so
+nobody can mint the first token from the network. `worker` tokens are
+minted by the server for the workers it launches, so `POST /token/`
+refuses them.
+
 ## Errors
 
 Every `:id` route (task or worker) applies one rule consistently: an id
@@ -502,10 +578,21 @@ GET /worker/:id/log/tail        # last N lines of worker log
 GET /worker/:id/logs            # full logfile download
 ```
 
+The three log routes serve only the file `workers.logfileNameTemplate`
+names for that worker, and only when the worker's stored `logfile` is that
+file. The worker writes the stored path itself, so serving it as given
+would let anything holding the `worker` scope point a read token at any
+file the server can read. A worker started by hand with its own
+`--logfile` keeps its log on disk only, and these routes answer 404 for it.
+
 Lifecycle.
 
 ```
-POST   /worker/                 # launch a new worker (used by the UI)
+POST   /worker/                 # launch a new worker
+                                 # body: {"tags": [...], "checkInterval": 2}
+                                 # any other field (id, logfile, ...) is a
+                                 # 400: the server picks the id, and the log
+                                 # file comes from workers.logfileNameTemplate
 PUT    /worker/:id              # initial creation + status updates from worker
                                  # field-level merge: the worker owns pid,
                                  # pidStartTs, logfile, startedTs, tags,
@@ -516,7 +603,9 @@ PUT    /worker/:id/stop         # stop after current task; sets Stopped=true
                                  # ?force=true also sends an immediate kill
                                  # signal to the worker process
 PUT    /worker/:id/restart      # re-start an existing stopped worker
-                                 # (clears Stopped server-side, then relaunches)
+                                 # (clears Stopped server-side, then relaunches;
+                                 # the new process logs to the template path,
+                                 # never to the stored logfile)
 DELETE /worker/:id              # remove from DB; only valid if stopped
 ```
 
@@ -639,9 +728,10 @@ Anything missing either requirement gets **403** with
 `{"error": "..."}`. `curl`, a script, and the blanket CLI are unaffected:
 they set the header and connect from loopback.
 
-There is deliberately no auth token yet — loopback-only covers the
-single-machine install, which is the only deployment shape blanket has
-today.
+With authentication on (see "Authentication" above), every `/ops/` route
+except `/ops/status/` also needs an `admin` token. Loopback alone no longer
+passes, which matters because `tailscale serve` makes every tailnet peer
+look like loopback.
 
 ### `POST /ops/backup`
 

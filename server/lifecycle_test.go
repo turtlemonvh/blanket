@@ -104,9 +104,13 @@ func TestShutdown_CompletesWithAllStreamingRoutesOpen(t *testing.T) {
 	}
 	require.NoError(t, s.DB.SaveTask(&task))
 
-	workerLog := filepath.Join(t.TempDir(), "worker.log")
+	// The worker-log routes serve only the file the template names.
+	useWorkerLogTemplate(t, t.TempDir())
+	w := worker.WorkerConf{Id: objectid.NewObjectId()}
+	workerLog, err := w.TemplateLogfile()
+	require.NoError(t, err)
+	w.Logfile = workerLog
 	writeSeedLine(t, workerLog)
-	w := worker.WorkerConf{Id: objectid.NewObjectId(), Logfile: workerLog}
 	require.NoError(t, s.DB.UpdateWorker(&w))
 
 	bs, base := startTestListener(t, s)

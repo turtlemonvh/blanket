@@ -7,6 +7,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib/auth"
 	bolt "github.com/turtlemonvh/blanket/lib/bolt"
 	"github.com/turtlemonvh/blanket/lib/timing"
 	"github.com/turtlemonvh/blanket/server"
@@ -65,8 +66,17 @@ var RootCmd = &cobra.Command{
 		// DB and Q initializers are fatal if they don't succeed
 		// Serve gracefully
 
+		// A database that can't store tokens would leave Tokens nil,
+		// which the server reads as "auth can never be on": every route
+		// open, silently. Refuse to start instead (turtlemonvh/blanket#101
+		// review, L7).
+		tokens, ok := DB.(auth.Store)
+		if !ok {
+			log.Fatalf("database %T does not implement the auth token store; refusing to serve without auth", DB)
+		}
 		c := server.ServerConfig{
 			DB:          DB,
+			Tokens:      tokens,
 			Q:           bolt.NewBlanketBoltQueue(db),
 			Port:        viper.GetInt("port"),
 			ResultsPath: viper.GetString("tasks.resultsPath"),

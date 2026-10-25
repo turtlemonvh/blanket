@@ -322,7 +322,12 @@ func (s *ServerConfig) mcpWorkers(ctx context.Context, req *mcp.CallToolRequest,
 		}
 
 		logLines := clampLogLines(args.LogLines)
-		logTail, _ := tailLines(w.Logfile, logLines)
+		var logTail string
+		if logPath, err := workerLogPath(w); err == nil {
+			logTail, _ = tailLines(logPath, logLines)
+		} else {
+			logTail = err.Error() + "\n"
+		}
 
 		var b strings.Builder
 		fmt.Fprintf(&b, "id: %s\n", w.Id.Hex())
