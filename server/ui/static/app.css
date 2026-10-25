@@ -552,6 +552,56 @@ tr:hover td { background: #fafbfc; }
   gap: 0.5rem;
 }
 
+/* --- Docs (docs.html, doc_page.html; turtlemonvh/blanket#234) ---------
+ * The rendered markdown sits in .doc-body. Wide tables and code blocks
+ * scroll inside themselves so they never widen the page on a phone. */
+.docs-search { display: flex; align-items: center; gap: 0.6rem; margin: 1rem 0 0.5rem; }
+.docs-search label { font-weight: 600; }
+.docs-search input[type="search"] { flex: 1; max-width: 32rem; }
+.docs-hits { padding-left: 1.5rem; margin: 0.5rem 0 1rem; }
+.docs-hits li { margin-bottom: 0.6rem; }
+.docs-snippet { font-size: 0.85rem; margin-top: 0.15rem; }
+.docs-pages { padding-left: 1.25rem; }
+.docs-pages a, .docs-hits a, .docs-crumbs a, .docs-toc a { color: var(--accent); }
+.docs-pages li { margin-bottom: 0.3rem; }
+.docs-pages .muted { font-size: 0.85rem; }
+.docs-crumbs { margin: 0 0 0.75rem; font-size: 0.9rem; }
+.docs-toc {
+  float: right;
+  max-width: 18rem;
+  margin: 0 0 1rem 1.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+.docs-toc ul { padding-left: 1rem; margin: 0.4rem 0 0; }
+
+.doc-body { line-height: 1.55; max-width: 60rem; }
+.doc-body a { color: var(--accent); }
+.doc-body h1 { margin-top: 0; font-size: 1.6rem; }
+.doc-body h2 { margin-top: 2rem; padding-bottom: 0.25rem; border-bottom: 1px solid var(--border); }
+.doc-body h1, .doc-body h2, .doc-body h3, .doc-body h4 { scroll-margin-top: 1rem; }
+.doc-body code {
+  font-size: 0.85em;
+  background: var(--panel);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+.doc-body pre {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.75rem;
+  overflow-x: auto;
+  line-height: 1.4;
+}
+.doc-body pre code { background: none; padding: 0; }
+.doc-body table { display: block; overflow-x: auto; width: auto; margin: 0.75rem 0; }
+.doc-body th, .doc-body td { border: 1px solid var(--border); }
+.doc-body blockquote { margin: 0.75rem 0; padding: 0 1rem; border-left: 3px solid var(--border); color: var(--muted); }
+
 /* ---------------------------------------------------------------------
  * Phone layout (turtlemonvh/blanket#216).
  *
@@ -575,6 +625,9 @@ tr:hover td { background: #fafbfc; }
 .tabbar { display: none; }
 
 @media (max-width: 640px) {
+  .docs-toc { float: none; max-width: none; margin: 0 0 1rem; }
+  .docs-search { flex-wrap: wrap; }
+
   /* !important: it has to beat the card rules' table.cards td below. */
   .d-only { display: none !important; }
 

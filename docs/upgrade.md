@@ -21,7 +21,7 @@ blanket rollback --yes      # change your mind
 slot](#rollback-slots), takes a database backup before anything moves, and
 walks the running server through the [restart state
 machine](#the-restart-state-machine). Everything it does is also
-[printable](#print-plan) and doable by hand.
+[printable](#--print-plan) and doable by hand.
 
 If you are upgrading from a blanket released before 0.3.0:
 
@@ -929,7 +929,7 @@ this one that is not this attempt) has the state machine. `blanket upgrade
 --abort` clears it, as does `POST /ops/restart/abort`; it also clears
 itself after `restart.deadline`.
 
-**"a server came back but reports <the old version>"** — something is
+**"a server came back but reports &lt;the old version&gt;"** — something is
 serving the port that is neither the process that was replaced nor the one
 that was installed. The usual culprit is a second blanket that was started
 against this install and has been sitting on the database lock: check for

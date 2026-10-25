@@ -813,6 +813,16 @@ GET /ui/partials/task-log?id=<task id>&stream=stdout|stderr|both
                                 # SSE-connected <pre> for a running task, the
                                 # stored tail otherwise. An unrecognized `stream`
                                 # falls back to stdout rather than erroring.
+GET /ui/docs                    # the docs built into the binary (the pages
+                                # blanket_docs serves), with a search box;
+                                # ?q=<query> renders results without JS.
+GET /ui/docs/:page              # one page as HTML; :page is a blanket_docs
+                                # key, else 404. Headings carry the search
+                                # index's section anchors.
+GET /ui/partials/docs-search?q=<query>
+                                # live search results: the top 10 sections
+                                # from the same index as blanket_docs(query=),
+                                # each linking to /ui/docs/:page#<section>.
 ```
 
 `POST /ui/tasks` (the create form) accepts the same scheduling inputs as

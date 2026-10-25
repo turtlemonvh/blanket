@@ -1,0 +1,32 @@
+{{define "content"}}
+<section class="docs">
+    <div class="list-header">
+        <h2>Docs</h2>
+    </div>
+    <p class="muted">
+        The documentation built into this binary: it matches the version
+        you are running and needs no network access.
+    </p>
+
+    {{/* A plain GET form, so search works without htmx; htmx swaps the
+         results in as you type. */}}
+    <form class="docs-search" role="search" action="/ui/docs" method="get">
+        <label for="docs-q">Search the docs</label>
+        <input type="search" id="docs-q" name="q" value="{{.Query}}"
+               placeholder="e.g. cancel a running task" autocomplete="off"
+               hx-get="/ui/partials/docs-search"
+               hx-trigger="input changed delay:250ms, search"
+               hx-target="#docs-results">
+    </form>
+    <div id="docs-results" aria-live="polite">
+        {{template "docs-results" .}}
+    </div>
+
+    <h3>Pages</h3>
+    <ul class="docs-pages">
+        {{range .Pages}}
+        <li><a href="/ui/docs/{{.Key}}">{{.Title}}</a> <span class="muted">{{.Key}}</span></li>
+        {{end}}
+    </ul>
+</section>
+{{end}}
