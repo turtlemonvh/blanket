@@ -50,6 +50,10 @@ Integration recipes — how to run blanket alongside something else.
 - [**Task flow**](task_flow.md) — task and worker state machines,
   end-to-end claim/execute lifecycle.
 - [**Design**](design.md) — origin, design goals, architecture.
+- [**Authentication design brief**](design/auth.md) — proposed
+  design for tokens, scopes, UI login, and worker auth
+  ([#101](https://github.com/turtlemonvh/blanket/issues/101)). Not yet
+  implemented.
 
 Planned work is tracked as [GitHub issues](https://github.com/turtlemonvh/blanket/issues), not in a docs file — see [issue #43](https://github.com/turtlemonvh/blanket/issues/43) for why.
 
