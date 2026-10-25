@@ -46,6 +46,21 @@ and 403 from a task route or `/results/<taskid>/...` outside their
 restrictions. The UI pages, SSE streams and worker logs show many tasks at
 once, so they refuse restricted tokens.
 
+> **Warning: a type restriction is not a sandbox.** It limits which task
+> types a token may submit, not what those tasks can do once they run. A
+> task runs as the blanket user, and while workers authenticate with the
+> host's admin credentials file (until per-worker tokens, auth phase 2),
+> any task can read `<dataDir>/credentials` and so act as admin. A
+> type-restricted token is only as confined as the commands its allowed
+> types run: if any of them runs a command the caller can influence (a
+> script path, a shell snippet, an unvalidated argument), treat the token
+> as admin-equivalent. The structural fix is tracked in
+> turtlemonvh/blanket#257.
+
+The About page (`/ui/about`) shows the resolved settings and the config
+file only to an admin token, matching `GET /config/`. Other tokens see the
+version alone.
+
 A token can always read the tasks it created, and cancel them without
 `tasks:manage`. Each task records its creator as `createdBy`.
 

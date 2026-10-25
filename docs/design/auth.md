@@ -40,6 +40,10 @@ below are what is still open.
 
 - **A wrong route-table row exposes code execution** (mitigated by row 3). The one to stop on.
 - Reading the server's files makes you admin, and a DB copy can clone TOTP (rows 4, 8).
+- A type restriction (row 2) doesn't confine a token whose allowed types run
+  caller-influenced commands: any task can read `<dataDir>/credentials`
+  while workers use it (phase 1). Documented next to `--types`; the
+  structural fix is #257.
 - Bearer tokens are cleartext over plain HTTP off-tailnet.
 - Old workers get 401s until relaunched; `auth init` relaunches them.
 

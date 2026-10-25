@@ -45,7 +45,10 @@ var tokenCreateCmd = &cobra.Command{
 An operator token can write task types, launch workers and submit tasks,
 which together is code execution as the blanket user: treat it like admin.
 
---types limits submit to those task types and read to tasks of them.
+--types limits submit to those task types and read to tasks of them. It is
+not a sandbox: tasks run as the blanket user and can read the admin
+credentials file, so if an allowed type runs a command the caller can
+influence, treat the token as admin (turtlemonvh/blanket#257).
 --tasks limits read to those task ids. A token can always read and cancel
 the tasks it created itself.`,
 	Run: func(cmd *cobra.Command, args []string) {
