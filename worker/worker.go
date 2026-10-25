@@ -63,9 +63,26 @@ var (
 // CLI) should surface it to the user instead of silently clamping.
 var ErrCheckIntervalTooLow = fmt.Errorf("checkInterval must be >= %.1fs", MIN_CHECK_INTERVAL_SECONDS)
 
-// Worker
+// NormalizeTags trims each tag and drops empty ones, so a worker with no
+// tags always carries an empty set rather than [""]. The claim filter
+// treats both the same (#259), but [""] reads like a real tag in the API
+// and the UI.
+func NormalizeTags(tags []string) []string {
+	out := []string{}
+	for _, t := range tags {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
 
-// CLean up id and parsed tags' parse these in cli
+// ParseTags splits a comma-separated tag list, as passed to
+// `blanket worker -t`, through NormalizeTags. An empty string gives an
+// empty set, where strings.Split alone would give [""].
+func ParseTags(raw string) []string {
+	return NormalizeTags(strings.Split(raw, ","))
+}
 
 type WorkerConf struct {
 	Id            objectid.ObjectId `json:"id"`

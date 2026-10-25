@@ -156,13 +156,21 @@ const (
 
 // FIXME: will have to capitalize all these since used outside this module
 type TaskSearchConf struct {
-	JustCounts        bool
-	JustUnclaimed     bool
-	Limit             int
-	Offset            int
-	ReverseSort       bool
-	RequiredTags      []string
-	MaxTags           []string
+	JustCounts    bool
+	JustUnclaimed bool
+	Limit         int
+	Offset        int
+	ReverseSort   bool
+	RequiredTags  []string
+	// MaxTags keeps only tasks whose tags are all in this set. Empty
+	// means "no tag filter" unless EnforceMaxTags is set.
+	MaxTags []string
+	// EnforceMaxTags applies the MaxTags filter even when MaxTags is
+	// empty, so only untagged tasks match. The claim path sets it: a
+	// worker claims a task only if the worker's tags are a superset of
+	// the task's, so a worker with no tags claims only untagged tasks
+	// (turtlemonvh/blanket#259). List and search queries leave it false.
+	EnforceMaxTags    bool
 	SmallestId        objectid.ObjectId
 	LargestId         objectid.ObjectId
 	AllowedTaskStates map[string]bool

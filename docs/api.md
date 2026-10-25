@@ -384,7 +384,9 @@ worker keeps alongside these calls is its
 ### Claim a task: `POST /task/claim/:workerid`
 
 Answers **200** with the claimed task JSON (now `CLAIMED`, `workerId`
-set), **204** when nothing in the queue matches the worker's tags, or
+set), **204** when nothing in the queue matches the worker's tags (a
+task matches when all its tags are among the worker's, so a worker with
+no tags matches only untagged tasks), or
 **404** when the queue entry's task was stopped or deleted meanwhile (the
 entry is acked away; the worker simply tries again).
 

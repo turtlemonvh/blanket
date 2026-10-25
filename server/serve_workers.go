@@ -286,7 +286,17 @@ var ErrWorkerNotRegistered = errors.New("worker was not found in the database wi
 // launchWorkerAndWait starts w as a daemon and polls the database until
 // its Pid is registered or the request-time budget elapses. Returns the
 // registered worker config.
+// startDaemon forks w as a daemonized worker, or calls startDaemonFn in
+// tests.
+func (s *ServerConfig) startDaemon(w *worker.WorkerConf) error {
+	if s.startDaemonFn != nil {
+		return s.startDaemonFn(w)
+	}
+	return w.Run()
+}
+
 func (s *ServerConfig) launchWorkerAndWait(ctx context.Context, w *worker.WorkerConf) (worker.WorkerConf, error) {
+	w.Tags = worker.NormalizeTags(w.Tags)
 	w.Daemon = true
 	if w.CheckInterval == 0 {
 		w.CheckInterval = worker.DEFAULT_CHECK_INTERVAL_SECONDS
@@ -295,7 +305,7 @@ func (s *ServerConfig) launchWorkerAndWait(ctx context.Context, w *worker.Worker
 		return worker.WorkerConf{}, worker.ErrCheckIntervalTooLow
 	}
 
-	if err := w.Run(); err != nil {
+	if err := s.startDaemon(w); err != nil {
 		return worker.WorkerConf{}, err
 	}
 

@@ -5,7 +5,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/worker"
-	"strings"
 )
 
 /*
@@ -23,7 +22,7 @@ var workerCmd = &cobra.Command{
 		InitializeConfig()
 		InitializeLogging()
 
-		workerConf.Tags = strings.Split(workerRawTags, ",")
+		workerConf.Tags = worker.ParseTags(workerRawTags)
 		if workerId != "" {
 			if !objectid.IsObjectIdHex(workerId) {
 				log.WithFields(log.Fields{

@@ -154,10 +154,11 @@ func TestGetTasks(t *testing.T) {
 	req, _ = http.NewRequest("GET", "/task/?states=WAITING", nil)
 	assertResponseLength(t, r, req, 10)
 
-	// Create a worker so that we can claim tasks for it
+	// Create a worker so that we can claim tasks for it. It needs the
+	// task type's tags: a tagless worker claims only untagged tasks (#259).
 	wconf := worker.WorkerConf{
 		Id:      objectid.NewObjectId(),
-		Tags:    []string{},
+		Tags:    []string{"exec:bash", "os:unix"},
 		Stopped: false,
 	}
 	err = s.DB.UpdateWorker(&wconf)

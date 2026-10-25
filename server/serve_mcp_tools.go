@@ -580,14 +580,13 @@ func lastNLines(s string, n int) string {
 }
 
 type blanketLaunchWorkerArgs struct {
-	Tags  []string `json:"tags" jsonschema:"tags the worker can claim tasks for"`
+	Tags  []string `json:"tags,omitempty" jsonschema:"worker capabilities; it claims only tasks whose tags are all in this set, and with none only untagged tasks"`
 	Count int      `json:"count,omitempty" jsonschema:"workers to launch, default 1"`
 }
 
+// mcpLaunchWorker accepts an empty tag set: such a worker claims only
+// untagged tasks, the same as `blanket worker` with no -t (#259).
 func (s *ServerConfig) mcpLaunchWorker(ctx context.Context, req *mcp.CallToolRequest, args blanketLaunchWorkerArgs) (*mcp.CallToolResult, any, error) {
-	if len(args.Tags) == 0 {
-		return nil, nil, fmt.Errorf("tags is required")
-	}
 	count := args.Count
 	if count <= 0 {
 		count = 1
@@ -600,7 +599,11 @@ func (s *ServerConfig) mcpLaunchWorker(ctx context.Context, req *mcp.CallToolReq
 		if err != nil {
 			return nil, nil, err
 		}
-		fmt.Fprintf(&b, "launched worker %s (pid=%d, tags=%s)\n", registered.Id.Hex(), registered.Pid, strings.Join(registered.Tags, ","))
+		tags := strings.Join(registered.Tags, ",")
+		if tags == "" {
+			tags = "(none: claims untagged tasks only)"
+		}
+		fmt.Fprintf(&b, "launched worker %s (pid=%d, tags=%s)\n", registered.Id.Hex(), registered.Pid, tags)
 	}
 	return textResult(b.String())
 }

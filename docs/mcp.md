@@ -40,7 +40,7 @@ Eleven tools, gated by `mcp.mode`:
 | `blanket_write_task_type` | `name`, `toml`, `overwrite?` | create |
 | `blanket_submit_task` | `type`, `env?`, `notBefore?`, `cron?` | create |
 | `blanket_run_task` | `type`, `env?`, `waitSeconds?` | create |
-| `blanket_launch_worker` | `tags`, `count?` | create |
+| `blanket_launch_worker` | `tags?`, `count?` | create |
 | `blanket_cancel_task` | `id`, `force?`, `delete?` | all |
 | `blanket_stop_worker` | `id`, `delete?` | all |
 
@@ -108,6 +108,8 @@ this and give me the output" are different intentions.
 Both need a worker whose tags are a superset of the task type's tags
 before anything actually runs — `blanket_run_task` with no matching
 worker just burns its wait and reports the task still `WAITING`.
+`blanket_launch_worker` with no `tags` starts a worker that claims only
+untagged tasks.
 
 ### Reading a task's log: `blanket_task_logs`
 

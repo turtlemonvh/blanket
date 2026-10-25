@@ -134,6 +134,13 @@ type ServerConfig struct {
 	// `go test` is the test binary. See spawnRespawnedWorker.
 	spawnWorkerFn func(*worker.WorkerConf) (worker.WorkerConf, error)
 
+	// startDaemonFn replaces w.Run() in startDaemon, the fork behind
+	// POST /worker/, the UI form and blanket_launch_worker. Tests only,
+	// for the same reason as spawnWorkerFn; unlike that hook it keeps the
+	// rest of the launch path (tag handling, interval checks, waiting for
+	// registration) under test.
+	startDaemonFn func(*worker.WorkerConf) error
+
 	// instanceMu guards the two facts a restarting server has to be able
 	// to tell a worker about: which process it is, and when that process
 	// started. Both are generated lazily on first use so a hand-built
