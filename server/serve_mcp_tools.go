@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -33,16 +34,39 @@ type blanketDocsArgs struct {
 	// here too cost ~70 characters of the tools/list budget
 	// (turtlemonvh/blanket#44) to say the same thing twice, and the two
 	// copies had already drifted apart from each other and from
-	// lib/docs.
-	Page string `json:"page" jsonschema:"doc page key; the tool description lists the valid values"`
+	// lib/docs. page carries no description at all for the same reason
+	// (turtlemonvh/blanket#230 needed the room for query and section).
+	Query   string `json:"query,omitempty" jsonschema:"search terms"`
+	Page    string `json:"page,omitempty"`
+	Section string `json:"section,omitempty" jsonschema:"section id, e.g. #errors"`
 }
 
+// mcpDocs searches the docs (query), or reads a page or one section of it
+// (turtlemonvh/blanket#230). Pages and sections over docs.MaxChars come
+// back as a table of contents rather than truncated text.
 func (s *ServerConfig) mcpDocs(ctx context.Context, req *mcp.CallToolRequest, args blanketDocsArgs) (*mcp.CallToolResult, any, error) {
-	content, err := docs.Page(args.Page)
+	if args.Query != "" {
+		res, err := docs.Search(args.Query, 5)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(res) == 0 {
+			return textResult(fmt.Sprintf("no sections match %q; pages are: %s", args.Query, strings.Join(docs.Keys(), ", ")))
+		}
+		var b strings.Builder
+		for _, r := range res {
+			fmt.Fprintf(&b, "page=%q section=%q  %s\n  %s\n\n", r.Page, r.ID, r.Heading, r.Snippet)
+		}
+		return textResult(b.String())
+	}
+	if args.Page == "" {
+		return nil, nil, fmt.Errorf("pass query to search, or page (one of: %s)", strings.Join(docs.Keys(), ", "))
+	}
+	v, err := docs.Read(args.Page, args.Section)
 	if err != nil {
 		return nil, nil, err
 	}
-	return textResult(content)
+	return textResult(v.Text())
 }
 
 type blanketTaskTypesArgs struct {
@@ -98,11 +122,11 @@ func clampLogLines(n int) int {
 }
 
 type blanketTasksArgs struct {
-	Id       string   `json:"id,omitempty" jsonschema:"task id; if set, returns detail with a log tail"`
+	Id       string   `json:"id,omitempty" jsonschema:"task id, for detail"`
 	States   []string `json:"states,omitempty" jsonschema:"filter by task state"`
 	Types    []string `json:"types,omitempty" jsonschema:"filter by type name"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"max tasks to list, default 20, max 100"`
-	LogLines int      `json:"log_lines,omitempty" jsonschema:"log tail lines when id set, default 50"`
+	LogLines int      `json:"log_lines,omitempty" jsonschema:"tail lines with id, default 50"`
 }
 
 func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, args blanketTasksArgs) (*mcp.CallToolResult, any, error) {
@@ -126,6 +150,10 @@ func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, a
 		fmt.Fprintf(&b, "state: %s\n", task.State)
 		fmt.Fprintf(&b, "progress: %d%%\n", task.Progress)
 		fmt.Fprintf(&b, "workerId: %s\n", task.WorkerId.Hex())
+		// The task's output files live here, on the worker's machine.
+		// An agent on that same machine can read them directly; one
+		// elsewhere can't, yet (turtlemonvh/blanket#235).
+		fmt.Fprintf(&b, "resultDir: %s\n", task.ResultDir)
 		fmt.Fprintf(&b, "tags: %s\n", strings.Join(task.Tags, ", "))
 		fmt.Fprintf(&b, "createdTs: %d\n", task.CreatedTs)
 		fmt.Fprintf(&b, "lastUpdatedTs: %d\n", task.LastUpdatedTs)
@@ -166,6 +194,115 @@ func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, a
 		fmt.Fprintf(&b, "%-24s %-16s %-8s %d%%\n", t.Id.Hex(), t.TypeId, t.State, t.Progress)
 	}
 	return textResult(b.String())
+}
+
+const (
+	// mcpLogLineChars caps each line blanket_task_logs returns; one
+	// minified-JSON or progress-bar line can otherwise be a whole page.
+	mcpLogLineChars = 2000
+	// mcpLogPageChars is the page size blanket_task_logs refuses past
+	// (~10k tokens), rather than cutting the page short.
+	mcpLogPageChars = 40000
+)
+
+type blanketTaskLogsArgs struct {
+	Id     string `json:"id" jsonschema:"task id"`
+	Stream string `json:"stream,omitempty" jsonschema:"stdout (default) or stderr"`
+	Grep   string `json:"grep,omitempty" jsonschema:"RE2 regex"`
+	// A pointer so an explicit 0 (no context) differs from unset (2).
+	Context *int `json:"context,omitempty" jsonschema:"lines around a match, default 2, max 10"`
+	Offset  int  `json:"offset,omitempty" jsonschema:"0-based; <0 counts from the end"`
+	Limit   int  `json:"limit,omitempty" jsonschema:"default 50"`
+}
+
+// mcpTaskLogs is the way to read more of a task log than blanket_tasks'
+// short tail (turtlemonvh/blanket#231): page it, or grep it on the
+// server so only the matching lines reach the model. Deliberately not
+// MCP resources -- #44 dropped those so agents aren't encouraged to pull
+// a whole log into context. The search itself is SearchLog, kept out of
+// this handler so a REST endpoint can reuse it.
+func (s *ServerConfig) mcpTaskLogs(ctx context.Context, req *mcp.CallToolRequest, args blanketTaskLogsArgs) (*mcp.CallToolResult, any, error) {
+	if !objectid.IsObjectIdHex(args.Id) {
+		return nil, nil, fmt.Errorf("%q is not a valid task id", args.Id)
+	}
+	stream := args.Stream
+	if stream == "" {
+		stream = "stdout"
+	}
+	var file string
+	switch stream {
+	case "stdout":
+		file = TaskStdoutLogFile
+	case "stderr":
+		file = TaskStderrLogFile
+	default:
+		return nil, nil, fmt.Errorf("stream must be stdout or stderr, not %q", stream)
+	}
+
+	opts := LogSearchOptions{
+		Context:      LogSearchDefaultContext,
+		Offset:       args.Offset,
+		Limit:        clampLogLines(args.Limit),
+		MaxLineChars: mcpLogLineChars,
+		MaxPageChars: mcpLogPageChars,
+	}
+	if args.Context != nil {
+		opts.Context = *args.Context
+	}
+	if args.Grep != "" {
+		re, err := regexp.Compile(args.Grep)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid grep regex (Go RE2 syntax): %v", err)
+		}
+		opts.Grep = re
+	}
+
+	task, err := s.DB.GetTask(objectid.ObjectIdHex(args.Id))
+	if err != nil {
+		return nil, nil, err
+	}
+	logPath := path.Join(task.ResultDir, file)
+	res, err := SearchLog(logPath, opts)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, fmt.Errorf("task %s has no %s log yet (state %s)", args.Id, stream, task.State)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return textResult(formatLogSearch(stream, args.Grep, opts, res))
+}
+
+// formatLogSearch renders a page in grep -n -C style: "N:" for a match
+// (or any line, without grep), "N-" for context, "--" between
+// non-adjacent groups, then the offset to ask for next.
+func formatLogSearch(stream, grep string, opts LogSearchOptions, res *LogSearchResult) string {
+	var b strings.Builder
+	switch {
+	case grep != "" && res.Count == 0:
+		fmt.Fprintf(&b, "%s: no matches for /%s/ at offset %d (%d matches in %d lines)\n", stream, grep, res.Start, res.TotalMatches, res.TotalLines)
+	case grep != "":
+		fmt.Fprintf(&b, "%s: matches %d-%d of %d for /%s/ (%d lines)\n", stream, res.Start+1, res.Start+res.Count, res.TotalMatches, grep, res.TotalLines)
+	case res.Count == 0:
+		fmt.Fprintf(&b, "%s: no lines at offset %d (%d lines)\n", stream, res.Start, res.TotalLines)
+	default:
+		fmt.Fprintf(&b, "%s: lines %d-%d of %d\n", stream, res.Start+1, res.Start+res.Count, res.TotalLines)
+	}
+	prev := 0
+	for _, l := range res.Lines {
+		if grep != "" && prev > 0 && l.Num != prev+1 {
+			b.WriteString("--\n")
+		}
+		sep := "-"
+		if l.Match || grep == "" {
+			sep = ":"
+		}
+		fmt.Fprintf(&b, "%d%s%s\n", l.Num, sep, l.Text)
+		prev = l.Num
+	}
+	if res.NextOffset >= 0 {
+		fmt.Fprintf(&b, "more: offset=%d\n", res.NextOffset)
+	}
+	return b.String()
 }
 
 type blanketWorkersArgs struct {
@@ -213,6 +350,9 @@ func (s *ServerConfig) mcpWorkers(ctx context.Context, req *mcp.CallToolRequest,
 type blanketWriteTaskTypeArgs struct {
 	Name string `json:"name" jsonschema:"task type name (without .toml)"`
 	Toml string `json:"toml" jsonschema:"TOML contents of the task type"`
+	// Only consulted when tasks.requireExplicitTypeOverwrite is true;
+	// otherwise an existing file is replaced as it always was.
+	Overwrite bool `json:"overwrite,omitempty" jsonschema:"replace an existing type; the server may require it"`
 }
 
 func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRequest, args blanketWriteTaskTypeArgs) (*mcp.CallToolResult, any, error) {
@@ -261,6 +401,15 @@ func (s *ServerConfig) mcpWriteTaskType(ctx context.Context, req *mcp.CallToolRe
 	writePath := path.Join(writeDir, args.Name+".toml")
 	_, statErr := os.Stat(writePath)
 	existed := statErr == nil
+	// The overwrite guard (turtlemonvh/blanket#229, item 6 of #44). It
+	// lives under tasks.* rather than mcp.* because it is a rule about
+	// task-type files, not about this tool: a REST write endpoint, when
+	// there is one, honors the same key.
+	if existed && !args.Overwrite && viper.GetBool("tasks.requireExplicitTypeOverwrite") {
+		return textResult(fmt.Sprintf(
+			"refused to write %q: %s already exists and this server sets tasks.requireExplicitTypeOverwrite; call again with overwrite=true to replace it\n",
+			args.Name, writePath))
+	}
 	if err := os.WriteFile(writePath, []byte(args.Toml), 0644); err != nil {
 		return nil, nil, err
 	}
