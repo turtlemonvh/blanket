@@ -18,7 +18,9 @@ func TestSearch_RealQuestions(t *testing.T) {
 	}{
 		{"how do I cancel a running task", "api", "#cancel-a-task-put-taskidcancel"},
 		{"how do I cancel a running task", "flow", "#cancel-a-running-task-forcetrue"},
-		{"worker tags superset", "tags", ""},
+		// tag_ontology.md never states the matching rule; task_type_definitions.md
+		// (lint 014) and mcp.md do, and rank above it once mcp.md is indexed.
+		{"worker tags superset", "schema", ""},
 		{"malformed id 400", "api", "#errors"},
 		{"how do I start a worker", "", "worker"},
 		{"task type required env vars", "schema", ""},
@@ -133,7 +135,7 @@ func TestRead_EverySectionReachable(t *testing.T) {
 func TestOversizedSectionGivesSubsectionTOC(t *testing.T) {
 	big := strings.Repeat("filler text here. ", MaxChars/18+10)
 	md := "# T\n\nintro\n\n## Big\n\nlead-in\n\n### One\n\n" + big + "\n### Two\n\nshort\n\n## Small\n\nok\n"
-	idx, err := BuildIndex(fstest.MapFS{"README.md": {Data: []byte(md)}, "authoring_task_types.md": {}, "task_type_definitions.md": {}, "tag_ontology.md": {}, "usage.md": {}, "api.md": {}, "task_flow.md": {}, "upgrade.md": {}, "install.md": {}})
+	idx, err := BuildIndex(fstest.MapFS{"README.md": {Data: []byte(md)}, "authoring_task_types.md": {}, "task_type_definitions.md": {}, "tag_ontology.md": {}, "usage.md": {}, "api.md": {}, "task_flow.md": {}, "upgrade.md": {}, "install.md": {}, "offline_install.md": {}, "autostart.md": {}, "mcp.md": {}})
 	if err != nil {
 		t.Fatal(err)
 	}
