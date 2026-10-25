@@ -12,10 +12,10 @@ that fails to parse as an `objectid.ObjectId` (malformed -- not valid hex,
 wrong length) is a **400**; a well-formed id naming no record is a
 **404**. The two are distinguishable client errors -- a malformed id is a
 bug in the caller, a missing one might just mean "already deleted" -- and
-neither is ever a 500 (turtlemonvh/blanket#115). `DELETE /task/:id` and
-`DELETE /worker/:id` are the one deliberate exception: both are
-idempotent-delete endpoints and answer 200 even for a well-formed id
-naming nothing, same as if it had just been deleted.
+neither is ever a 500 (turtlemonvh/blanket#115). `DELETE /task/:id` is
+the one deliberate exception: it is an idempotent-delete endpoint and
+answers 200 even for a well-formed id naming nothing, same as if it had
+just been deleted.
 
 Most JSON handlers report an error as `{"error": "<message>"}`; a few
 older ones return a plain-text message instead (streaming/tail
@@ -517,7 +517,9 @@ PUT    /worker/:id/stop         # stop after current task; sets Stopped=true
                                  # signal to the worker process
 PUT    /worker/:id/restart      # re-start an existing stopped worker
                                  # (clears Stopped server-side, then relaunches)
-DELETE /worker/:id              # remove from DB; only valid if stopped
+DELETE /worker/:id              # remove from DB; no body. 400 unless the
+                                 # stored record is stopped (the body is
+                                 # ignored), 404 if missing
 ```
 
 ### Heartbeat (turtlemonvh/blanket#23)

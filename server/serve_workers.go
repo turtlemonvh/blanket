@@ -217,7 +217,9 @@ func (s *ServerConfig) restartWorker(c *gin.Context) {
 
 // deleteWorkerById removes a worker's record from the database. Does not
 // check whether the worker is stopped — callers that need that guard
-// (deleteWorker below) check before calling in.
+// (deleteWorker below) check before calling in. mcpStopWorker calls this
+// directly, right after its own stopWorkerById has marked the record
+// stopped.
 func (s *ServerConfig) deleteWorkerById(ctx context.Context, workerId objectid.ObjectId) error {
 	if err := s.DB.DeleteWorker(workerId); err != nil {
 		return err
@@ -226,8 +228,18 @@ func (s *ServerConfig) deleteWorkerById(ctx context.Context, workerId objectid.O
 	return nil
 }
 
-// Remove the worker's record from the db if it exists
-// Should only be called by the worker itself as it is shutting down
+// Remove a stopped worker's record from the db.
+//
+// Whether the worker is stopped is read from the database, never from the
+// request body (turtlemonvh/blanket#246). The handler used to bind the
+// body and trust its "stopped" field, so a bodyless request (what the UI
+// sends) skipped the check and deleted a running worker, and BindJSON's
+// own 400 was written ahead of the 200 for that delete. The body is now
+// ignored.
+//
+// PUT /worker/:id/stop sets Stopped synchronously (DB.StopWorker), even
+// though the process exits only after its current task, so "stop, then
+// delete" passes this check immediately.
 func (s *ServerConfig) deleteWorker(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 	workerId, err := s.getWorkerId(c)
@@ -236,19 +248,18 @@ func (s *ServerConfig) deleteWorker(c *gin.Context) {
 		return
 	}
 
-	// Check that worker is stopped before deleting. Bound to the request
-	// body (the caller reports the state it observed) rather than a fresh
-	// DB.GetWorker — matches the existing "should only be called by the
-	// worker itself as it is shutting down" contract on this handler.
-	w := worker.WorkerConf{}
-	err = c.BindJSON(&w)
-	if err == nil && w.Stopped != true {
-		c.String(http.StatusBadRequest, `{"error": "Cannot delete a worker that has not been stopped"}`)
+	w, err := s.DB.GetWorker(workerId)
+	if err != nil {
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
+		return
+	}
+	if !w.Stopped {
+		c.String(http.StatusBadRequest, MakeErrorString("Cannot delete a worker that has not been stopped"))
 		return
 	}
 
 	if err := s.deleteWorkerById(c.Request.Context(), workerId); err != nil {
-		c.String(http.StatusInternalServerError, MakeErrorString(err.Error()))
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
 		return
 	}
 	c.String(http.StatusOK, fmt.Sprintf(`{"id": "%s"}`, workerId.Hex()))
