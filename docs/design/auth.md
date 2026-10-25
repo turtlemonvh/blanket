@@ -53,12 +53,12 @@ Each phase ships alone.
 4. TOTP and recovery codes.
 5. Passkeys via `server.publicUrl`.
 
-### Open questions
+### Resolved in review (2026-10-25)
 
-- Q: Filter MCP `tools/list` by the caller's scopes? **Proposed: yes**, one cached server per scope set.
-- Q: Keep `mcp.mode`? **Proposed: yes**, as a server-wide ceiling that scopes only narrow.
-- Q: Multiple users now? **Proposed: yes in the schema**; CLI first, UI user management in phase 3.
-- Q: Limit a token to tasks it created? **Proposed: later**; phase 1 records `createdBy` only.
+- MCP `tools/list` shows only tools the caller's scopes allow.
+- `mcp.mode` stays: it sets which tools exist (`readonly`/`create`/`all`); scopes only narrow it.
+- Multiple users in the schema now; CLI first, UI management in phase 3.
+- A token can always read and cancel tasks it created, in addition to its other grants. Phase 1.
 
 ## Appendix A: full design
 
@@ -104,7 +104,10 @@ the host. The UI says so when issuing an operator token.
 refused for other types, and `read` lists and shows only tasks of those types.
 It may also carry `tasks: [...]`, read access to just those task ids, which is
 the "share one task" case. Restrictions only narrow what a token's scopes
-allow. `/results/<taskid>/…` honors them too: the first path segment is the
+allow, with one addition: a token can always read tasks it created
+(`createdBy`), even ones its `tasks:` list doesn't name, and can cancel them
+without `tasks:manage`, so an agent can stop its own mistake.
+`/results/<taskid>/…` honors restrictions too: the first path segment is the
 task id (`tasks/task_types.go:378`), so the middleware loads that task and
 applies the same type and id checks before the static handler runs. HEAD
 follows GET everywhere; the `/` redirect is open.
@@ -277,7 +280,9 @@ W3C WebAuthn Level 3 (secure context, RP ID).
   expected status for (preset × route) on representative routes, including
   401/403 bodies.
 - Restrictions: a type-restricted agent token gets 403 submitting other types
-  and doesn't see their tasks; a task-id grant reads only that task.
+  and doesn't see their tasks; a task-id grant reads only that task; a
+  task-id-granted token that also has `submit` can read the tasks it creates
+  as well as the granted one.
 - MCP: `tools/list` per preset matches A.2; a read token calling
   `blanket_submit_task` is refused.
 - Worker: the token is absent from the task's environment (a task that runs
