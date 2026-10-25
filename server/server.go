@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/cors"
 	log "github.com/sirupsen/logrus"
+	"github.com/turtlemonvh/blanket/lib/auth"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/queue"
@@ -175,6 +176,18 @@ type ServerConfig struct {
 	// setup. Guarded by shutdownMu.
 	shutdownMu sync.Mutex
 	shutdownCh chan struct{}
+
+	// Tokens is the API token store (turtlemonvh/blanket#101). nil means
+	// auth can never be on, which is what a hand-built ServerConfig in a
+	// test has always meant; command/serve.go sets it from the database.
+	Tokens auth.Store
+
+	// authMu guards the cached "is auth on?" answer and the lastUsed
+	// batcher; see server/auth.go.
+	authMu    sync.Mutex
+	authKnown bool
+	authOn    bool
+	lastUsed  *auth.LastUsedBatcher
 }
 
 // InstanceId returns this server process's instance id, generating one on
@@ -323,6 +336,8 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.Use(ginLogger(log.StandardLogger(), time.RFC3339, true))
 	r.Use(gin.Recovery())
 	r.Use(gin.WrapF(makeCorsHandler(c)))
+	// Every route below is decided by server/auth.go's routeRules table.
+	r.Use(s.authMiddleware())
 
 	// Make the result dir browseable
 	r.StaticFS("/results", gin.Dir(s.ResultsPath, true))
@@ -436,6 +451,12 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/worker/:id/logs", s.getWorkerLogfile)     // full logfile download
 	r.GET("/worker/:id/log", s.streamWorkerLog)       // SSE stream of worker log
 	r.GET("/worker/:id/log/tail", s.tailWorkerLog)    // last N lines of worker log
+
+	// API tokens (turtlemonvh/blanket#101). Admin only, and only with a
+	// real token: while auth is off nobody can mint one from the network.
+	r.GET("/token/", s.listTokens)
+	r.POST("/token/", s.createToken)
+	r.DELETE("/token/:id", s.revokeToken)
 
 	if h := s.mcpHTTPHandler(); h != nil {
 		r.Any("/mcp", gin.WrapH(h))

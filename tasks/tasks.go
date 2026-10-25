@@ -98,6 +98,13 @@ type Task struct {
 	NextFireTs  int64             `json:"nextFireTs"`  // next time a RECURRING template should fire; meaningful only when CronExpr != "" and State == "RECURRING"
 	ParentId    objectid.ObjectId `json:"parentId"`    // id of the RECURRING template that spawned this task, if any; zero ObjectId for a task submitted directly or a template itself
 	PausedTs    int64             `json:"pausedTs"`    // unix ts this template was paused at; 0 unless State == "PAUSED". Set by PUT /task/:id/pause, cleared by /resume.
+
+	// CreatedBy is the id of the API token that submitted this task, or ""
+	// when auth was off or the task predates auth (turtlemonvh/blanket#101).
+	// A token can always read and cancel the tasks it created, whatever
+	// else its restrictions say. A RECURRING template's children inherit
+	// it, so an agent can follow the runs of a schedule it set up.
+	CreatedBy string `json:"createdBy,omitempty"`
 }
 
 // IsTerminalState reports whether a task state is one a task never leaves

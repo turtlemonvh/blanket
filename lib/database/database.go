@@ -174,6 +174,11 @@ type TaskSearchConf struct {
 	// ParentId".
 	FilterParentId bool
 	ParentId       objectid.ObjectId
+	// Visible, when set, drops every task it returns false for, inside the
+	// scan so Limit, Offset and the count all apply to what is left. The
+	// server uses it to show a restricted API token only the tasks it may
+	// read (turtlemonvh/blanket#101).
+	Visible func(tasks.Task) bool
 }
 
 type ItemNotFoundError string

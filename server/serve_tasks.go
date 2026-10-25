@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
+	"github.com/turtlemonvh/blanket/lib/auth"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/queue"
@@ -99,6 +100,11 @@ func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.Objec
 	return nil
 }
 
+// taskRef is the part of a task lib/auth's access checks look at.
+func taskRef(t tasks.Task) auth.TaskRef {
+	return auth.TaskRef{Id: t.Id.Hex(), Type: t.TypeId, CreatedBy: t.CreatedBy}
+}
+
 // removeTaskById deletes a task from the database and its result
 // directory. Mirrors the historical removeTask semantics: deleting a
 // nonexistent task's result directory is not an error.
@@ -133,6 +139,13 @@ func (s *ServerConfig) getTasks(c *gin.Context) {
 		"largestId":        tc.LargestId.Hex(),
 		"justCounts":       tc.JustCounts,
 	}).Debug("Task request params")
+
+	// A restricted token, or one that can only see what it created, gets
+	// the tasks it may read and no others -- counts and paging included,
+	// since the filter runs inside the scan.
+	if p := principalFrom(c); p.Restricted() || !p.Has(auth.ScopeRead) {
+		tc.Visible = func(t tasks.Task) bool { return p.CanReadTask(taskRef(t)) }
+	}
 
 	result, nfounddb, err := s.DB.GetTasks(tc)
 	if err != nil {
@@ -677,6 +690,13 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 
 	typeName := cast.ToString(req["type"])
 
+	// A type-restricted token may only submit its listed types (A.2).
+	p := principalFrom(c)
+	if !p.CanSubmitType(typeName) {
+		c.String(http.StatusForbidden, MakeErrorString("this token may not submit tasks of type '"+typeName+"'"))
+		return
+	}
+
 	envVars := make(map[string]string)
 	if req["environment"] != nil {
 		envVars = cast.ToStringMapString(req["environment"])
@@ -691,6 +711,7 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 		c.String(http.StatusBadRequest, MakeErrorString(err.Error()))
 		return
 	}
+	t.CreatedBy = p.Id()
 
 	if err := s.applyScheduleChecked(&t, req, time.Now()); err != nil {
 		if errors.Is(err, ErrScheduledCapacityExceeded) {
