@@ -28,6 +28,17 @@ func openRaw(t *testing.T, path string) *bolt.DB {
 	return db
 }
 
+// openExisting is openRaw for a database that already has blanket's
+// buckets, i.e. an existing install. PrepareDatabase brings a brand-new
+// (bucketless) file straight to the target schema without a backup, so the
+// migration-path tests need this to exercise the backup-then-migrate path.
+func openExisting(t *testing.T, path string) *bolt.DB {
+	t.Helper()
+	db := openRaw(t, path)
+	require.NoError(t, ensureBuckets(db))
+	return db
+}
+
 func TestNewBlanketBoltDBCreatesMetaBucket(t *testing.T) {
 	db := openRaw(t, newTempDBPath(t))
 	NewBlanketBoltDB(db)
@@ -67,7 +78,7 @@ func TestUnstampedDatabaseReadsAsV1AndIsStamped(t *testing.T) {
 		require.NotNil(t, raw, "PrepareDatabase should have stamped the version")
 		var got int
 		require.NoError(t, json.Unmarshal(raw, &got))
-		assert.Equal(t, database.InitialSchemaVersion, got)
+		assert.Equal(t, DefaultRegistry.TargetVersion(), got, "stamped by the migrations it was brought through")
 		return nil
 	}))
 }

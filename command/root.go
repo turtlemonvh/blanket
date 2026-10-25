@@ -56,6 +56,7 @@ func init() {
 	RootCmd.PersistentFlags().Int32P("port", "p", 8773, "Port the server will run on")
 	RootCmd.PersistentFlags().StringVar(&LogLevel, "logLevel", "info", "the logging level to use")
 	RootCmd.PersistentFlags().StringVarP(&CfgFile, "config", "c", "", "config file (default is config.json|yaml|toml in the blanket config dir)")
+	RootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "API token to send to the server; prefer the BLANKET_TOKEN env var, which ps does not show. On the server's host the credentials file beside the database is used automatically")
 	// The restart machine's two mode knobs get flags as well as config
 	// keys (turtlemonvh/blanket#23 phase 5): both are things an operator
 	// decides about a particular *invocation* -- "this one is running
@@ -324,6 +325,11 @@ func InitializeConfig() {
 	// this is the only place in a normal run that touches viper for this
 	// key -- see turtlemonvh/blanket#128.
 	timing.LoadFromConfig()
+
+	// After port and database are final: the token is only sent to
+	// loopback on this port, and the credentials file lives beside the
+	// database.
+	configureClientAuth()
 }
 
 func InitializeLogging() {

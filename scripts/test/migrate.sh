@@ -79,14 +79,16 @@ check_rc=$?
 set -e
 
 [[ $check_rc -eq 0 ]] || fail "migrate --check should exit 0 on an up-to-date database, got $check_rc: $check_out"
-grep -q 'schema version: 1' <<<"$check_out" || fail "expected schema version 1: $check_out"
-grep -q 'target version: 1' <<<"$check_out" || fail "expected target version 1: $check_out"
+# A fresh database is created at the target version (v2, the auth tokens
+# bucket) without a migration or a backup.
+grep -q 'schema version: 2' <<<"$check_out" || fail "expected schema version 2: $check_out"
+grep -q 'target version: 2' <<<"$check_out" || fail "expected target version 2: $check_out"
 grep -q 'Up to date' <<<"$check_out" || fail "expected 'Up to date': $check_out"
 
 # --check must not have created a backups directory or written anything.
 [[ ! -d "$WORKDIR/backups" ]] || fail "--check wrote a backups directory; it must change nothing"
 
-echo "migrate:   ok — v1, nothing pending, nothing written"
+echo "migrate:   ok — v2, nothing pending, nothing written"
 
 # --------------------------------------------------------------------------
 # 2. POST /ops/backup: loopback + header succeeds, header missing is 403.

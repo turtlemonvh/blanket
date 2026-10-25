@@ -91,10 +91,32 @@ func prepareOptsWithRegistry(t *testing.T, reg *Registry) *PrepareOptions {
 // Registry
 // ---------------------------------------------------------------------------
 
-func TestDefaultRegistryShipsNoMigrations(t *testing.T) {
-	assert.Equal(t, database.InitialSchemaVersion, DefaultRegistry.TargetVersion(),
-		"blanket ships zero real migrations; phase 4 adds the framework, not a schema change")
-	assert.Empty(t, DefaultRegistry.Pending(database.InitialSchemaVersion))
+func TestDefaultRegistryShipsTheTokensMigration(t *testing.T) {
+	assert.Equal(t, 2, DefaultRegistry.TargetVersion(),
+		"v2, the auth tokens bucket (turtlemonvh/blanket#101), is the first real migration")
+	pending := DefaultRegistry.Pending(database.InitialSchemaVersion)
+	require.Len(t, pending, 1)
+	assert.Equal(t, 2, pending[0].Version)
+}
+
+// A database bolt has only just created has nothing to back up: it goes
+// straight to the target version, with every migration applied and no
+// backups directory written.
+func TestFreshDatabaseSkipsTheBackup(t *testing.T) {
+	path := newTempDBPath(t)
+	db := openRaw(t, path)
+	backupDir := filepath.Join(t.TempDir(), "backups")
+
+	require.NoError(t, PrepareDatabase(db, &PrepareOptions{BackupDir: backupDir}))
+
+	v, err := SchemaVersionOf(db)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultRegistry.TargetVersion(), v)
+	require.NoError(t, db.View(func(tx *bolt.Tx) error {
+		assert.NotNil(t, tx.Bucket([]byte(BOLTDB_TOKEN_BUCKET)), "the tokens bucket comes from migration v2")
+		return nil
+	}))
+	assert.NoDirExists(t, backupDir)
 }
 
 func TestNewRegistryRejectsBadMigrations(t *testing.T) {
@@ -126,7 +148,7 @@ func TestRegistryOrdersAndReportsPending(t *testing.T) {
 
 func TestForwardMigrationAppliesAfterABackup(t *testing.T) {
 	path := newTempDBPath(t)
-	db := openRaw(t, path)
+	db := openExisting(t, path)
 
 	backupDir := filepath.Join(t.TempDir(), "backups")
 	reg := MustNewRegistry(testMigration(2))
@@ -156,7 +178,7 @@ func TestForwardMigrationAppliesAfterABackup(t *testing.T) {
 // backup intact.
 func TestFailedMigrationRollsBackDataAndVersionTogether(t *testing.T) {
 	path := newTempDBPath(t)
-	db := openRaw(t, path)
+	db := openExisting(t, path)
 
 	backupDir := filepath.Join(t.TempDir(), "backups")
 	reg := MustNewRegistry(failingMigration(2))
@@ -185,7 +207,7 @@ func TestFailedMigrationRollsBackDataAndVersionTogether(t *testing.T) {
 
 func TestBackwardMismatchRefusesToOpen(t *testing.T) {
 	path := newTempDBPath(t)
-	db := openRaw(t, path)
+	db := openExisting(t, path)
 
 	// Stamp the database as though a newer blanket wrote it.
 	require.NoError(t, ensureBuckets(db))
@@ -222,7 +244,7 @@ func setMarker(t *testing.T, db *bolt.DB, m database.MigrationMarker) {
 // the bolt lock forever under Restart=always.
 func TestOldBinaryWithAnInProgressMarkerRefusesAndExits(t *testing.T) {
 	path := newTempDBPath(t)
-	db := openRaw(t, path)
+	db := openExisting(t, path)
 	setMarker(t, db, database.MigrationMarker{From: 1, To: 5, StartedTs: time.Now().Unix(), BackupPath: "/tmp/b.db"})
 
 	// This "binary" only knows up to v2.
@@ -247,7 +269,7 @@ func TestOldBinaryWithAnInProgressMarkerRefusesAndExits(t *testing.T) {
 // finished refuses to start and names the backup to restore.
 func TestNewBinaryWithAStaleMarkerRefusesAndNamesTheBackup(t *testing.T) {
 	path := newTempDBPath(t)
-	db := openRaw(t, path)
+	db := openExisting(t, path)
 	setMarker(t, db, database.MigrationMarker{From: 1, To: 2, StartedTs: 1700000000, BackupPath: "/var/lib/blanket/backups/blanket-1-x.db"})
 
 	err := PrepareDatabase(db, prepareOptsWithRegistry(t, MustNewRegistry(testMigration(2))))
@@ -263,7 +285,7 @@ func TestNewBinaryWithAStaleMarkerRefusesAndNamesTheBackup(t *testing.T) {
 // harmless: only the marker-clearing write was lost. Clear it and boot.
 func TestCompletedMigrationWithALostMarkerClearIsRecovered(t *testing.T) {
 	path := newTempDBPath(t)
-	db := openRaw(t, path)
+	db := openExisting(t, path)
 	require.NoError(t, ensureBuckets(db))
 	require.NoError(t, db.Update(func(tx *bolt.Tx) error {
 		return putMetaJSON(tx, MetaKeySchemaVersion, 2)
@@ -284,7 +306,7 @@ func TestCompletedMigrationWithALostMarkerClearIsRecovered(t *testing.T) {
 func TestInspectDatabaseReportsPendingWithoutWriting(t *testing.T) {
 	path := newTempDBPath(t)
 	func() {
-		db := openRaw(t, path)
+		db := openExisting(t, path)
 		require.NoError(t, ensureBuckets(db))
 		require.NoError(t, db.Close())
 	}()
@@ -308,7 +330,7 @@ func TestInspectDatabaseReportsPendingWithoutWriting(t *testing.T) {
 func TestInspectDatabaseOnAFreshDatabaseIsUpToDate(t *testing.T) {
 	path := newTempDBPath(t)
 	func() {
-		db := openRaw(t, path)
+		db := openExisting(t, path)
 		require.NoError(t, PrepareDatabase(db, nil))
 		require.NoError(t, db.Close())
 	}()

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/turtlemonvh/blanket/lib/httpx"
 	"github.com/turtlemonvh/blanket/server"
 )
 
@@ -106,7 +107,10 @@ func SubmitTaskAndWait(taskType string, env map[string]interface{}, port int, op
 		return res, err
 	}
 
-	resp, err := http.Post(waitURL(port, opts, false), "application/json", bytes.NewBuffer(bts))
+	// httpx's long client: it carries the local credential when auth is on
+	// (turtlemonvh/blanket#101), and has no response-header timeout, since
+	// the server answers only once the task finishes.
+	resp, err := httpx.LongClient().Post(waitURL(port, opts, false), "application/json", bytes.NewBuffer(bts))
 	if err != nil {
 		return res, err
 	}
@@ -179,7 +183,7 @@ func SubmitTaskAndStream(taskType string, env map[string]interface{}, port int, 
 	// Deliberately no client-side timeout: the server's own wait budget
 	// bounds the call, and a shorter one here would turn a slow task
 	// into a confusing transport error.
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpx.LongClient().Do(req)
 	if err != nil {
 		return res, err
 	}

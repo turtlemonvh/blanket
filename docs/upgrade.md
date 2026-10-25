@@ -29,12 +29,17 @@ If you are upgrading from a blanket released before 0.3.0:
 2. Replace the binary.
 3. Start it again.
 
-Your existing database is treated as **schema version 1** and stamped as
-such on the first open. Nothing else about it changes — no records are
-rewritten, no backup is taken, no migration runs. There are no migrations
-to run: blanket ships the machinery with zero migrations in it, so that the
-first real schema change is not also the first time the machinery is
-exercised.
+Your existing database is treated as **schema version 1** on the first
+open, then brought forward through any migrations the new binary carries,
+after a mandatory backup (see below). No existing records are rewritten by
+any migration so far. The first real one is **v2**, which adds the
+`tokens` bucket for API tokens (turtlemonvh/blanket#101). It is additive,
+but it bumps the version on purpose: a blanket from before auth existed
+must refuse to open a database that may have tokens in it, rather than
+serve everything unauthenticated.
+
+A brand-new database is created at the current version directly. There is
+nothing in it to back up.
 
 ## Schema versions
 
@@ -244,8 +249,8 @@ and writes nothing, not even the `meta` bucket.
 $ blanket migrate --check
 database:       /var/lib/blanket/blanket.db
 stamped:        yes
-schema version: 1
-target version: 1
+schema version: 2
+target version: 2
 
 Up to date; nothing pending.
 ```

@@ -38,7 +38,7 @@ func TestRestoreRoundTrip(t *testing.T) {
 
 	res, err := RestoreBackup(backupPath, path)
 	require.NoError(t, err)
-	assert.Equal(t, 1, res.SchemaVersion)
+	assert.Equal(t, DefaultRegistry.TargetVersion(), res.SchemaVersion)
 	require.NotEmpty(t, res.DisplacedPath, "the replaced database must be kept, not deleted")
 	assert.FileExists(t, res.DisplacedPath)
 

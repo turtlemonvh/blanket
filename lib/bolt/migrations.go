@@ -158,10 +158,10 @@ func (r *Registry) Pending(from int) []Migration {
 	return out
 }
 
-// DefaultRegistry is what a shipped binary uses. It is empty: phase 4 adds
-// the framework, not a schema change. See the package docs above for why
-// an empty registry is still worth having.
-var DefaultRegistry = MustNewRegistry()
+// DefaultRegistry is what a shipped binary uses. Phase 4 shipped it empty
+// (the framework, not a schema change); v2 is the first real migration,
+// the auth tokens bucket (lib/bolt/tokens.go).
+var DefaultRegistry = MustNewRegistry(migrationAddTokensBucket)
 
 // ---------------------------------------------------------------------------
 // Errors callers distinguish
@@ -263,12 +263,30 @@ func (o *PrepareOptions) now() time.Time {
 // calls it too, rather than reimplementing it, so the CLI and the server
 // can never drift into disagreeing about what a database needs.
 func PrepareDatabase(db *bolt.DB, opts *PrepareOptions) error {
+	fresh, err := isEmptyDatabase(db)
+	if err != nil {
+		return err
+	}
 	if err := ensureBuckets(db); err != nil {
 		return err
 	}
 
 	reg := opts.registry()
 	target := reg.TargetVersion()
+
+	// A file bolt has only just created holds nothing to back up and
+	// nothing to migrate *from*: bring it straight to the target schema in
+	// one transaction. Without this every new install would start life
+	// with a pre-migration backup of an empty database.
+	if fresh {
+		if err := initFreshDatabase(db, reg, target); err != nil {
+			return err
+		}
+		if err := StampLockHolder(db); err != nil {
+			log.WithField("err", err).Warn("could not record the lock holder; a locked-out process will get a generic message")
+		}
+		return nil
+	}
 
 	var (
 		current int
@@ -413,6 +431,32 @@ func ensureBuckets(db *bolt.DB) error {
 			}
 		}
 		return nil
+	})
+}
+
+// isEmptyDatabase reports whether db has no buckets at all, i.e. bolt
+// created the file on this open.
+func isEmptyDatabase(db *bolt.DB) (bool, error) {
+	empty := true
+	err := db.View(func(tx *bolt.Tx) error {
+		return tx.ForEach(func([]byte, *bolt.Bucket) error {
+			empty = false
+			return nil
+		})
+	})
+	return empty, err
+}
+
+// initFreshDatabase applies every migration to a brand-new database and
+// stamps the target version, in one transaction.
+func initFreshDatabase(db *bolt.DB, reg *Registry, target int) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		for _, m := range reg.Pending(database.InitialSchemaVersion) {
+			if err := m.Up(tx); err != nil {
+				return fmt.Errorf("initializing a new database: migration %q (v%d): %w", m.Name, m.Version, err)
+			}
+		}
+		return putMetaJSON(tx, MetaKeySchemaVersion, target)
 	})
 }
 
