@@ -278,11 +278,18 @@ func (DB *BlanketBoltDB) GetTasks(tc *database.TaskSearchConf) ([]tasks.Task, in
 	return FindTasksInBoltDB(DB.db, BOLTDB_TASK_BUCKET, tc)
 }
 
+// DeleteTask removes a task's record. A task that does not exist is a
+// database.ItemNotFoundError, checked in the same transaction as the
+// delete so two concurrent deletes cannot both succeed
+// (turtlemonvh/blanket#249).
 func (DB *BlanketBoltDB) DeleteTask(taskId objectid.ObjectId) error {
 	return DB.db.Update(func(tx *bolt.Tx) error {
 		b, err := fetchTaskBucket(tx)
 		if err != nil {
 			return err
+		}
+		if b.Get(IdBytes(taskId)) == nil {
+			return database.ItemNotFoundError(fmt.Sprintf("No item for id %v", taskId))
 		}
 		return b.Delete(IdBytes(taskId))
 	})

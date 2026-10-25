@@ -100,8 +100,9 @@ func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.Objec
 }
 
 // removeTaskById deletes a task from the database and its result
-// directory. Mirrors the historical removeTask semantics: deleting a
-// nonexistent task's result directory is not an error.
+// directory. A task with no record is a database.ItemNotFoundError
+// (turtlemonvh/blanket#249), and any result directory it left behind is
+// not touched; a record whose result directory is already gone is fine.
 func (s *ServerConfig) removeTaskById(ctx context.Context, taskId objectid.ObjectId) error {
 	if err := s.DB.DeleteTask(taskId); err != nil {
 		return err
@@ -771,7 +772,10 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 	s.respondAfterWait(c, finished, outcome, waitParams)
 }
 
-// Always returns 200, even if item doesn't exist
+// Delete a task's record and result directory: 200 {"id": ...} once
+// deleted, 404 for a well-formed id naming no task, 400 for a malformed
+// one. A missing task used to be a 200 (an idempotent delete); #249 made
+// it a 404 to match every other :id route, DELETE /worker/:id included.
 // FIXME: Don't remove task if currently running unless ?force=True
 func (s *ServerConfig) removeTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
@@ -783,8 +787,7 @@ func (s *ServerConfig) removeTask(c *gin.Context) {
 	}
 
 	if err := s.removeTaskById(c.Request.Context(), taskId); err != nil {
-		errMsg := fmt.Sprintf(`{"error": "%s"}`, err.Error())
-		c.String(http.StatusInternalServerError, errMsg)
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
 		return
 	}
 

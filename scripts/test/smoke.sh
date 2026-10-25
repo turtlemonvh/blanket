@@ -121,6 +121,19 @@ set -e
 grep -q '^error: 400 ' "$bad_rm_err" \
     || fail "rm of a malformed task id should print 'error: 400 <message>' on stderr, got: $(cat "$bad_rm_err")"
 
+# A well-formed id naming no task is a 404 (turtlemonvh/blanket#249), and
+# rm says "no such task" rather than succeeding silently.
+missing_rm_err="$WORKDIR/missing-rm.err"
+set +e
+"$BINARY" --config "$CONFIG" rm 000000000000000000000000 > /dev/null 2> "$missing_rm_err"
+missing_rm_status=$?
+set -e
+
+[[ "$missing_rm_status" -eq 1 ]] \
+    || fail "rm of a missing task should exit 1, got $missing_rm_status (stderr: $(cat "$missing_rm_err"))"
+grep -q '^error: 404 no such task ' "$missing_rm_err" \
+    || fail "rm of a missing task should print 'error: 404 no such task <id>' on stderr, got: $(cat "$missing_rm_err")"
+
 # Scheduled tasks (turtlemonvh/blanket#61): a task submitted with a future
 # notBefore starts SCHEDULED (not WAITING/claimable), and the background
 # scheduler loop (default 2s tick) promotes it to WAITING once due.

@@ -1,7 +1,9 @@
 package command
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -48,6 +50,22 @@ func (c *RmConf) RemoveTask(taskId string) {
 		// process over a delete that didn't go through.
 		return
 	}
-	printAPIError(err)
+	if msg, ok := rmNotFoundMessage(taskId, err); ok {
+		fmt.Fprintln(os.Stderr, msg)
+	} else {
+		printAPIError(err)
+	}
 	os.Exit(1)
+}
+
+// rmNotFoundMessage turns the server's 404 for a missing task
+// (turtlemonvh/blanket#249) into a plain "no such task" line, keeping
+// printAPIError's "error: <status> ..." shape. ok is false for any other
+// error, which the caller prints as usual.
+func rmNotFoundMessage(taskId string, err error) (string, bool) {
+	var apiErr *client.APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
+		return "", false
+	}
+	return fmt.Sprintf("error: %d no such task %s", apiErr.Status, taskId), true
 }

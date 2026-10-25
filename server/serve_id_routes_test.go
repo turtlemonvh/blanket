@@ -2,12 +2,9 @@
 // a malformed :id path parameter on any task or worker route must answer
 // 400, never the 500 a handful of handlers used to write (getTaskId,
 // SafeObjectId's various inline callers). A well-formed id naming nothing
-// in the database is a separate case, handled per-route below since the
-// right answer isn't always 404 -- DELETE /task/:id and DELETE
-// /worker/:id are documented, deliberate idempotent-delete endpoints (see
-// removeTask's "Always returns 200, even if item doesn't exist" comment)
-// and are left alone here; every other route in this table looks its
-// record up before doing anything, so a missing one is 404.
+// in the database is a 404 on every route in this table, the two DELETEs
+// included (#246, #249); the per-route column is kept so a route with a
+// different answer can say so.
 //
 // Routes needing a request body or query parameter beyond the id itself
 // (PUT /task/:id/schedule, /run, /progress, /finish; PUT /worker/:id) are
@@ -40,7 +37,7 @@ type idRouteCase struct {
 var idRouteCases = []idRouteCase{
 	// Tasks
 	{"GET /task/:id", "GET", "/task/%s", http.StatusNotFound},
-	{"DELETE /task/:id", "DELETE", "/task/%s", http.StatusOK}, // idempotent delete
+	{"DELETE /task/:id", "DELETE", "/task/%s", http.StatusNotFound},
 	{"PUT /task/:id/cancel", "PUT", "/task/%s/cancel", http.StatusNotFound},
 	{"PUT /task/:id/pause", "PUT", "/task/%s/pause", http.StatusNotFound},
 	{"PUT /task/:id/resume", "PUT", "/task/%s/resume", http.StatusNotFound},
@@ -51,8 +48,6 @@ var idRouteCases = []idRouteCase{
 	{"PUT /worker/:id/stop", "PUT", "/worker/%s/stop", http.StatusNotFound},
 	{"PUT /worker/:id/restart", "PUT", "/worker/%s/restart", http.StatusNotFound},
 	{"GET /worker/:id/log/tail", "GET", "/worker/%s/log/tail", http.StatusNotFound},
-	// Not idempotent like DELETE /task/:id: its stopped-guard loads the
-	// worker, so a missing one is a 404 (#246).
 	{"DELETE /worker/:id", "DELETE", "/worker/%s", http.StatusNotFound},
 
 	// UI (rendered error/flash pattern rather than JSON, but same status codes)

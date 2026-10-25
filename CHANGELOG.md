@@ -7,6 +7,17 @@ body (see `Extract changelog section` in that workflow) — see
 the exact binaries, `SHA256SUMS`, and offline bundle attached to each
 tag.
 
+## Unreleased
+
+### Breaking / behaviour changes
+
+- **`DELETE /task/:id` returns 404 for a missing task** (#249). It used
+  to answer 200 for a well-formed id naming no task; it now follows the
+  same 400/404 rule as every other `:id` route, `DELETE /worker/:id`
+  included. A script deleting tasks that may already be gone should
+  treat 404 as success. `blanket rm` of a missing task now exits 1 with
+  `error: 404 no such task <id>` (`--force` still ignores it).
+
 ## v0.3.0
 
 Everything merged since `v0.2.1`.

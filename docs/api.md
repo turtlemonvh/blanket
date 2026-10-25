@@ -12,9 +12,9 @@ Every `:id` route (task or worker) follows one rule: a malformed id, one
 that fails to parse as an `objectid.ObjectId` (not valid hex, wrong
 length), is a **400**; a well-formed id naming no record is a **404**.
 A malformed id is a bug in the caller and a missing one may just mean
-"already deleted"; neither is ever a 500. `DELETE /task/:id` is the
-deliberate exception: it is an idempotent delete and answers 200 for a
-well-formed id naming nothing.
+"already deleted"; neither is ever a 500. The DELETE routes follow the
+rule too, so a script that doesn't care whether the record was already
+gone can treat 404 as success.
 
 Most JSON handlers report errors as `{"error": "<message>"}`; a few
 (streaming/tail endpoints, the web UI) return plain text.
@@ -55,7 +55,7 @@ has its own section below.
 GET    /task/                   # list tasks; filterable via query string
 GET    /task/:id                # fetch one task
 POST   /task/                   # submit; ?wait blocks, &stream streams
-DELETE /task/:id                # delete; kills a RUNNING task
+DELETE /task/:id                # delete; kills a RUNNING task; 404 if missing
 PUT    /task/:id/cancel         # -> STOPPED; RUNNING needs ?force=true
 PUT    /task/:id/pause          # RECURRING -> PAUSED
 PUT    /task/:id/resume         # PAUSED -> RECURRING
@@ -279,8 +279,9 @@ never fires again; children it already spawned run to completion.
 
 Removes the record and its result dir, killing the task if it is running.
 For a `RECURRING`/`PAUSED` template this removes the series outright;
-`cancel` is the keep-the-record alternative. Returns `{"id": "..."}`,
-200 even if nothing existed.
+`cancel` is the keep-the-record alternative. Returns **200**
+`{"id": "..."}` once deleted, **404** if no task has that id (including
+one already deleted), and **400** for a malformed id.
 
 ### Pause, resume, or reschedule a series
 

@@ -74,6 +74,7 @@ type BlanketDB interface {
 	CleanupStalledWorkers(opts *ReapOptions) (ReapReport, error)
 	// Task functions
 	GetTask(taskId objectid.ObjectId) (tasks.Task, error)
+	// DeleteTask returns ItemNotFoundError for a task that does not exist.
 	DeleteTask(taskId objectid.ObjectId) error
 	GetTasks(tc *TaskSearchConf) ([]tasks.Task, int, error)
 	SaveTask(t *tasks.Task) error
