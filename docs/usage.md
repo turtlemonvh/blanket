@@ -244,6 +244,7 @@ htmx UI baked into the binary.
 | **Upcoming** (`/ui/upcoming`) | What hasn't run yet — see below. |
 | **Workers** (`/ui/workers`) | Launch, stop, restart workers; tail their logs. |
 | **Task Types** (`/ui/task-types`) | The loaded TOML types and their settings. |
+| **Docs** (`/ui/docs`) | These docs, as built into the binary, with search — readable without GitHub access. |
 | **About** (`/ui/about`) | Version, config file, effective settings. |
 
 The header shows which blanket you're looking at: the machine's hostname

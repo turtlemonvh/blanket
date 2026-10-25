@@ -1,0 +1,16 @@
+{{define "content"}}
+<section class="docs">
+    <p class="docs-crumbs"><a href="/ui/docs">Docs</a> <span class="muted">/ {{.Key}}</span></p>
+    {{if .TOC}}
+    <details class="docs-toc">
+        <summary>On this page</summary>
+        <ul>
+            {{range .TOC}}<li><a href="{{.URL}}">{{.Heading}}</a></li>{{end}}
+        </ul>
+    </details>
+    {{end}}
+    <article class="doc-body">
+        {{.Body}}
+    </article>
+</section>
+{{end}}

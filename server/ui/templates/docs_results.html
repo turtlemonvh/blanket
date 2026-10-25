@@ -1,0 +1,17 @@
+{{define "docs-results"}}
+{{if .Query}}
+{{if .Hits}}
+<ol class="docs-hits" aria-label="search results">
+    {{range .Hits}}
+    <li>
+        <a href="{{.URL}}">{{.Heading}}</a>
+        <span class="muted">· {{.PageTitle}}</span>
+        {{with .Snippet}}<div class="docs-snippet muted">{{.}}</div>{{end}}
+    </li>
+    {{end}}
+</ol>
+{{else}}
+<p class="muted">No sections match “{{.Query}}”.</p>
+{{end}}
+{{end}}
+{{end}}

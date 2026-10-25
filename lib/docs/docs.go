@@ -20,9 +20,11 @@ import (
 	"github.com/turtlemonvh/blanket/lib"
 )
 
-// pages maps the short keys used by the blanket_docs MCP tool to filenames
-// in docs/. "overview" points at docs/README.md (the docs index) rather
-// than the top-level repo README.
+// pages maps the short keys used by the blanket_docs MCP tool and the
+// /ui/docs pages to filenames in docs/. "overview" points at
+// docs/README.md (the docs index) rather than the top-level repo README.
+// design.md is left out on purpose: it describes goals, not current
+// behavior, so links to it go to GitHub.
 var pages = map[string]string{
 	"overview":  "README.md",
 	"authoring": "authoring_task_types.md",
@@ -33,6 +35,9 @@ var pages = map[string]string{
 	"flow":      "task_flow.md",
 	"upgrade":   "upgrade.md",
 	"install":   "install.md",
+	"offline":   "offline_install.md",
+	"autostart": "autostart.md",
+	"mcp":       "mcp.md",
 }
 
 var (
@@ -90,4 +95,16 @@ func Page(key string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// KeyForFile returns the page key whose file is name (e.g. "api.md" ->
+// "api"), for turning links between doc pages into links between UI
+// pages. ok is false for a file that isn't in the page map.
+func KeyForFile(name string) (key string, ok bool) {
+	for k, f := range pages {
+		if f == name {
+			return k, true
+		}
+	}
+	return "", false
 }

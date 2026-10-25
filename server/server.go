@@ -337,6 +337,8 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/ui/workers/:id", s.uiWorkerDetailPage)
 	r.GET("/ui/task-types", s.uiTaskTypesPage)
 	r.GET("/ui/task-types/:name", s.uiTaskTypeDetailPage)
+	r.GET("/ui/docs", s.uiDocsPage)      // embedded docs/*.md (#234); ?q= searches
+	r.GET("/ui/docs/:page", s.uiDocPage) // one page, rendered; :page is a lib/docs key
 	r.GET("/ui/about", s.uiAboutPage)
 	r.POST("/ui/tasks", s.uiSubmitTask)
 	r.POST("/ui/workers", s.uiSubmitWorker)
@@ -351,6 +353,7 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/ui/partials/custom-env-row", s.uiCustomEnvRowPartial)
 	r.GET("/ui/partials/new-worker", s.uiNewWorkerPartial)
 	r.GET("/ui/partials/blank", s.uiBlankPartial)
+	r.GET("/ui/partials/docs-search", s.uiDocsSearchPartial) // ?q=<query>
 	r.GET("/ui/partials/upcoming-onetime-rows", s.uiUpcomingOneTimeRowsPartial)
 	r.GET("/ui/partials/upcoming-series-rows", s.uiUpcomingSeriesRowsPartial)
 	r.GET("/ui/partials/series-schedule", s.uiSeriesSchedulePartial) // ?id=<template id>
