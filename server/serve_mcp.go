@@ -56,31 +56,36 @@ var (
 )
 
 // mcpContextBudgetChars is a design tripwire, not a hard protocol limit —
-// the measured tools/list + Instructions size (currently ~5820 chars) is
-// close to this budget by design; ten tools' worth of descriptions is a
-// lean surface, not accumulated bloat. It has been raised three times,
+// the measured tools/list + Instructions size (currently ~6590 chars) is
+// close to this budget by design; eleven tools' worth of descriptions is
+// a lean surface, not accumulated bloat. It has been raised four times,
 // each time for a tool surface that grew rather than for prose that
-// sprawled: 4000 -> 4400 when blanket_submit_task and blanket_cancel_task
-// grew notBefore/cron and wider-state descriptions
-// (turtlemonvh/blanket#61's pause/resume/schedule rework), 4400 -> 5000
-// for the tenth tool, blanket_run_task (turtlemonvh/blanket#27) —
-// submit-and-wait is the interaction an agent actually wants, and a tool
-// it can't see is worth nothing. Descriptions were trimmed first; the
-// raise covers what was left. And 5000 -> 6000 for tool annotations and
+// sprawled:
+// 4000 -> 4400 when blanket_submit_task and blanket_cancel_task grew
+// notBefore/cron and wider-state descriptions (turtlemonvh/blanket#61's
+// pause/resume/schedule rework), and 4400 -> 5000 for the tenth tool,
+// blanket_run_task (turtlemonvh/blanket#27) — submit-and-wait is the
+// interaction an agent actually wants, and a tool it can't see is worth
+// nothing. Descriptions were trimmed first; the raise covers what was
+// left. Then 5000 -> 6000 for tool annotations and
 // blanket_write_task_type's overwrite argument (turtlemonvh/blanket#229):
 // 4986 -> 5822, about 750 of it the annotations objects, which go-sdk
 // serializes in full on every tool and which carry no prose to trim.
 // They are what lets a client auto-approve reads and warn before a
-// destructive call.
+// destructive call. Then 6000 -> 7000 for the eleventh tool,
+// blanket_task_logs (turtlemonvh/blanket#231): server-side log grep, so
+// an agent debugging a failure gets the matching lines instead of the
+// last 50. It costs ~770 characters with its annotations;
+// blanket_tasks' argument descriptions were trimmed by ~45 first.
 //
 // If a future addition trips TestToolListFitsContextBudget, apply the
 // levers in order — trim jsonschema arg descriptions, then tool
 // Description strings, then move prose into blanket_docs — and prefer
 // any of those over shaving wording that an agent actually needs to call
 // a tool correctly. See docs/mcp.md's "Context cost" section.
-const mcpContextBudgetChars = 6000
+const mcpContextBudgetChars = 7000
 
-const mcpInstructions = `blanket runs shell tasks defined by TOML task types. To author a new task type: call blanket_docs(page="authoring") for the guide, then blanket_write_task_type to save and validate it. To run it: blanket_run_task submits and waits, returning the output; blanket_submit_task queues without waiting. Either only runs once a worker is available whose tags are a superset of the type's tags -- use blanket_workers to check, blanket_launch_worker to start one. Check status and logs with blanket_tasks(id=...).`
+const mcpInstructions = `blanket runs shell tasks defined by TOML task types. To author a new task type: call blanket_docs(page="authoring") for the guide, then blanket_write_task_type to save and validate it. To run it: blanket_run_task submits and waits, returning the output; blanket_submit_task queues without waiting. Either only runs once a worker is available whose tags are a superset of the type's tags -- use blanket_workers to check, blanket_launch_worker to start one. Check status with blanket_tasks(id=...); grep or page its log with blanket_task_logs.`
 
 // buildMCPServer constructs the MCP server for s, registering only the
 // tools allowed by the configured mcp.mode.
@@ -153,9 +158,14 @@ func (s *ServerConfig) registerReadonlyMCPTools(srv *mcp.Server, mode string) {
 	}, s.mcpTaskTypes)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_tasks",
-		Description: "List tasks (filter by state/type), or fetch one by id with a log tail.",
+		Description: "List tasks (filter by state/type), or fetch one by id with a log tail. For more log, blanket_task_logs.",
 		Annotations: mcpReadOnlyAnnotations,
 	}, s.mcpTasks)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "blanket_task_logs",
+		Description: "Search or page a task log server-side: grep returns numbered matching lines with context; offset/limit count matches, or lines without grep.",
+		Annotations: mcpReadOnlyAnnotations,
+	}, s.mcpTaskLogs)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_workers",
 		Description: "List workers, or fetch one by id with a log tail.",
