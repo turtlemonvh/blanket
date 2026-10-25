@@ -28,3 +28,6 @@ tests/e2e/playwright-report
 .claude/*
 !.claude/skills/
 !.claude/night-crew.json
+
+# night-crew local status report (report_path in .claude/night-crew.json); never committed
+STATUS_REPORT.html
