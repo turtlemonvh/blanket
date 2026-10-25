@@ -1,7 +1,8 @@
 # Installation
 
-How the install scripts work, what they change, and how to control or
-undo each part. This is the reference behind the one-liner installers.
+What the install scripts change, how to answer their prompts ahead of
+time, and how to undo each part. This is the reference behind the
+one-liner installers in the [README](../README.md).
 
 For machines with no internet access or no admin rights, see
 [offline install](offline_install.md).
@@ -11,8 +12,8 @@ For machines with no internet access or no admin rights, see
 `scripts/install.sh` (Linux/macOS) and `scripts/install.ps1` (Windows)
 each:
 
-1. Download the binary for your platform and **verify it against the
-   release's `SHA256SUMS`**, then rename it into place — a failed or
+1. Download the binary for your platform, **verify it against the
+   release's `SHA256SUMS`**, then rename it into place, so a failed or
    truncated download never leaves a half-written binary behind.
 2. Create the config and data directories.
 3. Write a default config file.
@@ -21,9 +22,8 @@ each:
    autostart, and AI-agent skills.
 
 No `sudo` or administrator rights are needed for a default install.
-Everything lands under your home directory, which is deliberate:
-blanket is meant to be easy to install inside organisations with a
-semi-paranoid security culture.
+Everything lands under your home directory, so blanket can be installed
+inside organisations with a semi-paranoid security culture.
 
 ## Where files land
 
@@ -34,9 +34,8 @@ semi-paranoid security culture.
 
 ## Environment variables
 
-Each prompt can be answered ahead of time. This matters on a machine
-with no controlling terminal — CI, a provisioning script, or an offline
-box — where you would rather not be asked at all.
+Each prompt can be answered ahead of time, for a machine with no
+controlling terminal: CI, a provisioning script, or an offline box.
 
 | Variable | Effect |
 |---|---|
@@ -48,36 +47,31 @@ box — where you would rather not be asked at all.
 
 ## Shell integration
 
-Opt-in. Adds the binary to your `PATH` and enables tab completion —
-bash, zsh and fish on Linux/macOS, PowerShell on Windows — by appending
-a clearly marked block to your shell's rc file (`~/.bashrc`,
-`~/.zshrc`, `~/.config/fish/config.fish`, or `$PROFILE`). This is the
-same pattern nvm and conda use.
-
-Re-running the installer **updates that block in place** rather than
-appending a second copy. Setting `INSTALL_SHELL_INTEGRATION=0` removes
-a block an earlier run added.
+Opt-in. Adds the binary to your `PATH` and enables tab completion (bash,
+zsh and fish on Linux/macOS, PowerShell on Windows) by appending a clearly
+marked block to your shell's rc file: `~/.bashrc`, `~/.zshrc`,
+`~/.config/fish/config.fish`, or `$PROFILE`. Re-running the installer
+**updates that block in place** rather than appending a second copy, and
+`INSTALL_SHELL_INTEGRATION=0` removes a block an earlier run added.
 
 ## Autostart
 
-Opt-in and off by default. Registers blanket as a background service
-that starts on login or boot — a systemd user unit, a launchd
-LaunchAgent, or a Task Scheduler entry depending on the platform.
-
-You can also run `blanket service install` at any point afterwards.
-See [autostart](autostart.md) for the details and for
-`blanket uninstall`.
+Opt-in and off by default. Registers blanket as a background service that
+starts on login or boot: a systemd user unit, a launchd LaunchAgent, or a
+Task Scheduler entry depending on the platform. `blanket service install`
+does the same at any point afterwards. See [autostart](autostart.md) for
+the details and for `blanket uninstall`.
 
 ## AI-agent skills
 
 If a supported agent harness (currently Claude Code) is found on your
-`$PATH`, the installer offers to install the `blanket-task-type`
-skill, which helps an agent draft and validate task type definitions.
-Set `INSTALL_SKILLS=1` or `0` to decide without being prompted.
+`$PATH`, the installer offers to install the `blanket-task-type` skill,
+which helps an agent draft and validate task type definitions. Set
+`INSTALL_SKILLS=1` or `0` to decide without being prompted.
 
 ## Upgrading and removal
 
-`blanket upgrade` handles upgrades in place, with checksum
-verification, a database backup, and a rollback slot — see
-[upgrading](upgrade.md). `blanket uninstall` reverses the autostart
-registration; see [autostart](autostart.md).
+`blanket upgrade` handles upgrades in place, with checksum verification, a
+database backup, and a rollback slot; see [upgrading](upgrade.md).
+`blanket uninstall` reverses the autostart registration; see
+[autostart](autostart.md).
