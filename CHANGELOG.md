@@ -7,6 +7,19 @@ body (see `Extract changelog section` in that workflow) — see
 the exact binaries, `SHA256SUMS`, and offline bundle attached to each
 tag.
 
+## Unreleased
+
+### Fixes
+
+- `blanket upgrade --resume` no longer trusts a journal that still says
+  `PAUSED` when the binary swap had already completed before the CLI
+  was killed. Resuming from that state used to copy the *new* binary
+  into a rollback slot named for the *old* version, so a later `blanket
+  rollback` reinstalled the version it was asked to undo; it reached CI
+  as an intermittent smoke failure roughly one run in twenty. The resume
+  now checks the installed binary's digest against the journal's
+  `sha256` and finds the slot by `upgradeId` instead (#203).
+
 ## v0.3.0
 
 Everything merged since `v0.2.1`.
