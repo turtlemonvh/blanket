@@ -5,80 +5,42 @@ description: Use when creating or editing a blanket task type (a TOML file under
 
 # blanket-task-type
 
-Authors and improves blanket task type TOML files, gated on
-`blanket task-validate`. This file is deliberately thin — the schema, the
-`{{.VAR}}` vs `$VAR` distinction, the tag ontology, and worked examples
-all live in the repo docs below; read them rather than relying on
-memory, since they're the source of truth and can change independently
-of this skill.
+**If the blanket MCP server is connected, use it — don't follow this
+file.** Its `new_task_type` prompt (`/blanket:new_task_type` in Claude
+Code; `/mcp__blanket__new_task_type` also works) carries the full
+authoring workflow, and its tools do each
+step: `blanket_docs(page="authoring")` for the guide,
+`blanket_write_task_type` to validate and save, `blanket_workers` /
+`blanket_launch_worker` for a matching worker, `blanket_run_task` to
+smoke-test. For a quick edit, call those tools directly in that order.
 
-**Read first:**
+This skill stays only for sessions without the server connected
+(turtlemonvh/blanket#232; it goes away once the prompt has seen real use).
 
-- `docs/authoring_task_types.md` — the full authoring guide: sizing,
-  tags, common patterns, the loop below in more detail.
-- `docs/tag_ontology.md` — the namespaced tag convention and why tags
-  are worker constraints, not labels.
-- `docs/task_type_definitions.md` — the formal schema and the
-  `task-validate` check table.
+## Fallback: no MCP server
 
-## The four quality gates
+The same workflow, with the CLI:
 
-Every task type this skill produces or edits should pass all four, or
-have an explicit, stated reason it doesn't:
+1. **Read the guide** — `docs/authoring_task_types.md` (schema, sizing,
+   `{{.VAR}}` vs `$VAR`, the loop in detail), `docs/tag_ontology.md`, and
+   `docs/task_type_definitions.md` (the `task-validate` check table).
+   Read them rather than relying on memory; they change independently
+   of this file.
+2. **Find context** — the configured `tasks.typesPaths` (server config,
+   or ask), existing `*.toml` there to copy from, and
+   `blanket task-validate --dump-known-tags` for the real tag vocabulary.
+3. **Write the TOML** — `description`, `documentation`, namespaced
+   `tags` reusing existing ones, a templated `command`, and 2-5 inputs.
+   Don't turn something into an input just because it *could* vary.
+4. **Validate** — `blanket task-validate --json <type-name>`. Fix every
+   error; fix each warning or state a specific reason it's expected.
+5. **Smoke-test** — check a worker with matching tags is running, then
+   `blanket submit -t <type-name>` and confirm the task reaches
+   `SUCCESS`. Validation catches structure, not runtime failures.
+6. **Report** the type, the tags and why, and the final validate output.
 
-1. **Valid Go template syntax** in `command` (`task-validate` code 003).
-2. **Good tags** — namespaced, reusing what's already in the vocabulary
-   where it fits (codes 010/011/012/013).
-3. **2-5 inputs** — env vars plus any expected file uploads (code 008).
-4. **Clear documentation** — `description` and `documentation` set
-   (codes 006/007).
+## Repo notes
 
-## Workflow
-
-1. **Read the guide docs above** if this is the first task type touched
-   in the session, or if it's been a while — the schema and ontology can
-   drift.
-2. **Discover context.** Find the configured `tasks.typesPaths` (the
-   server config, or ask the user) and glob it for existing `*.toml`
-   files worth copying a pattern from. Run
-   `blanket task-validate --dump-known-tags` to see the real tag
-   vocabulary in use in this deployment, not just the seed list.
-3. **Understand the task.** What command needs to run; what it requires
-   (interpreter, OS, network, secrets); which parts genuinely vary
-   between submissions versus which should be fixed defaults. Push back
-   on turning something into an input just because it *could* vary — the
-   2-5 target is a real constraint, not a suggestion.
-4. **Write the TOML** (or edit the existing one) — `description`,
-   `documentation`, namespaced `tags`, a templated `command`, and a small
-   `environment` table.
-5. **Validate — required, not optional:**
-   ```bash
-   blanket task-validate --json <type-name>
-   ```
-   Fix every error. For each warning, either fix it or state a specific
-   reason not to (e.g. "this code-004 warning is expected — `$REGION` is
-   inherited from the worker's environment, not declared here"). Iterate
-   until `task-validate` is clean or every remaining warning is
-   justified.
-6. **Smoke-test.** Submit a real task against the type
-   (`blanket submit -t <type-name>` or `POST /task/`) and confirm it
-   reaches `SUCCESS`, not just that `task-validate` is happy — validation
-   catches structural problems, not runtime ones (a missing binary the
-   executor check didn't catch because it only checks the *executor*
-   itself, not what the command shells out to; a typo'd flag; etc).
-7. **Report** what was created/changed, the tags chosen and why, and the
-   final `task-validate` output.
-
-## Common failure modes to avoid
-
-- **Inventing a new tag when a close one already exists.** Always check
-  `--dump-known-tags` first; `task-validate` will warn on near-misses
-  (010) but won't stop you from creating `runtime:py3` next to an
-  existing `runtime:python3` if you never look.
-- **Over-parameterizing.** A type with 15 optional env vars is worse than
-  three focused types with 3-4 each. If code 008 warns, don't just
-  suppress it — actually reconsider the shape.
-- **Skipping validation because the type "looks right".** Template syntax
-  errors and missing executors are exactly the kind of thing that's easy
-  to eyeball past and only catches at first execution. Run
-  `task-validate` every time, not just when something seems off.
+- `examples/types/` holds realistic task types to copy patterns from.
+- `testdata/types/echo_task.toml` is the minimal smoke-test fixture —
+  kept tiny on purpose; don't add examples there.
