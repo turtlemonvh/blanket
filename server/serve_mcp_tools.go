@@ -630,12 +630,48 @@ func (s *ServerConfig) mcpCancelTask(ctx context.Context, req *mcp.CallToolReque
 		msg = fmt.Sprintf("task %s was already in a terminal state, not canceled", taskId.Hex())
 	}
 	if args.Delete {
-		if err := s.removeTaskById(ctx, taskId); err != nil {
+		if err := s.removeTaskWhenStopped(ctx, taskId, mcpDeleteWait); err != nil {
 			return nil, nil, err
 		}
 		msg += " and deleted it"
 	}
 	return textResult(msg)
+}
+
+// mcpDeleteWait bounds how long blanket_cancel_task(delete=true) waits for
+// a force-cancelled task's worker to confirm the kill before giving up on
+// the delete. A worker polls every 2s by default. A var so tests can
+// shorten it.
+var mcpDeleteWait = 15 * time.Second
+
+// removeTaskWhenStopped is removeTaskById for a caller that has just
+// cancelled the task. A force cancel flips a RUNNING task to STOPPED at
+// once, but the delete is refused (database.ErrTaskStopPending) until the
+// worker has seen that and reported the process gone
+// (turtlemonvh/blanket#252), so retry on that error, waking on task events
+// with a short fallback tick, until wait runs out. Any other error is
+// returned straight away.
+func (s *ServerConfig) removeTaskWhenStopped(ctx context.Context, taskId objectid.ObjectId, wait time.Duration) error {
+	events := s.TaskEvents.Subscribe()
+	defer s.TaskEvents.Unsubscribe(events)
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		err := s.removeTaskById(ctx, taskId)
+		if !errors.Is(err, database.ErrTaskStopPending) {
+			return err
+		}
+		select {
+		case <-events:
+		case <-tick.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("task %s was cancelled but not deleted: %w", taskId.Hex(), err)
+		}
+	}
 }
 
 type blanketStopWorkerArgs struct {

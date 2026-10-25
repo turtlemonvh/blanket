@@ -159,3 +159,15 @@ func DeleteTask(taskId string, port int) error {
 	_, err := doRequest(context.Background(), "DELETE", reqURL, nil, httpx.DefaultRequestTimeout)
 	return err
 }
+
+// CancelTask moves a task to STOPPED via PUT /task/:id/cancel. force is
+// required to stop a RUNNING task; the server flips the record at once and
+// the worker kills the process on its next poll.
+func CancelTask(taskId string, force bool, port int) error {
+	reqURL := fmt.Sprintf("http://localhost:%d/task/%s/cancel", port, taskId)
+	if force {
+		reqURL += "?force=true"
+	}
+	_, err := doRequest(context.Background(), "PUT", reqURL, nil, httpx.DefaultRequestTimeout)
+	return err
+}

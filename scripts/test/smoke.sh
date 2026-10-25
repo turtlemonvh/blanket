@@ -335,6 +335,55 @@ fi
 grep -q 'exitCode=3' "$follow_err" \
     || fail "--follow did not print its completion summary: $(cat "$follow_err")"
 
+# Deleting a running task (turtlemonvh/blanket#252). `rm` is refused with
+# the server's 400 and the task survives; `rm --force` cancels it, waits
+# for the worker to confirm the kill, then deletes it, and the process is
+# gone. Before #252 the delete went through and the worker, reading a 404,
+# left the process running with no record.
+rm_marker="blanket-rm-smoke-$$"
+cat > "$WORKDIR/types/sleep_rm_task.toml" <<EOF
+tags = ["exec:bash", "os:unix"]
+timeout = 60
+description = "Sleeps, for the rm-a-running-task smoke test"
+command = "echo started; sleep 45 # $rm_marker"
+executor = "bash"
+EOF
+
+rm_task_id="$(curl -fsS -X POST -H 'Content-Type: application/json' \
+    -d '{"type":"sleep_rm_task"}' "$BASE/task/" | jq -r '.id')"
+rm_running=0
+for _ in $(seq 1 60); do
+    if [[ "$(curl -fsS "$BASE/task/$rm_task_id" | jq -r '.state')" == "RUNNING" ]]; then
+        rm_running=1
+        break
+    fi
+    sleep 0.25
+done
+[[ "$rm_running" -eq 1 ]] || fail "sleep_rm_task never reached RUNNING: $(curl -fsS "$BASE/task/$rm_task_id")"
+
+running_rm_err="$WORKDIR/running-rm.err"
+set +e
+"$BINARY" --config "$CONFIG" rm "$rm_task_id" > /dev/null 2> "$running_rm_err"
+running_rm_status=$?
+set -e
+[[ "$running_rm_status" -eq 1 ]] \
+    || fail "rm of a RUNNING task should exit 1, got $running_rm_status (stderr: $(cat "$running_rm_err"))"
+grep -q '^error: 400 Cannot delete a task that is still running; cancel it first' "$running_rm_err" \
+    || fail "rm of a RUNNING task should print the server's 400, got: $(cat "$running_rm_err")"
+[[ "$(curl -fsS "$BASE/task/$rm_task_id" | jq -r '.state')" == "RUNNING" ]] \
+    || fail "a refused rm must leave the task RUNNING: $(curl -fsS "$BASE/task/$rm_task_id")"
+
+"$BINARY" --config "$CONFIG" rm --force "$rm_task_id" \
+    || fail "rm --force of a RUNNING task should exit 0"
+rm_gone_status="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/task/$rm_task_id")"
+[[ "$rm_gone_status" == "404" ]] \
+    || fail "rm --force should have deleted the task, GET answered $rm_gone_status"
+# /proc rather than pgrep, which the image may not have. The bracket keeps
+# this grep's own command line from matching.
+if grep -lsa "blanket-rm-[s]moke-$$" /proc/[0-9]*/cmdline > /dev/null; then
+    fail "rm --force deleted the task but its process is still running"
+fi
+
 kill "$WORKER_PID" 2>/dev/null || true
 wait "$WORKER_PID" 2>/dev/null || true
 WORKER_PID=""

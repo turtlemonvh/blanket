@@ -92,7 +92,12 @@ func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.Objec
 	// applies regardless of which run is in flight — which is the intent, a
 	// user's STOPPED wins. No ExitCode because there is no process exit to
 	// report, and a nil one must not clobber a code a racing finish wrote.
-	if err := s.DB.FinishTask(taskId, database.FinishState("STOPPED")); err != nil {
+	//
+	// StopRequested marks this as a user's cancel: on a RUNNING task it
+	// stamps StopPendingTs, which keeps DELETE /task/:id from removing the
+	// record before the worker has seen the STOPPED and killed the process
+	// (turtlemonvh/blanket#252).
+	if err := s.DB.FinishTask(taskId, &database.TaskFinishConfig{State: "STOPPED", StopRequested: true}); err != nil {
 		return err
 	}
 	s.TaskEvents.Notify()
@@ -103,6 +108,10 @@ func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.Objec
 // directory. A task with no record is a database.ItemNotFoundError
 // (turtlemonvh/blanket#249), and any result directory it left behind is
 // not touched; a record whose result directory is already gone is fine.
+// A task that may still have a live process (CLAIMED, RUNNING, or a
+// force-cancel the worker hasn't confirmed) is refused with
+// database.CheckTaskDeletable's error and left alone
+// (turtlemonvh/blanket#252).
 func (s *ServerConfig) removeTaskById(ctx context.Context, taskId objectid.ObjectId) error {
 	if err := s.DB.DeleteTask(taskId); err != nil {
 		return err
@@ -776,7 +785,13 @@ func (s *ServerConfig) postTask(c *gin.Context) {
 // deleted, 404 for a well-formed id naming no task, 400 for a malformed
 // one. A missing task used to be a 200 (an idempotent delete); #249 made
 // it a 404 to match every other :id route, DELETE /worker/:id included.
-// FIXME: Don't remove task if currently running unless ?force=True
+//
+// A task that may still be running is a 400 and survives (#252), like
+// DELETE /worker/:id on a worker that isn't stopped. Deleting used to
+// remove the record from under a RUNNING task; the worker then read a 404
+// on its next refresh, treated it as an unreachable server, and left the
+// process running with no record to cancel it by. Cancel with
+// ?force=true first; see database.CheckTaskDeletable for the exact rule.
 func (s *ServerConfig) removeTask(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 

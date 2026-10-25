@@ -212,6 +212,27 @@ that polls the task's state every `CheckInterval` and, on seeing
 RPC is involved, so the process may run for up to one `CheckInterval`
 after the cancel call.
 
+Until the worker reports the process gone, the record carries
+`stopPendingTs`, and `DELETE /task/:id` refuses the task with a 400
+(turtlemonvh/blanket#252). The worker can only see the `STOPPED` while
+the record exists: if the record is deleted, the worker reads a 404,
+treats it like an unreachable server (it fails open so an outage never
+kills work), and leaves the process running. The worker's report after
+the kill doesn't change the state (the user's `STOPPED` wins, see
+below), but it clears `stopPendingTs`. If no report arrives, the task
+becomes deletable 60s after the cancel.
+
+### Which tasks `DELETE /task/:id` accepts
+
+A task is deletable when no process can be behind it: `WAITING`,
+`SCHEDULED`, `RECURRING`, `PAUSED`, and the terminal states, except a
+force-cancelled task whose kill is still pending (above). `CLAIMED` and
+`RUNNING` are a 400; cancel first. The state check runs in the same bolt
+transaction as the delete. A worker can still claim a `WAITING` task's
+queue entry after the task is deleted, because the queue is a separate
+bucket. The claim then finds no record, acks the entry away and answers
+404, so nothing runs.
+
 ### Idempotent `run`/`finish` and the `runId` fencing token
 
 The worker retries `PUT /task/:id/run` and `PUT /task/:id/finish`, so

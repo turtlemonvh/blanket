@@ -98,6 +98,17 @@ type Task struct {
 	NextFireTs  int64             `json:"nextFireTs"`  // next time a RECURRING template should fire; meaningful only when CronExpr != "" and State == "RECURRING"
 	ParentId    objectid.ObjectId `json:"parentId"`    // id of the RECURRING template that spawned this task, if any; zero ObjectId for a task submitted directly or a template itself
 	PausedTs    int64             `json:"pausedTs"`    // unix ts this template was paused at; 0 unless State == "PAUSED". Set by PUT /task/:id/pause, cleared by /resume.
+
+	// StopPendingTs is when a user force-cancelled this task while it was
+	// RUNNING, for as long as the worker has not yet confirmed the process
+	// is gone; 0 otherwise (turtlemonvh/blanket#252). The cancel flips the
+	// record to STOPPED at once, but the kill only happens when the
+	// worker's monitor loop next reads that STOPPED, and it can only read
+	// it while the record exists. DELETE /task/:id refuses the task until
+	// the worker's finish report clears this field, or until
+	// database.StopAckGrace has passed (the worker may have died).
+	// Additive: older records decode as 0.
+	StopPendingTs int64 `json:"stopPendingTs"`
 }
 
 // IsTerminalState reports whether a task state is one a task never leaves

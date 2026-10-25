@@ -279,17 +279,27 @@ func (DB *BlanketBoltDB) GetTasks(tc *database.TaskSearchConf) ([]tasks.Task, in
 }
 
 // DeleteTask removes a task's record. A task that does not exist is a
-// database.ItemNotFoundError, checked in the same transaction as the
-// delete so two concurrent deletes cannot both succeed
-// (turtlemonvh/blanket#249).
+// database.ItemNotFoundError (turtlemonvh/blanket#249), and one that may
+// still have a live process fails database.CheckTaskDeletable
+// (turtlemonvh/blanket#252). Both are checked in the same transaction as
+// the delete, so neither a second delete nor a claim or cancel can land
+// between the check and the delete.
 func (DB *BlanketBoltDB) DeleteTask(taskId objectid.ObjectId) error {
 	return DB.db.Update(func(tx *bolt.Tx) error {
 		b, err := fetchTaskBucket(tx)
 		if err != nil {
 			return err
 		}
-		if b.Get(IdBytes(taskId)) == nil {
+		raw := b.Get(IdBytes(taskId))
+		if raw == nil {
 			return database.ItemNotFoundError(fmt.Sprintf("No item for id %v", taskId))
+		}
+		var t tasks.Task
+		if err := json.Unmarshal(raw, &t); err != nil {
+			return err
+		}
+		if err := database.CheckTaskDeletable(&t, time.Now()); err != nil {
+			return err
 		}
 		return b.Delete(IdBytes(taskId))
 	})
@@ -430,6 +440,13 @@ func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, fields *database.T
 		}
 
 		if isTerminalState(t.State) {
+			// A report from the worker (anything but another user cancel)
+			// on a task with a pending stop means the process is gone:
+			// clear the stamp so DELETE /task/:id goes through
+			// (turtlemonvh/blanket#252). The state itself stays put.
+			if t.StopPendingTs != 0 && !fields.StopRequested {
+				t.StopPendingTs = 0
+			}
 			// First terminal state wins. In particular a user-issued
 			// STOPPED beats the ERROR the worker reports a moment later
 			// when the killed child process exits.
@@ -449,6 +466,11 @@ func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, fields *database.T
 		case "RUNNING", "WAITING", "SCHEDULED", "RECURRING", "PAUSED", "CLAIMED":
 		default:
 			return fmt.Errorf("Task found in unexpected state; found '%s', expected one of 'RUNNING', 'WAITING', 'SCHEDULED', 'RECURRING', 'PAUSED', or 'CLAIMED'", t.State)
+		}
+		if fields.StopRequested && t.State == "RUNNING" {
+			// The process outlives this transition until the worker
+			// sees the STOPPED; see tasks.Task.StopPendingTs.
+			t.StopPendingTs = time.Now().Unix()
 		}
 		t.State = fields.State
 		if t.State == "SUCCESS" {
