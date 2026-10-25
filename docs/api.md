@@ -927,6 +927,19 @@ GET /ui/sse/tasks/:id/log       # the "both" view's stream: stdout and
                                 # markup. Clients wanting both streams as
                                 # data use the structured NDJSON stream
                                 # instead.
+GET /ui/docs                    # the docs built into the binary (the
+                                # pages the MCP blanket_docs tool serves),
+                                # listed, with a search box; ?q=<query>
+                                # renders results without JavaScript.
+GET /ui/docs/:page              # one page rendered to HTML; :page is a
+                                # blanket_docs key (api, flow, ...), 404
+                                # otherwise. Headings carry the same
+                                # anchors as the search index's sections.
+GET /ui/partials/docs-search?q=<query>
+                                # the search box's live results: the top
+                                # 10 sections by the same BM25 index as
+                                # blanket_docs(query=...), each linking to
+                                # /ui/docs/:page#<section>.
 ```
 
 `POST /ui/tasks` (the create form's submit) accepts the same scheduling

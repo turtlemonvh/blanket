@@ -157,8 +157,8 @@ func TestAnchor(t *testing.T) {
 		"`POST /api/v1/tasks/:id/cancel`": "post-apiv1tasksidcancel",
 		"Tags & workers: a superset":      "tags--workers-a-superset",
 	} {
-		if got := anchor(in); got != want {
-			t.Errorf("anchor(%q) = %q, want %q", in, got, want)
+		if got := Anchor(in); got != want {
+			t.Errorf("Anchor(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

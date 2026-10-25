@@ -34,6 +34,7 @@
         <a href="/ui/upcoming">Upcoming</a>
         <a href="/ui/workers">Workers</a>
         <a href="/ui/task-types">Task Types</a>
+        <a href="/ui/docs">Docs</a>
         <a href="/ui/about">About</a>
         <span class="spacer"></span>
         {{with instanceName}}<span class="instance-name" aria-label="instance name" title="This blanket instance (ui.instanceName, else the hostname)">{{.}}</span>{{end}}
@@ -48,9 +49,10 @@
         <a href="/ui/upcoming"{{if hasPrefix .NavPath "/ui/upcoming"}} class="active" aria-current="page"{{end}}>Upcoming</a>
         <a href="/ui/workers"{{if hasPrefix .NavPath "/ui/workers"}} class="active" aria-current="page"{{end}}>Workers</a>
         <details class="tabbar-more">
-            <summary{{if or (hasPrefix .NavPath "/ui/task-types") (hasPrefix .NavPath "/ui/about")}} class="active"{{end}}>More</summary>
+            <summary{{if or (hasPrefix .NavPath "/ui/task-types") (hasPrefix .NavPath "/ui/docs") (hasPrefix .NavPath "/ui/about")}} class="active"{{end}}>More</summary>
             <div class="tabbar-menu">
                 <a href="/ui/task-types">Task Types</a>
+                <a href="/ui/docs">Docs</a>
                 <a href="/ui/about">About</a>
             </div>
         </details>

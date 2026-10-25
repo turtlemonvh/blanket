@@ -21,6 +21,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.12.1
+	github.com/yuin/goldmark v1.8.6
 	go.etcd.io/bbolt v1.5.0
 	go.mongodb.org/mongo-driver/v2 v2.9.2
 	golang.org/x/sys v0.49.0

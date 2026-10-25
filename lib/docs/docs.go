@@ -91,3 +91,15 @@ func Page(key string) (string, error) {
 	}
 	return string(b), nil
 }
+
+// KeyForFile returns the page key whose file is name (e.g. "api.md" ->
+// "api"), for turning links between doc pages into links between UI
+// pages. ok is false for a file that isn't in the page map.
+func KeyForFile(name string) (key string, ok bool) {
+	for k, f := range pages {
+		if f == name {
+			return k, true
+		}
+	}
+	return "", false
+}
