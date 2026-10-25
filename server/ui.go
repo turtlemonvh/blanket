@@ -22,6 +22,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib/auth"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
@@ -462,7 +463,22 @@ func absPath(p string) string {
 	return abs
 }
 
+// uiAboutPage renders the About page. The config file and the resolved
+// settings are what GET /config/ serves, which is admin-only, so they are
+// shown only to a caller holding admin -- which includes everyone while
+// auth is off. A read token sees the version and nothing about the
+// configuration (turtlemonvh/blanket#101 review, L5).
 func (s *ServerConfig) uiAboutPage(c *gin.Context) {
+	t := mustParseUIPage("about", "ui/templates/about.html")
+	if !principalFrom(c).Has(auth.ScopeAdmin) {
+		s.renderUI(c, t, gin.H{
+			"Title":        "About",
+			"Version":      s.Version,
+			"ConfigHidden": true,
+		})
+		return
+	}
+
 	keys := viper.AllKeys()
 	sort.Strings(keys)
 	settings := make([]SettingView, 0, len(keys))
@@ -504,7 +520,6 @@ func (s *ServerConfig) uiAboutPage(c *gin.Context) {
 		}
 	}
 
-	t := mustParseUIPage("about", "ui/templates/about.html")
 	s.renderUI(c, t, gin.H{
 		"Title":          "About",
 		"Version":        s.Version,

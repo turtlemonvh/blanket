@@ -96,6 +96,43 @@ func TestEveryRouteHasAScope(t *testing.T) {
 	}
 }
 
+// TestEveryRouteRefusesAnonymousWhenAuthOn checks the middleware, not the
+// table: with auth on, every registered route that isn't an open row
+// answers 401 to a request with no token. TestEveryRouteHasAScope can't
+// catch a route registered *above* r.Use(s.authMiddleware()) -- gin
+// skips the middleware for it, while its row still exists -- and this
+// test does (turtlemonvh/blanket#101 review, L7).
+func TestEveryRouteRefusesAnonymousWhenAuthOn(t *testing.T) {
+	viper.Set("mcp.enabled", true)
+	viper.Set("mcp.mode", "all")
+	t.Cleanup(func() { viper.Set("mcp.enabled", nil); viper.Set("mcp.mode", nil) })
+
+	s := newAuthTestServer(t)
+	mint(t, s, "admin", auth.Restrictions{})
+	r := s.GetRouter()
+	id := objectid.NewObjectId().Hex()
+
+	checked := 0
+	for _, rt := range r.Routes() {
+		rule, _ := lookupRule(rt.Method, rt.Path)
+		if rule.open {
+			continue
+		}
+		segs := strings.Split(rt.Path, "/")
+		for i, seg := range segs {
+			if strings.HasPrefix(seg, ":") || strings.HasPrefix(seg, "*") {
+				segs[i] = id
+			}
+		}
+		url := strings.Join(segs, "/")
+		w := call(r, rt.Method, url, "", "")
+		assert.Equal(t, http.StatusUnauthorized, w.Code,
+			"%s %s (as %s) answered without a token; is it registered above the auth middleware?", rt.Method, rt.Path, url)
+		checked++
+	}
+	assert.Greater(t, checked, 50, "the router should have plenty of guarded routes")
+}
+
 func TestAuthOffAllowsEverythingAndSaysSo(t *testing.T) {
 	s := newAuthTestServer(t)
 	r := s.GetRouter()
@@ -385,4 +422,32 @@ func TestUIGetsAnExplanationPageWhenAuthIsOn(t *testing.T) {
 	// render and an installed PWA doesn't break.
 	assert.NotEqual(t, http.StatusUnauthorized, call(r, "GET", "/ui/manifest.webmanifest", "", "").Code)
 	assert.Equal(t, http.StatusOK, call(r, "GET", "/version", "", "").Code)
+}
+
+// /ui/about showed the resolved settings and the raw config file to any
+// read token, while GET /config/ is admin-only (turtlemonvh/blanket#101
+// review, L5). The configuration is for admin only; with auth off the page
+// is unchanged.
+func TestAboutPageShowsConfigOnlyToAdmin(t *testing.T) {
+	viper.Set("blanketsecuritytestkey", "visible-only-to-admin")
+	t.Cleanup(func() { viper.Set("blanketsecuritytestkey", nil) })
+	s := newAuthTestServer(t)
+	r := s.GetRouter()
+
+	w := call(r, "GET", "/ui/about", "", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "visible-only-to-admin", "auth off: the page is unchanged")
+
+	adminTok, _ := mint(t, s, "admin", auth.Restrictions{})
+	viewer, _ := mint(t, s, "viewer", auth.Restrictions{})
+
+	w = call(r, "GET", "/ui/about", viewer, "")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.NotContains(t, w.Body.String(), "visible-only-to-admin")
+	assert.NotContains(t, w.Body.String(), "Resolved settings")
+	assert.Contains(t, w.Body.String(), "blanket (test)", "the version is still shown")
+
+	w = call(r, "GET", "/ui/about", adminTok, "")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "visible-only-to-admin")
 }

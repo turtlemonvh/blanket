@@ -318,7 +318,12 @@ func (s *ServerConfig) tailWorkerLog(c *gin.Context) {
 			n = parsed
 		}
 	}
-	content, err := tailLines(w.Logfile, n)
+	logPath, err := workerLogPath(w)
+	if err != nil {
+		c.String(http.StatusNotFound, err.Error())
+		return
+	}
+	content, err := tailLines(logPath, n)
 	if err != nil {
 		c.String(http.StatusOK, "")
 		return

@@ -331,7 +331,12 @@ func (s *ServerConfig) mcpWorkers(ctx context.Context, req *mcp.CallToolRequest,
 		}
 
 		logLines := clampLogLines(args.LogLines)
-		logTail, _ := tailLines(w.Logfile, logLines)
+		var logTail string
+		if logPath, err := workerLogPath(w); err == nil {
+			logTail, _ = tailLines(logPath, logLines)
+		} else {
+			logTail = err.Error() + "\n"
+		}
 		// A worker's log names every task it ran, so a token with
 		// type/task restrictions doesn't get it -- the REST worker-log
 		// routes refuse such tokens too.

@@ -49,6 +49,21 @@ and 403 from a task route or `/results/<taskid>/...` outside their
 restrictions. The UI pages, SSE streams and worker logs show many tasks at
 once, so they refuse restricted tokens.
 
+> **Warning: a type restriction is not a sandbox.** It limits which task
+> types a token may submit, not what those tasks can do once they run. A
+> task runs as the blanket user, and while workers authenticate with the
+> host's admin credentials file (until per-worker tokens, auth phase 2),
+> any task can read `<dataDir>/credentials` and so act as admin. A
+> type-restricted token is only as confined as the commands its allowed
+> types run: if any of them runs a command the caller can influence (a
+> script path, a shell snippet, an unvalidated argument), treat the token
+> as admin-equivalent. The structural fix is tracked in
+> turtlemonvh/blanket#257.
+
+The About page (`/ui/about`) shows the resolved settings and the config
+file only to an admin token, matching `GET /config/`. Other tokens see the
+version alone.
+
 A token can always read the tasks it created, and cancel them without
 `tasks:manage`. Each task records its creator as `createdBy`.
 
@@ -587,10 +602,21 @@ GET /worker/:id/log/tail        # last N lines of worker log
 GET /worker/:id/logs            # full logfile download
 ```
 
+The three log routes serve only the file `workers.logfileNameTemplate`
+names for that worker, and only when the worker's stored `logfile` is that
+file. The worker writes the stored path itself, so serving it as given
+would let anything holding the `worker` scope point a read token at any
+file the server can read. A worker started by hand with its own
+`--logfile` keeps its log on disk only, and these routes answer 404 for it.
+
 Lifecycle.
 
 ```
-POST   /worker/                 # launch a new worker (used by the UI)
+POST   /worker/                 # launch a new worker
+                                 # body: {"tags": [...], "checkInterval": 2}
+                                 # any other field (id, logfile, ...) is a
+                                 # 400: the server picks the id, and the log
+                                 # file comes from workers.logfileNameTemplate
 PUT    /worker/:id              # initial creation + status updates from worker
                                  # field-level merge: the worker owns pid,
                                  # pidStartTs, logfile, startedTs, tags,
@@ -601,7 +627,9 @@ PUT    /worker/:id/stop         # stop after current task; sets Stopped=true
                                  # ?force=true also sends an immediate kill
                                  # signal to the worker process
 PUT    /worker/:id/restart      # re-start an existing stopped worker
-                                 # (clears Stopped server-side, then relaunches)
+                                 # (clears Stopped server-side, then relaunches;
+                                 # the new process logs to the template path,
+                                 # never to the stored logfile)
 DELETE /worker/:id              # remove from DB; only valid if stopped
 ```
 

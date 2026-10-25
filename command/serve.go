@@ -66,7 +66,14 @@ var RootCmd = &cobra.Command{
 		// DB and Q initializers are fatal if they don't succeed
 		// Serve gracefully
 
-		tokens, _ := DB.(auth.Store)
+		// A database that can't store tokens would leave Tokens nil,
+		// which the server reads as "auth can never be on": every route
+		// open, silently. Refuse to start instead (turtlemonvh/blanket#101
+		// review, L7).
+		tokens, ok := DB.(auth.Store)
+		if !ok {
+			log.Fatalf("database %T does not implement the auth token store; refusing to serve without auth", DB)
+		}
 		c := server.ServerConfig{
 			DB:          DB,
 			Tokens:      tokens,

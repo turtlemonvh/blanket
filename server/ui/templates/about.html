@@ -16,6 +16,15 @@
         workers are listed on the <a href="/ui/workers">Workers</a> page.
     </p>
 
+    {{if .ConfigHidden}}
+    <h3>Server</h3>
+    <table>
+        <tbody>
+            <tr><td>Version</td><td class="muted">{{.Version}}</td></tr>
+        </tbody>
+    </table>
+    <p class="muted">The server's configuration is shown only to an admin token.</p>
+    {{else}}
     <h3>Server</h3>
     <table>
         <tbody>
@@ -42,5 +51,6 @@
             {{end}}
         </tbody>
     </table>
+    {{end}}
 </section>
 {{end}}
