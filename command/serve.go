@@ -70,6 +70,7 @@ var RootCmd = &cobra.Command{
 		c := server.ServerConfig{
 			DB:          DB,
 			Tokens:      tokens,
+			DataDir:     auth.DataDir(viper.GetString("database")),
 			Q:           bolt.NewBlanketBoltQueue(db),
 			Port:        viper.GetInt("port"),
 			ResultsPath: viper.GetString("tasks.resultsPath"),

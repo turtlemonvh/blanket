@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/viper"
+	"github.com/turtlemonvh/blanket/lib/auth"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/docs"
 	"github.com/turtlemonvh/blanket/lib/objectid"
@@ -130,12 +131,12 @@ type blanketTasksArgs struct {
 }
 
 func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, args blanketTasksArgs) (*mcp.CallToolResult, any, error) {
+	p, err := s.mcpCaller(req)
+	if err != nil {
+		return nil, nil, err
+	}
 	if args.Id != "" {
-		if !objectid.IsObjectIdHex(args.Id) {
-			return nil, nil, fmt.Errorf("%q is not a valid task id", args.Id)
-		}
-		taskId := objectid.ObjectIdHex(args.Id)
-		task, err := s.DB.GetTask(taskId)
+		task, err := s.mcpReadableTask(p, args.Id)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -181,6 +182,10 @@ func (s *ServerConfig) mcpTasks(ctx context.Context, req *mcp.CallToolRequest, a
 	}
 	for _, ty := range args.Types {
 		tc.AllowedTaskTypes[ty] = true
+	}
+	// Same filter GET /task/ applies (turtlemonvh/blanket#101).
+	if p.Restricted() || !p.Has(auth.ScopeRead) {
+		tc.Visible = func(t tasks.Task) bool { return p.CanReadTask(taskRef(t)) }
 	}
 
 	result, _, err := s.DB.GetTasks(tc)
@@ -257,7 +262,11 @@ func (s *ServerConfig) mcpTaskLogs(ctx context.Context, req *mcp.CallToolRequest
 		opts.Grep = re
 	}
 
-	task, err := s.DB.GetTask(objectid.ObjectIdHex(args.Id))
+	p, err := s.mcpCaller(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	task, err := s.mcpReadableTask(p, args.Id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -323,6 +332,12 @@ func (s *ServerConfig) mcpWorkers(ctx context.Context, req *mcp.CallToolRequest,
 
 		logLines := clampLogLines(args.LogLines)
 		logTail, _ := tailLines(w.Logfile, logLines)
+		// A worker's log names every task it ran, so a token with
+		// type/task restrictions doesn't get it -- the REST worker-log
+		// routes refuse such tokens too.
+		if p, err := s.mcpCaller(req); err != nil || p.Restricted() {
+			logLines, logTail = 0, "(withheld: this token has type or task restrictions)\n"
+		}
 
 		var b strings.Builder
 		fmt.Fprintf(&b, "id: %s\n", w.Id.Hex())
@@ -441,7 +456,7 @@ type blanketSubmitTaskArgs struct {
 // schedule description / next fire time, so an agent can see whether it
 // got a SCHEDULED/RECURRING task without a follow-up blanket_tasks call.
 func (s *ServerConfig) mcpSubmitTask(ctx context.Context, req *mcp.CallToolRequest, args blanketSubmitTaskArgs) (*mcp.CallToolResult, any, error) {
-	t, err := s.newTaskForType(args.Type, args.Env)
+	t, err := s.mcpNewTask(req, args.Type, args.Env)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -511,7 +526,7 @@ func (s *ServerConfig) mcpRunTask(ctx context.Context, req *mcp.CallToolRequest,
 		}
 	}
 
-	t, err := s.newTaskForType(args.Type, args.Env)
+	t, err := s.mcpNewTask(req, args.Type, args.Env)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -562,6 +577,40 @@ func (s *ServerConfig) mcpRunTask(ctx context.Context, req *mcp.CallToolRequest,
 	fmt.Fprintf(&b, "\n--- stdout (last %d lines) ---\n%s", logLines, lastNLines(payload.Stdout, logLines))
 	fmt.Fprintf(&b, "\n--- stderr (last %d lines) ---\n%s", logLines, lastNLines(payload.Stderr, logLines))
 	return textResult(b.String())
+}
+
+// mcpReadableTask loads a task the caller may read, refusing (without
+// saying whether it exists) one it may not.
+func (s *ServerConfig) mcpReadableTask(p *auth.Principal, id string) (tasks.Task, error) {
+	if !objectid.IsObjectIdHex(id) {
+		return tasks.Task{}, fmt.Errorf("%q is not a valid task id", id)
+	}
+	task, err := s.DB.GetTask(objectid.ObjectIdHex(id))
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if !p.CanReadTask(taskRef(task)) {
+		return tasks.Task{}, fmt.Errorf("this token may not read task %s", id)
+	}
+	return task, nil
+}
+
+// mcpNewTask is newTaskForType with the caller's type restriction applied
+// and createdBy recorded, as postTask does for REST.
+func (s *ServerConfig) mcpNewTask(req *mcp.CallToolRequest, typeName string, env map[string]string) (tasks.Task, error) {
+	p, err := s.mcpCaller(req)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if !p.CanSubmitType(typeName) {
+		return tasks.Task{}, fmt.Errorf("this token may not submit tasks of type %q", typeName)
+	}
+	t, err := s.newTaskForType(typeName, env)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	t.CreatedBy = p.Id()
+	return t, nil
 }
 
 // lastNLines keeps the final n lines of an already-tailed block of
@@ -616,6 +665,23 @@ func (s *ServerConfig) mcpCancelTask(ctx context.Context, req *mcp.CallToolReque
 		return nil, nil, fmt.Errorf("%q is not a valid task id", args.Id)
 	}
 	taskId := objectid.ObjectIdHex(args.Id)
+
+	// The same per-task checks as PUT /task/:id/cancel and DELETE
+	// /task/:id: a token may cancel what it created, but deleting needs
+	// tasks:manage.
+	p, err := s.mcpCaller(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !p.AuthOff() {
+		task, err := s.DB.GetTask(taskId)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !p.CanCancelTask(taskRef(task)) || (args.Delete && !p.CanManageTask(taskRef(task))) {
+			return nil, nil, fmt.Errorf("this token may not %s task %s", map[bool]string{true: "delete", false: "cancel"}[args.Delete], taskId.Hex())
+		}
+	}
 
 	cancelErr := s.cancelTaskById(ctx, taskId, args.Force)
 	wasCanceled := cancelErr == nil

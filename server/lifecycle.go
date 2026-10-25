@@ -146,6 +146,10 @@ func (s *ServerConfig) Serve() *BlanketServer {
 	// can observe the server as up (turtlemonvh/blanket#23 phase 4).
 	s.persistInstance()
 
+	// While auth is off, warn and issue a setup code for `blanket auth
+	// init` (turtlemonvh/blanket#101).
+	s.startSetupIfAuthOff()
+
 	// Reconcile a restart record the previous process left behind, before
 	// the listener opens: an operator who reaches GET /ops/restart/status
 	// should never see a state this process has already decided is over.

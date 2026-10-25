@@ -22,9 +22,28 @@ the expected deployment is behind a private overlay network (e.g.
 host's own network interface rather than `127.0.0.1`, so binding only
 loopback would actually break that use case. **If you're running blanket
 somewhere more exposed than a private network, set `mcp.mode =
-"readonly"` or `mcp.enabled = false`.** Token auth and a loopback-default
-`bindAddress` option are tracked in
+"readonly"` or `mcp.enabled = false`**, or turn on authentication (below).
+A loopback-default `bindAddress` option is tracked in
 [issue #44](https://github.com/turtlemonvh/blanket/issues/44).
+
+Once authentication is on (`blanket auth init`, see
+[usage.md](usage.md#authentication)), `/mcp` needs a token, and each
+caller's `tools/list` shows only the tools its token's scopes allow:
+
+| Scope | Tools |
+|---|---|
+| `read` | `blanket_docs`, `blanket_task_types`, `blanket_tasks`, `blanket_task_logs`, `blanket_workers` |
+| `submit` | `blanket_submit_task`, `blanket_run_task`, `blanket_cancel_task` (its own tasks only), plus the read tools apart from `blanket_workers`, which show only its own tasks |
+| `tasks:manage` | `blanket_cancel_task` |
+| `types:write` | `blanket_write_task_type`, and the `new_task_type` prompt |
+| `workers:manage` | `blanket_launch_worker`, `blanket_stop_worker` |
+| `admin` | everything |
+
+`mcp.mode` still decides which tools exist. Scopes only narrow it, so an
+operator token on a `readonly` server sees the five read tools. A token's
+type and task restrictions apply inside the tools too: a token limited to
+`transcribe` can't submit anything else, and it lists only the tasks it may
+read.
 
 ## What's exposed
 
@@ -269,6 +288,15 @@ the tool list.
 `http://<host>:8773/mcp` using their own streamable-HTTP MCP config —
 the endpoint is a standard MCP streamable HTTP server, not
 Claude-Code-specific.
+
+**With authentication on**, give the client a token of its own
+(`blanket token create --name claude-code --scopes agent`) and send it as
+a header:
+
+```
+claude mcp add --transport http blanket http://localhost:8773/mcp \
+  --header "Authorization: Bearer blk_..."
+```
 
 ## Permissions
 

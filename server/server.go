@@ -13,6 +13,7 @@ package server
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rs/cors"
 	log "github.com/sirupsen/logrus"
 	"github.com/turtlemonvh/blanket/lib/auth"
@@ -188,6 +189,16 @@ type ServerConfig struct {
 	authKnown bool
 	authOn    bool
 	lastUsed  *auth.LastUsedBatcher
+
+	// mcpServers caches one MCP server per caller scope set; see
+	// mcpServerFor.
+	mcpMu      sync.Mutex
+	mcpServers map[string]*mcp.Server
+
+	// DataDir is where the setup-code and credentials files live: the
+	// directory holding the database (A.5). Empty disables both, which is
+	// what a hand-built ServerConfig in a test gets.
+	DataDir string
 }
 
 // InstanceId returns this server process's instance id, generating one on
@@ -457,6 +468,12 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/token/", s.listTokens)
 	r.POST("/token/", s.createToken)
 	r.DELETE("/token/:id", s.revokeToken)
+
+	// Bootstrap (turtlemonvh/blanket#101): init is open but needs the
+	// setup code; disable needs an admin token. See server/serve_auth.go.
+	r.GET("/auth/status", s.authStatus)
+	r.POST("/auth/init", s.authInit)
+	r.POST("/auth/disable", s.authDisable)
 
 	if h := s.mcpHTTPHandler(); h != nil {
 		r.Any("/mcp", gin.WrapH(h))

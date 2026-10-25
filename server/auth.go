@@ -187,9 +187,15 @@ var routeRules = map[string]routeRule{
 	ruleKey("POST", "/token/"):      tokenAdmin(),
 	ruleKey("DELETE", "/token/:id"): tokenAdmin(),
 
-	// Admin until MCP tools/list is filtered per scope; every method,
-	// because the route is registered with r.Any.
-	ruleKey("*", "/mcp"): scope(admin),
+	// The setup code is init's credential, checked in the handler.
+	ruleKey("GET", "/auth/status"):   open(),
+	ruleKey("POST", "/auth/init"):    open(),
+	ruleKey("POST", "/auth/disable"): tokenAdmin(),
+
+	// Any token that can use at least one tool; which tools it sees and
+	// may call is decided per tool (mcpToolScopes). Every method, because
+	// the route is registered with r.Any.
+	ruleKey("*", "/mcp"): scope(read, submit, tasksMgr, auth.ScopeTypesWrite, wkrsMgr),
 }
 
 // lookupRule finds a route's row. HEAD follows GET; a "*" row matches

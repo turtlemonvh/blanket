@@ -599,3 +599,82 @@ for _ in $(seq 1 80); do
 done
 [[ "$requeued" -eq 1 ]] \
     || fail "claimed-but-never-started task was not requeued within 20s: ${check:-<no response>}"
+
+# ---------------------------------------------------------------------------
+# Authentication (turtlemonvh/blanket#101 phase 1).
+#
+# Everything above ran with auth off, the default. Here: the server issued
+# a setup code; `blanket auth init` trades it for an admin token; an
+# unauthenticated POST /task/ is then 401 while the token works; and a
+# worker started *before* init keeps claiming afterwards, by picking up the
+# credentials file init wrote. Last, `auth disable` turns it back off.
+# ---------------------------------------------------------------------------
+
+setup_code_file="$WORKDIR/setup-code"
+[[ -s "$setup_code_file" ]] || fail "server did not write a setup code to $setup_code_file"
+[[ "$(stat -c '%a' "$setup_code_file")" == "600" ]] || fail "setup-code file is not 0600: $(stat -c '%a' "$setup_code_file")"
+grep -q 'auth setup code: ' "$SERVER_LOG" || fail "server log does not show the setup code"
+
+prev_dir="$PWD"
+cd "$WORKDIR"
+"$BINARY" --config "$CONFIG" worker \
+    --tags "exec:bash,os:unix" --checkinterval 0.5 \
+    > "$WORKDIR/auth-worker.out" 2>&1 &
+WORKER_PID=$!
+cd "$prev_dir"
+
+auth_init_err="$WORKDIR/auth-init.err"
+token="$("$BINARY" --config "$CONFIG" auth init 2> "$auth_init_err")" \
+    || fail "blanket auth init failed: $(cat "$auth_init_err")"
+[[ "$token" == blk_* ]] || fail "auth init did not print a token: '$token' ($(cat "$auth_init_err"))"
+[[ -f "$WORKDIR/credentials" ]] || fail "auth init did not write $WORKDIR/credentials"
+[[ "$(stat -c '%a' "$WORKDIR/credentials")" == "600" ]] || fail "credentials file is not 0600"
+[[ ! -e "$setup_code_file" ]] || fail "the setup code survived init; it must be single-use"
+
+# The token must not have been logged anywhere.
+grep -qF "$token" "$SERVER_LOG" && fail "the admin token appears in the server log"
+
+status="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -d '{"type":"echo_task"}' "$BASE/task/")"
+[[ "$status" == "401" ]] || fail "unauthenticated POST /task/ with auth on should be 401, got $status"
+
+status="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/version")"
+[[ "$status" == "200" ]] || fail "/version must stay open with auth on, got $status"
+
+auth_task="$(curl -fsS -X POST -H 'Content-Type: application/json' -H "Authorization: Bearer $token" \
+    -d '{"type":"echo_task"}' "$BASE/task/")" || fail "POST /task/ with the admin token failed"
+auth_task_id="$(jq -r '.id' <<<"$auth_task")"
+[[ -n "$auth_task_id" && "$auth_task_id" != "null" ]] || fail "could not read the authenticated task id: $auth_task"
+
+# The worker started before init picks up the credential and runs it.
+auth_done=0
+for _ in $(seq 1 120); do
+    check="$(curl -fsS -H "Authorization: Bearer $token" "$BASE/task/$auth_task_id")"
+    if grep -q '"state":"SUCCESS"' <<<"$check"; then
+        auth_done=1
+        break
+    fi
+    sleep 0.25
+done
+[[ "$auth_done" -eq 1 ]] \
+    || fail "a worker started before auth init did not run a task after it: ${check:-<no response>}; worker log: $(cat "$WORKDIR/auth-worker.out")"
+
+# The local CLI uses the credentials file without being told to.
+"$BINARY" --config "$CONFIG" ps > "$WORKDIR/auth-ps.out" 2>&1 \
+    || fail "blanket ps with auth on failed: $(cat "$WORKDIR/auth-ps.out")"
+grep -q "$auth_task_id" "$WORKDIR/auth-ps.out" || fail "blanket ps with auth on did not list the task: $(cat "$WORKDIR/auth-ps.out")"
+
+# A second init is refused.
+"$BINARY" --config "$CONFIG" auth init --code AAAA-AAAA > /dev/null 2>&1 \
+    && fail "a second auth init succeeded"
+
+"$BINARY" --config "$CONFIG" auth disable --yes > "$WORKDIR/auth-disable.out" 2>&1 \
+    || fail "blanket auth disable failed: $(cat "$WORKDIR/auth-disable.out")"
+status="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/task/")"
+[[ "$status" == "200" ]] || fail "after auth disable, GET /task/ should be open again, got $status"
+[[ ! -e "$WORKDIR/credentials" ]] || fail "auth disable left the credentials file behind"
+[[ -s "$setup_code_file" ]] || fail "auth disable did not issue a new setup code"
+
+kill "$WORKER_PID" 2>/dev/null || true
+wait "$WORKER_PID" 2>/dev/null || true
+WORKER_PID=""

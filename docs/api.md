@@ -34,7 +34,10 @@ Tokens carry **scopes**, usually through a preset:
 | `types:write` | MCP `blanket_write_task_type` |
 | `workers:manage` | `POST /worker/`, `PUT /worker/:id/{stop,restart}`, `DELETE /worker/:id`, `POST /ui/workers` |
 | `worker` | `POST /task/claim/:workerid`, `PUT /task/:id/{run,progress,finish}`, `PUT /worker/:id{,/heartbeat}` |
-| `admin` | everything, plus `/token/`, `/config/`, `/ops/*` other than `/ops/status/`, and `/mcp` for now |
+| `admin` | everything, plus `/token/`, `/auth/disable`, `/config/`, and `/ops/*` other than `/ops/status/` |
+
+`/mcp` takes any token with at least one non-worker scope. Which tools the
+caller sees and may call follows its scopes; see [mcp.md](mcp.md).
 
 Presets: `viewer` = read; `agent` = read, submit; `operator` = read,
 submit, tasks:manage, types:write, workers:manage; `admin` = admin.
@@ -49,7 +52,9 @@ once, so they refuse restricted tokens.
 A token can always read the tasks it created, and cancel them without
 `tasks:manage`. Each task records its creator as `createdBy`.
 
-Always open: `/version`, `/`, `/ui/static/*`, `/ui/manifest.webmanifest`.
+Always open: `/version`, `/`, `/ui/static/*`, `/ui/manifest.webmanifest`,
+`GET /auth/status`, and `POST /auth/init`, which checks the setup code
+itself.
 A route missing from the table in `server/auth.go` needs `admin`.
 
 ```
@@ -60,6 +65,25 @@ POST   /token/        # mint one; the value is in the response once admin
                       #        "expires": "90d"}
 DELETE /token/:id     # revoke; 409 for the last admin token      admin
 ```
+
+Turning auth on and off:
+
+```
+GET  /auth/status     # {"enabled": bool, "setupPending": bool}        open
+POST /auth/init       # body {"code": "XXXX-XXXX"}: the setup code      open
+                      # 201: the admin token (once), plus where it was
+                      # written ("credentialsPath"). 403 for a wrong or
+                      # missing code, even with auth off; 409 if auth is
+                      # already on.
+POST /auth/disable    # revoke every token that keeps auth on, and    admin
+                      # issue a new setup code. {"revoked": n}
+```
+
+While auth is off the server issues a one-time **setup code** at startup.
+It is printed in the server log and written to `setup-code` beside the
+database, readable by its owner only. Only its hash is stored. A wrong
+code costs the caller a one-second wait, and attempts run one at a time.
+`blanket auth init` is the client for this.
 
 The `/token/` routes need a real admin token even while auth is off, so
 nobody can mint the first token from the network. `worker` tokens are
