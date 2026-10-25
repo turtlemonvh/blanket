@@ -28,7 +28,15 @@ Everything merged since `v0.2.1`.
   work in this release:
   - Worker retry with `RunId` fencing and an outcome journal, so a
     worker that dies mid-task can't leave the task claimed forever or
-    have a requeue double-execute it.
+    have a requeue double-execute it. The first terminal state wins: a
+    worker's late `ERROR` report after a user cancel is now a 200
+    no-op instead of a rejection the worker retried until it gave up.
+    Worker poll sleeps are jittered (full-jitter backoff on failure),
+    so a fleet does not reconnect in lockstep after a server restart.
+  - `PUT /worker/:id` merges at the field level, with the worker
+    owning its registration fields and the server owning `stopped` and
+    the respawn bookkeeping; a worker re-registering can no longer undo
+    a stop that landed between its polls.
   - The server's HTTP lifecycle moved off `graceful.v1` onto the Go
     standard library, with a `server-restarting` banner in the UI.
   - Worker heartbeats, PID liveness checks, reapers, and a `LOST`
@@ -134,6 +142,16 @@ v0.2.1, v0.2.0, or v0.1.0.
   are rewritten and no migration runs. **Back up your database first
   anyway** (`blanket backup`, or copy the `.db` file with the server
   stopped) — routine caution, not because this upgrade needs it.
+- Records from before this release read as they are: tasks have no
+  stored `exitCode` and return `null`; a task with no
+  `blanket.combined.ndjson` falls back to the grouped (all stdout, then
+  all stderr) view in the UI's "both" log pane; an outcome journal
+  without `pidStartTs` reads `0`, which the reaper treats as
+  inconclusive rather than dead.
+- A mixed-version install works during the swap: a worker from before
+  this release sends no `runId`, and the server accepts an empty token
+  on `run`/`progress`/`finish` — only two tokens that are both present
+  and different conflict.
 - See [docs/upgrade.md](docs/upgrade.md) for the full mechanics:
   rollback slots, the restart state machine, `--drain-mode`, and what
   to do if an upgrade or migration is interrupted partway.

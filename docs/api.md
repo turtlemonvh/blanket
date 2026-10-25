@@ -12,12 +12,39 @@ Every `:id` route (task or worker) follows one rule: a malformed id, one
 that fails to parse as an `objectid.ObjectId` (not valid hex, wrong
 length), is a **400**; a well-formed id naming no record is a **404**.
 A malformed id is a bug in the caller and a missing one may just mean
-"already deleted"; neither is ever a 500 (turtlemonvh/blanket#115). `DELETE /task/:id` and `DELETE /worker/:id`
-are the deliberate exception: both are idempotent deletes and answer 200
-for a well-formed id naming nothing.
+"already deleted"; neither is ever a 500. `DELETE /task/:id` and
+`DELETE /worker/:id` are the deliberate exception: both are idempotent
+deletes and answer 200 for a well-formed id naming nothing.
 
-Most JSON handlers report errors as `{"error": "<message>"}`; a few older
-ones (streaming/tail endpoints, the web UI) return plain text.
+Most JSON handlers report errors as `{"error": "<message>"}`; a few
+(streaming/tail endpoints, the web UI) return plain text.
+
+## Time formats
+
+Every timestamp in a response is **unix seconds** as a JSON integer:
+task fields (`createdTs`, `scheduledTs`, `nextFireTs`, `pausedTs`, ...),
+worker fields (`lastHeardTs`, `pidStartTs`, ...), and the `ts` of a
+[streamed event](#event-schema-state-log-result). Two exceptions, noted
+where they occur: `blanket.combined.ndjson` records `ts` in
+**milliseconds**, and the human-readable fire times (`GET
+/schedule/describe`'s `next`, the `scheduleDescription` text) are
+**RFC3339 in the server's local zone**.
+
+Inputs take these forms; each field's section says which apply to it:
+
+| Form | Example | Meaning |
+| ---- | ------- | ------- |
+| Go duration | `10m`, `90s`, `2h` | Relative to now. Units are `ns`, `us`, `ms`, `s`, `m`, `h`. |
+| RFC3339 | `2026-09-05T08:00:00Z`, `2026-09-05T08:00:00-04:00` | Absolute; the offset is part of the value. |
+| Unix seconds | `1780000000` | Absolute. |
+| Date layout | `2006-01-02T15:04`, `2006-01-02`, `2006/01/02 15:04` | Absolute, read as UTC. List filters only. |
+
+* `notBefore` (on submit and `PUT /task/:id/schedule`): a duration, an
+  RFC3339 timestamp, or unix seconds, tried in that order; anything else
+  is **400** with the parser's message.
+* `createdAfter` / `createdBefore`: unix seconds, RFC3339, or a date
+  layout. A value in none of those forms is ignored, not rejected.
+* `?wait`: a duration, or a bare number of seconds (`30`, `2.5`).
 
 ## Tasks
 
@@ -53,7 +80,7 @@ same JSON plus any files to place in the task's result dir. Returns
 | ------------- | -------- | ----------- |
 | `type`        | yes      | Name of a loaded task type. |
 | `environment` | if the type has required vars | Map of string → string, merged over the type's default env. |
-| `notBefore`   | no       | Delays a one-shot task. A Go duration relative to now (`"10m"`), an RFC3339 timestamp, or unix seconds. A future time starts the task in `SCHEDULED` instead of `WAITING`; the scheduler promotes it once due. Mutually exclusive with `cron`. |
+| `notBefore`   | no       | Delays a one-shot task. Any absolute [time form](#time-formats), or a duration relative to now (`"10m"`). A future time starts the task in `SCHEDULED` instead of `WAITING`; the scheduler promotes it once due. Mutually exclusive with `cron`. |
 | `cron`        | no       | A 5-field cron expression (minute hour dom month dow). Makes the task a `RECURRING` template that never runs itself: the scheduler spawns a child task (own id, log, and result dir; `parentId` set to the template) at each fire time. Mutually exclusive with `notBefore`. |
 
 A bad `type` or `environment` is **400**. A future `notBefore` or a `cron`
@@ -82,7 +109,7 @@ POST /task/?wait=30&fail_on_error=true
 | --------- | ----- | ------- |
 | `wait` | absent | 201, return immediately. |
 | `wait` | present, no value | Block for `tasks.sync.defaultWait`. |
-| `wait` | `30s`, `2m`, `1h`, or bare seconds (`30`) | Block for that long. Over `tasks.sync.maxWait` is **400**, never a silent clamp. |
+| `wait` | a [duration](#time-formats) (`30s`, `2m`) or bare seconds (`30`) | Block for that long. Over `tasks.sync.maxWait` is **400**, never a silent clamp. |
 | `fail_on_error` | absent / `false` | A failed task still answers **200**; its outcome is in `state` and `exitCode`. |
 | `fail_on_error` | no value, or `true` | A non-`SUCCESS` terminal state answers **502** with the same body, so `curl --fail` notices. |
 
@@ -169,8 +196,8 @@ pollable by id. Disconnecting mid-stream changes nothing about the task.
 
 ### Event schema: `state`, `log`, `result`
 
-Every event is a JSON object with `ts` (unix seconds), `taskId`, and
-`type`:
+Every event is a JSON object with `ts` ([unix seconds](#time-formats)),
+`taskId`, and `type`:
 
 | `type` | Extra fields |
 | ------ | ------------ |
@@ -233,7 +260,7 @@ parameters are both accepted for the list filters.
 | `types` | Only these task types. |
 | `parentId` | Only the child runs of this `RECURRING`/`PAUSED`/cancelled template (ignored unless a valid id). |
 | `requiredTags` / `maxTags` | Tasks whose tags include all of / are within this set. |
-| `createdAfter` / `createdBefore` | Unix seconds or a human date layout; applied via the id's embedded timestamp. |
+| `createdAfter` / `createdBefore` | Only tasks created after / before this [time](#time-formats) (absolute forms only); applied via the id's embedded timestamp. |
 | `limit` / `offset` | Page size (default `500`) and offset. |
 | `reverseSort=true` | Newest first. |
 | `count=true` | Return only the matching count, as plain text. |
@@ -274,8 +301,9 @@ invalid value, with the parser's message. Semantics are in
 
 `GET /schedule/describe?cron=<expr>` validates a cron expression and
 returns `{"cron": "<expr>", "description": "<friendly text>", "next":
-["<RFC3339>", ...]}` — the next three fire times, local time — or **400**
-with the parser's message if `cron` is missing or invalid. The UI's
+[...]}` — the next three fire times, [RFC3339 in local
+time](#time-formats) — or **400** with the parser's message if `cron` is
+missing or invalid. The UI's
 create form uses the HTML sibling, `/ui/partials/schedule-preview`.
 
 Every task response also carries a computed `scheduleDescription`
@@ -303,9 +331,9 @@ same cap as `/log/tail`) — one file for the raw form, both files as `log`
 events (stdout's block, then stderr's) for the structured form. Each
 connection takes its own read and follows from the exact byte offset it
 stopped at, so the seam neither drops nor repeats a line, and a second
-connection to an already-open file sees the same window as the first
-(turtlemonvh/blanket#123). The structured form has no wait budget: it
-ends with a `completed` result event or when the client leaves.
+connection to an already-open file sees the same window as the first.
+The structured form has no wait budget: it ends with a `completed`
+result event or when the client leaves.
 
 ### Tail a task's log: `GET /task/:id/log/tail`
 
@@ -380,12 +408,12 @@ the task's `exitCode` field, which every task response carries:
 
 A present-but-unparseable `exitCode` is **400**. An omitted one leaves
 the stored value alone, so a cancel, or a retry of a finish that already
-landed, cannot erase a recorded code. Records written before the field
-existed decode as `null`; no migration needed.
+landed, cannot erase a recorded code. Tasks recorded before v0.3.0 have
+no stored code and read as `null`.
 
 ### `runId`: the fencing token for one run
 
-`runId` identifies one execution attempt (turtlemonvh/blanket#23). The
+`runId` identifies one execution attempt. The
 worker generates it just before starting the child process and sends it
 on every transition for that run; a task script can read it from
 `BLANKET_APP_TASK_RUN_ID`. `run` and `finish` are idempotent with respect
@@ -396,22 +424,21 @@ to it, because the worker retries them:
 | `run` | `CLAIMED` | — | `R1` | **200**, token stored |
 | `run` | `RUNNING` | `R1` | `R1` | **200**, no-op (a retry) |
 | `run` | `RUNNING` | `R1` | `R2` | **409** — two runners |
-| `run` | `RUNNING` | `R1` | *(empty)* | **200**, no-op (legacy) |
+| `run` | `RUNNING` | `R1` | *(empty)* | **200**, no-op (no token sent) |
 | `run` | terminal | any | any | **409** — e.g. a user already stopped it |
 | `finish` | `RUNNING` | `R1` | `R1` | **200**, task becomes terminal |
 | `finish` | terminal | `R1` | `R1` | **200**, no-op — first terminal state wins |
 | `finish` | `RUNNING` | `R1` | `R2` | **409** — two runners |
-| `finish` | `RUNNING` | `R1` | *(empty)* | **200** (legacy) |
+| `finish` | `RUNNING` | `R1` | *(empty)* | **200** (no token sent) |
 | `finish` | `CLAIMED` | any | any | **400** — never started |
 
-* **An empty `runId` is legacy-permissive**, so a worker built before the
-  token keeps working in a mixed-version install. Only two tokens that are
-  both present and different conflict. This goes away with the schema
-  bump in phase 4 of #23.
+* **An empty `runId` is accepted.** Only two tokens that are both
+  present and different conflict, so a worker from before v0.3.0, which
+  sends none, keeps working in a mixed-version install.
 * **The first terminal state wins**, and a repeat is 200. A user's
   `STOPPED` (via `cancel`) beats the `ERROR` the worker reports when the
-  killed child exits; rejecting that late report used to strand tasks,
-  with the worker retrying into the same rejection until it gave up.
+  killed child exits, and the 200 is what tells the worker to stop
+  retrying; a rejection would have it retry until it gave up.
 * `progress` takes the token too and is **409** on a mismatch, so a stale
   runner cannot paint over the live one's numbers; empty is accepted.
 
@@ -518,8 +545,8 @@ PUT /worker/:id/stop?force=true&reason=<who and why>
 
 Sets `stopped`; the worker exits after its current task. `force=true`
 also sends the process an immediate kill signal. `reason` attributes the
-stop and decides the fate of a pending respawn intent
-(turtlemonvh/blanket#23 phase 5): a worker's own shutdown handler sends
+stop and decides the fate of a pending respawn intent: a worker's own
+shutdown handler sends
 `reason=worker-shutdown`, which **preserves** the intent (a drained worker
 exiting is the drain working); every other stop, including an
 unattributed one from an operator or the UI, **clears** it. See
@@ -543,8 +570,8 @@ properties: `basepath` (the directory the binary was resolved from),
 
 ## Ops endpoints
 
-**Privileged, local-only** endpoints for operating the install
-(turtlemonvh/blanket#23): a backup, and the restart state machine.
+**Privileged, local-only** endpoints for operating the install: a
+backup, and the restart state machine.
 
 ```
 POST /ops/backup                # write a consistent database backup now
@@ -604,7 +631,7 @@ took the backup and can record a fact it observed.
 
 ### Restart endpoints
 
-One route per transition (turtlemonvh/blanket#23 phase 5). The states,
+One route per transition. The states,
 what a crash in each means, and the manual `curl` recipe are in
 [upgrade.md](upgrade.md#the-restart-state-machine); this is the request
 and response shapes. Transitions are **forward-only**: skipping ahead is
@@ -790,10 +817,11 @@ GET /ui/partials/task-log?id=<task id>&stream=stdout|stderr|both
 
 `POST /ui/tasks` (the create form) accepts the same scheduling inputs as
 `POST /task/`, as form fields: `scheduleMode` (`once` / `repeating`)
-selects which of `notBefore` / `cron` applies, `notBeforeISO` (an RFC3339
-instant resolved in the browser's timezone) takes precedence over a bare
-`datetime-local` `notBefore`, and an already-past start time is rejected
-rather than queued immediately.
+selects which of `notBefore` / `cron` applies, `notBeforeISO` (an
+[RFC3339](#time-formats) instant resolved in the browser's timezone)
+takes precedence over a bare `datetime-local` `notBefore` (read in the
+server's zone), and an already-past start time is rejected rather than
+queued immediately.
 
 ### Combined log stream: `GET /ui/sse/tasks/:id/log`
 
@@ -803,7 +831,7 @@ with its stream badge. On connect it replays the last 500 lines and then
 follows from the byte offset the replay stopped at. It reads
 `blanket.combined.ndjson`, so replayed history is in the same time order
 as live lines; a task with no such record (recorded with
-`workers.combinedLog = false`, or run before it existed), and output from
+`workers.combinedLog = false`, or run before v0.3.0), and output from
 a process the task orphaned, fall back to the two per-stream files
 grouped — all of stdout, then all of stderr. UI-only on purpose:
 `GET /task/:id/log` emits the bytes the task wrote and must not start

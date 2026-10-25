@@ -71,7 +71,7 @@ was killed (`STOPPED`, `TIMEDOUT`) leave it `null`.
 
 ### How `POST /task/?wait` observes the state machine
 
-`?wait` (turtlemonvh/blanket#27) changes nothing above: the task is
+`?wait` changes nothing above: the task is
 saved, queued, claimed, run and finished by the same transitions; only
 the submitting request stays open instead of returning at `WAITING`.
 
@@ -99,7 +99,7 @@ terminal `result` event. See
 ### Scheduling: `notBefore` and `cron`
 
 By default a submitted task is immediately claimable (`WAITING`). Two
-`POST /task/` fields change that (turtlemonvh/blanket#61; shapes in
+`POST /task/` fields change that (shapes in
 [api.md](api.md#submit-a-task-post-task)):
 
 - **`notBefore`** delays a one-shot task. A future time saves it as
@@ -132,7 +132,8 @@ loop finds whatever is due and acts on it.
 - **Change schedule** (`PUT /task/:id/schedule`): `{"cron": "..."}` on a
   `RECURRING` or `PAUSED` template (`nextFireTs` is recomputed from now
   unless paused, in which case on resume), or `{"notBefore": "..."}` on a
-  `SCHEDULED` task (same formats as submit; must still be in the future).
+  `SCHEDULED` task (any [time form](api.md#time-formats); must still be
+  in the future).
   Any other body/state combination is 400; an invalid value is 400 with
   the parser's message; a missing id is 404.
 
@@ -213,12 +214,12 @@ after the cancel call.
 
 ### Idempotent `run`/`finish` and the `runId` fencing token
 
-The worker retries `PUT /task/:id/run` and `PUT /task/:id/finish`
-(turtlemonvh/blanket#23 phase 1), so both are idempotent on `runId`, a
-token generated just before the child starts: a repeat with the same
-token is a 200 no-op, a different token is a 409 the worker never
-retries, and an empty token is legacy-permissive until the phase 4 schema
-bump. The first terminal state a task reaches sticks, so a user's
+The worker retries `PUT /task/:id/run` and `PUT /task/:id/finish`, so
+both are idempotent on `runId`, a token generated just before the child
+starts: a repeat with the same token is a 200 no-op, a different token
+is a 409 the worker never retries, and an empty token is accepted
+(workers from before v0.3.0 send none). The first terminal state a task
+reaches sticks, so a user's
 `STOPPED` beats the `ERROR` the worker reports when the killed child
 exits, and the worker is told 200 so it stops retrying. The response
 table is in [api.md](api.md#runid-the-fencing-token-for-one-run).
@@ -236,9 +237,8 @@ A task's result dir holds three output files:
 The first two are the task's own bytes, unmodified, and every API surface
 that reports output reads them. The third answers the one question they
 cannot: **what order did the task produce this in?** Two independent
-files carry no shared ordering, so a reader can only group them (all of
-stdout, then all of stderr) — which is why the web UI's combined view
-used to replay history grouped while showing live lines interleaved.
+files carry no shared ordering, so a reader with only those two can
+group them (all of stdout, then all of stderr) but not interleave them.
 
 The worker **tails** the two files as they are written and appends one
 JSON object per completed line, in the order it saw them land:
@@ -265,13 +265,13 @@ way.
 `workers.combinedLog` (default `true`) turns the recording off. Nothing
 else changes: the child's streams are the two log files either way, there
 is just no third file and no tailer per task, and readers fall back to
-the grouped view, as they do for tasks run before the record existed.
+the grouped view, as they do for tasks run before v0.3.0.
 
 #### Why the worker tails the files instead of piping the streams
 
 Putting the worker between the child and the files
-(`cmd.Stdout = io.MultiWriter(logFile, recorder)`) was the first
-implementation, and it changes what the child's stdout *is*: an
+(`cmd.Stdout = io.MultiWriter(logFile, recorder)`) would change what the
+child's stdout *is*: an
 `*os.File` handed straight to the child becomes a pipe the worker owns. A
 task that starts a process and exits (a daemon launcher, `nohup … &`,
 anything under `setsid`) leaves that process holding the write end, so
@@ -351,8 +351,8 @@ Schema (`worker.OutcomeJournal`, `worker/journal.go`):
 - `pid` / `pidStartTs` are the **child**, not the worker. `pidStartTs` is
   read from [`lib/proclive`](#pid-liveness-and-the-same-host-assumption)
   right after `cmd.Start()` and guards against pid reuse. It is `0`
-  ("unknown") in journals from before phase 3 of #23 and on platforms
-  that cannot report one; a reader must treat zero as *inconclusive*.
+  ("unknown") in journals written before v0.3.0 and on platforms that
+  cannot report one; a reader must treat zero as *inconclusive*.
 - `exitCode` is `0`, the process's non-zero code, or `-1` for a signal
   kill (timeout or cancel). It is the same status the worker reports on
   `PUT /task/:id/finish?exitCode=`, read once after `cmd.Wait()`; only
@@ -367,12 +367,12 @@ A worker is a single server-owned `Stopped` boolean on its `WorkerConf`
 process exiting) takes it out of the claim loop. Workers can only be
 deleted once stopped.
 
-`PUT /worker/:id` merges at the field level (turtlemonvh/blanket#23 phase
-1) with the ownership split listed in
-[api.md](api.md#launch-update-restart-delete-a-worker). Without it a
-worker re-registering with `stopped: false` silently undid a stop that
-had just landed, and it is why `PUT /worker/:id/restart` must clear the
-flag server-side before relaunching.
+`PUT /worker/:id` merges at the field level with the ownership split
+listed in [api.md](api.md#launch-update-restart-delete-a-worker): a
+whole-record write from a worker re-registering with `stopped: false`
+would silently undo a stop that had just landed. The same split is why
+`PUT /worker/:id/restart` clears the flag server-side before
+relaunching.
 
 ```mermaid
 stateDiagram-v2
@@ -558,7 +558,7 @@ never touches BoltDB. An empty queue or a transient error sleeps
 `CheckInterval` and retries; no sleep follows a processed task, so a
 backlog drains without waiting out the interval.
 
-Every sleep is jittered (turtlemonvh/blanket#23 phase 1): an ordinary
+Every sleep is jittered: an ordinary
 poll waits `CheckInterval` plus up to a quarter more; a failed iteration
 waits a **full-jitter** backoff, `rand(0, min(CheckInterval << n, 30s))`.
 This defends against a server restart, which every worker on the machine
@@ -647,17 +647,16 @@ new lines — and later subscribers reuse it. A `TailedFile` keeps the last
 new subscribers, and stops 5 seconds after its last subscriber leaves
 (`StopIfNoSubscribers`).
 
-`GET /task/:id/log` no longer shares this path (turtlemonvh/blanket#123):
-with one tailer per path, how much history a new subscriber saw depended
-on who else was already tailing — the whole file cold, or the ring's last
-100 lines warm. It uses `tailed_file.ReplayAndFollow(path, n)`
+`GET /task/:id/log` and the UI's `/ui/sse/tasks/:id/log`
+(`server/ui_logs.go`) do not share that path: with one tailer per path,
+how much history a new subscriber sees would depend on who else is
+already tailing — the whole file cold, or the ring's last 100 lines
+warm. Both use `tailed_file.ReplayAndFollow(path, n)`
 (`lib/tailed_file/replay.go`) instead: an unshared read of up to `n`
 (500, `DEFAULT_LOG_TAIL_LINES`) complete lines, then a private follower
 from the exact byte offset that read stopped at, so every connection gets
-the same window and nothing is replayed twice or dropped. The UI's
-`/ui/sse/tasks/:id/log` (`server/ui_logs.go`) already worked this way
-(turtlemonvh/blanket#104). The diagram describes `GET /worker/:id/log`,
-the one remaining caller of the shared ring.
+the same window and nothing is replayed twice or dropped. The diagram
+describes `GET /worker/:id/log`, the only caller of the shared ring.
 
 ```mermaid
 sequenceDiagram
