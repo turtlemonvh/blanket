@@ -27,7 +27,44 @@ import (
 // BOLTDB_TOKEN_BUCKET holds API tokens.
 const BOLTDB_TOKEN_BUCKET = "tokens"
 
-var _ auth.Store = (*BlanketBoltDB)(nil)
+// Meta keys for auth (A.4): the pending setup code's hash, and when auth
+// was switched on.
+const (
+	MetaKeySetupCodeHash = "authSetupCodeHash"
+	MetaKeyAuthEnabledTs = "authEnabledTs"
+)
+
+var (
+	_ auth.Store      = (*BlanketBoltDB)(nil)
+	_ auth.SetupStore = (*BlanketBoltDB)(nil)
+)
+
+func (DB *BlanketBoltDB) SetSetupCodeHash(hash string) error {
+	return DB.db.Update(func(tx *bolt.Tx) error {
+		if hash == "" {
+			return deleteMeta(tx, MetaKeySetupCodeHash)
+		}
+		return putMetaJSON(tx, MetaKeySetupCodeHash, hash)
+	})
+}
+
+func (DB *BlanketBoltDB) SetupCodeHash() (string, error) {
+	var h string
+	err := DB.db.View(func(tx *bolt.Tx) error {
+		_, err := getMetaJSON(tx, MetaKeySetupCodeHash, &h)
+		return err
+	})
+	return h, err
+}
+
+func (DB *BlanketBoltDB) SetAuthEnabledTs(ts int64) error {
+	return DB.db.Update(func(tx *bolt.Tx) error {
+		if ts == 0 {
+			return deleteMeta(tx, MetaKeyAuthEnabledTs)
+		}
+		return putMetaJSON(tx, MetaKeyAuthEnabledTs, ts)
+	})
+}
 
 func forEachToken(b *bolt.Bucket, fn func(hash []byte, t auth.Token) error) error {
 	if b == nil {

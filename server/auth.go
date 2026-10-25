@@ -187,9 +187,15 @@ var routeRules = map[string]routeRule{
 	ruleKey("POST", "/token/"):      tokenAdmin(),
 	ruleKey("DELETE", "/token/:id"): tokenAdmin(),
 
-	// Admin until MCP tools/list is filtered per scope; every method,
-	// because the route is registered with r.Any.
-	ruleKey("*", "/mcp"): scope(admin),
+	// The setup code is init's credential, checked in the handler.
+	ruleKey("GET", "/auth/status"):   open(),
+	ruleKey("POST", "/auth/init"):    open(),
+	ruleKey("POST", "/auth/disable"): tokenAdmin(),
+
+	// Any token that can use at least one tool; which tools it sees and
+	// may call is decided per tool (mcpToolScopes). Every method, because
+	// the route is registered with r.Any.
+	ruleKey("*", "/mcp"): scope(read, submit, tasksMgr, auth.ScopeTypesWrite, wkrsMgr),
 }
 
 // lookupRule finds a route's row. HEAD follows GET; a "*" row matches
@@ -255,11 +261,18 @@ func (s *ServerConfig) AuthEnabled() bool {
 	return s.authOn
 }
 
-// refreshAuthEnabled drops the cached answer after a token change.
+// refreshAuthEnabled drops the cached answer after a token change. If that
+// change switched auth on or off, it also closes every MCP session, since
+// a session's binding to a caller is fixed when it opens (see
+// closeMCPSessions). An answer that wasn't cached yet counts as a change.
 func (s *ServerConfig) refreshAuthEnabled() {
 	s.authMu.Lock()
+	wasKnown, was := s.authKnown, s.authOn
 	s.authKnown = false
 	s.authMu.Unlock()
+	if now := s.AuthEnabled(); !wasKnown || now != was {
+		s.closeMCPSessions()
+	}
 }
 
 func (s *ServerConfig) lastUsedBatcher() *auth.LastUsedBatcher {

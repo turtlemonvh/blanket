@@ -34,13 +34,17 @@ Tokens carry **scopes**, usually through a preset:
 | `types:write` | MCP `blanket_write_task_type` |
 | `workers:manage` | `POST /worker/`, `PUT /worker/:id/{stop,restart}`, `DELETE /worker/:id`, `POST /ui/workers` |
 | `worker` | `POST /task/claim/:workerid`, `PUT /task/:id/{run,progress,finish}`, `PUT /worker/:id{,/heartbeat}` |
-| `admin` | everything, plus `/token/`, `/config/`, `/ops/*` other than `/ops/status/`, and `/mcp` for now |
+| `admin` | everything, plus `/token/`, `/config/`, `/ops/*` other than `/ops/status/`, and `/auth/disable` (which also needs the local credentials-file token, below) |
+
+`/mcp` takes any token with at least one non-worker scope. Which tools the
+caller sees and may call follows its scopes; see [mcp.md](mcp.md).
 
 Presets: `viewer` = read; `agent` = read, submit; `operator` = read,
 submit, tasks:manage, types:write, workers:manage; `admin` = admin.
 
 A token may also carry **restrictions**. `types` limits `submit` to those
-task types, and limits reads to tasks of them. `tasks` limits reads to
+task types, limits `types:write` to writing task types of those names, and
+limits reads to tasks of them. `tasks` limits reads to
 those task ids. Restricted tokens get filtered results from `GET /task/`,
 and 403 from a task route or `/results/<taskid>/...` outside their
 restrictions. The UI pages, SSE streams and worker logs show many tasks at
@@ -64,7 +68,9 @@ version alone.
 A token can always read the tasks it created, and cancel them without
 `tasks:manage`. Each task records its creator as `createdBy`.
 
-Always open: `/version`, `/`, `/ui/static/*`, `/ui/manifest.webmanifest`.
+Always open: `/version`, `/`, `/ui/static/*`, `/ui/manifest.webmanifest`,
+`GET /auth/status`, and `POST /auth/init`, which checks the setup code
+itself.
 A route missing from the table in `server/auth.go` needs `admin`.
 
 ```
@@ -75,6 +81,36 @@ POST   /token/        # mint one; the value is in the response once admin
                       #        "expires": "90d"}
 DELETE /token/:id     # revoke; 409 for the last admin token      admin
 ```
+
+Turning auth on and off:
+
+```
+GET  /auth/status     # {"enabled": bool, "setupPending": bool}        open
+POST /auth/init       # body {"code": "XXXX-XXXX"}: the setup code      open
+                      # 201: the admin token (once), plus where it was
+                      # written ("credentialsPath"). 403 for a wrong or
+                      # missing code, even with auth off; 409 if auth is
+                      # already on.
+POST /auth/disable    # revoke every token that keeps auth on, and    local
+                      # issue a new setup code. {"revoked": n}
+                      # 403 unless the request comes from loopback
+                      # with the token in `credentials` beside the
+                      # database; any other admin token is refused
+```
+
+While auth is off the server issues a one-time **setup code** at startup.
+It is printed in the server log and written to `setup-code` beside the
+database, readable by its owner only. Only its hash is stored. A wrong
+code waits one second before its 403. The check itself is serialized, but
+the wait is not, so a flood of wrong guesses can't hold up the right one.
+`blanket auth init` is the client for this.
+
+Turning auth off is local only, like turning it on. `POST /auth/disable`
+needs the same proof of file access as init, in the form of the admin
+token `init` wrote to `credentials`, sent from loopback. That is what
+`blanket auth disable` sends when run on the server's host without
+`--token` or `BLANKET_TOKEN`. With the server stopped, `blanket auth
+disable` edits the database directly and needs no token.
 
 The `/token/` routes need a real admin token even while auth is off, so
 nobody can mint the first token from the network. `worker` tokens are

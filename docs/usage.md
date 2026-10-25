@@ -502,6 +502,71 @@ See [task_type_definitions.md](task_type_definitions.md) for the full
 schema, and [`examples/types/`](../examples/types/) for working
 copy-paste starters.
 
+## Authentication
+
+Authentication is off by default. While it is off, anyone who can reach
+the port can submit tasks, which means running commands as the blanket
+user. The server says so in its log at startup. Turn auth on from the
+server's host:
+
+```
+blanket auth init
+```
+
+With the server running, `auth init` reads the one-time setup code the
+server wrote beside its database (`setup-code`, also printed in the server
+log) and trades it for an admin token. With the server stopped, it opens
+the database directly. Either way the admin token is printed once and
+written to `credentials` beside the database, readable only by you. Nobody
+on the network can do this: without the setup code, `POST /auth/init` is
+refused even while auth is off.
+
+On the server's host, `blanket ps`, `submit`, `rm` and the other commands
+read that credentials file automatically, and so do workers, including the
+ones already running when you ran `init`. From another machine, or a
+script, pass a token with `BLANKET_TOKEN` (or `--token`, which other users
+can see in `ps`).
+
+Mint narrower tokens for agents and scripts:
+
+```
+blanket token create --name claude-desktop --scopes agent
+blanket token create --name transcriber --scopes agent --types transcribe
+blanket token create --name share-one --scopes viewer --tasks <task id> --expires 7d
+blanket token list
+blanket token revoke <id>
+```
+
+Presets are `viewer` (read), `agent` (read, submit), `operator` (read,
+submit, tasks:manage, types:write, workers:manage) and `admin`. An operator
+token can write a task type and launch a worker to run it, so treat it like
+admin. `--types` limits a token to those task types, and `--tasks` to
+reading those task ids. Any token can read and cancel the tasks it created
+itself. See [api.md](api.md#authentication) for exactly what each scope
+opens.
+
+**`--types` is not a sandbox.** Tasks run as the blanket user, and for now
+workers authenticate with the admin credentials file, so any task can read
+that file and act as admin. A type-restricted token is only as confined as
+the commands its allowed types run. If one of them runs something the
+caller can influence (a script path, a shell snippet, an unchecked
+argument), treat the token as admin. turtlemonvh/blanket#257 tracks the fix.
+
+`blanket auth status` shows whether auth is on. `blanket auth disable`
+revokes every token and turns it off again. It works only on the server's
+host. With the server running it sends the token from the credentials file
+over loopback, and the server refuses any other token, including other
+admin tokens, so leave `--token` and `BLANKET_TOKEN` unset. With the
+server stopped it needs no token, which also makes it the way back in if
+the admin token is lost.
+
+What phase 1 doesn't do yet (turtlemonvh/blanket#101):
+
+- The web UI has no login. With auth on, `/ui/` answers 401 with a page
+  saying so. Use the CLI, or the API with a token.
+- Workers authenticate with the host's admin credentials file rather than
+  a token of their own. Per-worker tokens come next.
+
 ## Command reference
 
 ```

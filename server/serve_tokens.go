@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 	"github.com/turtlemonvh/blanket/lib/auth"
-	"github.com/turtlemonvh/blanket/lib/objectid"
 )
 
 // The /token/ API (turtlemonvh/blanket#101). `blanket token create|list|
@@ -63,16 +62,11 @@ func (s *ServerConfig) listTokens(c *gin.Context) {
 	c.JSON(http.StatusOK, ts)
 }
 
-// issueToken generates, stores and returns a new token. Shared with
-// `auth init` (1c), which mints the first admin token the same way.
+// issueToken generates, stores and returns a new token, and refreshes the
+// cached auth state. POST /auth/init mints the first admin token with it.
 func (s *ServerConfig) issueToken(t auth.Token) (TokenCreateResponse, error) {
-	secret, err := auth.NewTokenString()
+	secret, t, err := auth.IssueToken(s.Tokens, t)
 	if err != nil {
-		return TokenCreateResponse{}, err
-	}
-	t.Id = objectid.NewObjectId()
-	t.CreatedTs = time.Now().Unix()
-	if err := s.Tokens.CreateToken(t, auth.HashToken(secret)); err != nil {
 		return TokenCreateResponse{}, err
 	}
 	s.refreshAuthEnabled()

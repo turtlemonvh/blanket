@@ -160,6 +160,7 @@ type Store interface {
 	// TouchToken records a lastUsed time. A missing token is not an error:
 	// it was revoked between the request and the batched write.
 	TouchToken(hash string, ts int64) error
+	SetupStore
 }
 
 // AnyEnablesAuth reports whether any of ts turns auth on.

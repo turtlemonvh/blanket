@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/turtlemonvh/blanket/lib/auth"
 )
 
 // MCP prompts are user-invoked templates (Claude Code lists them as
@@ -46,8 +47,10 @@ const newTaskTypeTaskMissing = `No description was passed with this prompt. If t
 // drives blanket_write_task_type, blanket_launch_worker and
 // blanket_run_task, so it is create-tier: offering it in readonly mode
 // would hand the agent a workflow whose tools aren't registered.
-func (s *ServerConfig) registerMCPPrompts(srv *mcp.Server, mode string) {
-	if !mcpModeAllows(mode, mcpTierCreate) {
+func (s *ServerConfig) registerMCPPrompts(srv *mcp.Server, mode string, p *auth.Principal) {
+	// The prompt walks the model through writing a task type, so it is
+	// offered only to callers that can.
+	if !mcpModeAllows(mode, mcpTierCreate) || !p.Has(auth.ScopeTypesWrite) {
 		return
 	}
 	srv.AddPrompt(&mcp.Prompt{
