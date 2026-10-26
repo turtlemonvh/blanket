@@ -30,6 +30,13 @@ tag.
   longer hides errors other than "no such task", and it exits 1 if the
   task survives. `blanket_cancel_task(force=true, delete=true)` waits up
   to 15s for the kill before deleting.
+- **`powershell` tasks run with `-NoProfile -NonInteractive`.** A task
+  no longer inherits the machine owner's PowerShell `$PROFILE`, which
+  matches `bash -c` (a non-interactive shell never sourced `~/.bashrc`),
+  and a prompt is now an error instead of a task that hangs until its
+  timeout. A type that relied on something its profile set must set it
+  in `environment` or `command`. The `windows_powershell` example's
+  timeout rose from 10s to 60s to cover interpreter startup (#169).
 
 ### Fixes
 
@@ -106,6 +113,16 @@ Everything merged since `v0.2.1`.
 - Malformed `:id` path parameters now return 400 instead of 500 across
   every task/worker route (#115), and client error responses decode
   into typed errors instead of opaque strings (#112).
+- **`blanket task-validate` and the tag ontology.** Coded checks
+  001-009 (command, executor, template references, inputs,
+  documentation, `result_file`) plus a tag lint (010-014) against a
+  known-tag set built from a seed vocabulary, `.blanket/known-tags.conf`
+  files and the tags already in use, with `--json`, `--strict` and
+  `--dump-known-tags`. Tags are namespaced `namespace:value`, and the
+  shipped example types moved to it (`bash` → `exec:bash`, `unix` →
+  `os:unix`, `python` → `runtime:python3`, `windows` → `os:windows`).
+  Unnamespaced tags still work. See
+  [docs/tag_ontology.md](docs/tag_ontology.md).
 - **Windows CI.** A `windows-latest` job builds the binary natively and
   runs a PowerShell smoke suite alongside the Linux/Docker suites.
 

@@ -1,103 +1,97 @@
 # Authoring Task Types
 
-A practical guide to writing a *good* blanket task type — for a human, or
-for an AI agent pointed at this file (via `CLAUDE.md`, a Cursor rule, an
-MCP resource, or the `blanket-task-type` skill under
-`.claude/skills/`). For the formal field-by-field schema, see
-[task_type_definitions.md](task_type_definitions.md); for tags
-specifically, see [tag_ontology.md](tag_ontology.md). This doc doesn't
-repeat either — it's the workflow and the judgment calls in between.
+How to write a *good* task type, for a human or for an agent (the MCP
+server's `new_task_type` prompt and `blanket_docs(page="authoring")`
+point here). The field-by-field schema is
+[task_type_definitions.md](task_type_definitions.md) and tags are
+[tag_ontology.md](tag_ontology.md); this page is the workflow and the
+judgment calls in between.
 
 ## What makes a task type good
 
 Four things, each backed by a `blanket task-validate` check:
 
-1. **Valid Go template syntax** in `command` — checked by code 003.
+1. **Valid Go template syntax** in `command` — code 003.
 2. **Good tags** — namespaced, drawn from the ontology or extending it
-   deliberately — checked by codes 010/011 (nudges) and 012-014 (opt-in
+   deliberately — codes 010/011 (nudges) and 012-014 (opt-in
    strictness).
-3. **The right number of inputs** — 2-5 is comfortable; past 10 the type
-   is probably doing too much — checked by code 008.
-4. **Clear documentation** — `description` and `documentation` filled in
-   — checked by codes 006/007.
+3. **The right number of inputs** — 2-5 is comfortable; past 10 the
+   type is probably doing too much — code 008.
+4. **Clear documentation** — `description` and `documentation` filled
+   in — codes 006/007.
 
-If you're writing a type by hand or generating one as an agent, running
-`blanket task-validate --json <name>` after every draft and reading the
-findings is the fastest way to converge on all four.
+Running `blanket task-validate --json <name>` after every draft and
+reading the findings is the fastest way to converge on all four.
 
 ## The `{{.VAR}}` vs `$VAR` distinction
 
 `command` is rendered as a Go template *once, at submit time*, against
-the task's merged environment map. `{{.NAME}}` becomes whatever `NAME`
-resolved to when the task was created — a caller-supplied value, or a
+the task's merged environment map: `{{.NAME}}` becomes whatever `NAME`
+resolved to when the task was created, a caller-supplied value or a
 declared default.
 
-The same variables are *also* exported as real process environment
-variables when the command actually runs, so `$NAME` works too. The
-difference matters:
+The same variables are *also* exported as process environment variables
+when the command runs, so `$NAME` works too. The difference:
 
-- `{{.NAME}}` is baked into the command string before it's ever handed to
-  a shell — useful when you need the value to affect the shape of the
-  command itself (e.g. picking which subcommand to run).
-- `$NAME` is resolved by the shell at execution time, from whatever the
-  worker's process environment looks like — including anything inherited
-  from the worker's own environment, not just what blanket declared. This
-  is why `task-validate`'s code 004 (a template ref that isn't a declared
-  input) is a *warning*, not an error: the ref might be intentionally
-  relying on something inherited via `$VAR` instead.
+- `{{.NAME}}` is baked into the command string before any shell sees
+  it. Use it when the value must change the shape of the command, such
+  as which subcommand runs.
+- `$NAME` is resolved by the shell at run time from the worker's process
+  environment, which includes anything the worker inherited, not only
+  what blanket set. This is why `task-validate`'s code 004 (a template
+  reference that is not a declared input) is a *warning*: the reference
+  may be relying on something inherited via `$VAR` on purpose.
 
-Prefer `$VAR` inside the command body when you can — it reads like normal
-shell — and reach for `{{.VAR}}` only when the value needs to change the
-command's structure, not just its arguments.
+Prefer `$VAR` in the command body — it reads like normal shell — and
+reach for `{{.VAR}}` only when the value changes the command's
+structure rather than its arguments.
 
-## Sizing: 2-5 inputs, not 20
+## How many inputs: 2-5, not 20
 
-A task type is a function signature. Two to five inputs is comfortable to
-read, submit, and reason about. More than ten is a sign the type is
-trying to be too general — split it into two or three narrower types
-instead of one type with a dozen optional knobs.
+A task type is a function signature. Two to five inputs is comfortable
+to read, submit and reason about. More than ten means the type is
+trying to be too general: split it into two or three narrower types
+instead of one with a dozen optional knobs.
 
-Two channels count as "inputs": declared environment variables
-(`environment.default` / `required` / `optional`), and file uploads.
-Files aren't declared in the TOML schema — they're an ad-hoc part of the
-multipart submit request (see
-[usage.md#file-uploads](usage.md#file-uploads)) — so `task-validate`'s
-input-count check (008) can only count the declared env vars. If a type
-also expects one or two uploaded files as part of its contract, factor
-that into whether it's staying in the comfortable range, even though the
-validator can't see it.
+Two channels count as inputs: declared environment variables
+(`environment.default` / `required` / `optional`) and file uploads.
+Files are not declared in the TOML — they are an ad-hoc part of the
+multipart submit request ([usage.md#file-uploads](usage.md#file-uploads))
+— so check 008 counts only the declared env vars. If a type also
+expects one or two uploaded files, count them yourself.
 
-When you're interviewing a user (or yourself) about what a type needs,
-push back on anything that could be a fixed default instead of a
-caller-supplied input. "Configurable" isn't automatically better.
+When interviewing a user (or yourself) about what a type needs, push
+back on anything that could be a fixed default instead of an input.
+"Configurable" is not automatically better.
 
 ## Tags: request the minimum
 
-Tags are worker-matching constraints, not descriptive labels — see
-[tag_ontology.md](tag_ontology.md) for the full rationale. The one-line
-version: every tag you add *narrows* which workers can claim the task.
-When authoring, ask "does this task genuinely need a worker with this
-capability?" for each tag, not "would this tag be informative?"
+Tags are worker-matching constraints, not descriptive labels: a worker
+claims a task only if its tags are a superset of the task's, so every
+tag you add *narrows* which workers can run it (see
+[How tags match workers](tag_ontology.md#how-tags-match-workers)). For
+each tag ask "does this task need a worker with this capability?", not
+"would this tag be informative?".
 
-Before inventing a tag, check what's already in use:
+Before inventing a tag, check what is already in use:
 
 ```bash
 blanket task-validate --dump-known-tags
 ```
 
-This shows the built-in seed vocabulary, anything declared in
-`.blanket/known-tags.conf` (or `.blanket/known-tags.d/*.conf`), and every
-tag actually used by a loaded task type — each labeled with its origin.
-Prefer an existing tag over inventing a near-duplicate; `task-validate`
-will flag likely typos and near-misses (codes 010/011), but it won't stop
-you from introducing `runtime:py3` next to an existing `runtime:python3`
-if you don't check first.
+This prints the built-in seed vocabulary, anything declared in
+`.blanket/known-tags.conf` (or `.blanket/known-tags.d/*.conf`), and
+every tag used by a loaded task type, each labelled with its origin.
+Prefer an existing tag over a near-duplicate: `task-validate` flags
+likely typos (codes 010/011), but it will not stop you introducing
+`runtime:py3` next to an existing `runtime:python3` if you do not look
+first.
 
 ## Common patterns
 
 ### User-supplied command (escape hatch)
 
-For ad-hoc one-offs where a dedicated type isn't worth writing. See
+For ad-hoc one-offs where a dedicated type is not worth writing. See
 [`examples/types/bash_task.toml`](../examples/types/bash_task.toml).
 
 ```toml
@@ -116,9 +110,8 @@ executor = "bash"
 
 ### Script wrapper with a default
 
-Shells out to a real script or interpreter, with an optional input that
-has a sensible default so the type is submittable with no environment at
-all. See
+Shells out to a script or interpreter, with an optional input whose
+default makes the type submittable with no environment at all. See
 [`examples/types/python_hello.toml`](../examples/types/python_hello.toml).
 
 ```toml
@@ -137,7 +130,7 @@ executor = "bash"
 
 ### Windows-native
 
-No bash/WSL dependency — runs anywhere `cmd.exe` (or `powershell`) is
+No bash or WSL dependency; runs anywhere `cmd.exe` (or `powershell`) is
 available. See
 [`examples/types/windows_echo.toml`](../examples/types/windows_echo.toml)
 (`cmd`) and
@@ -190,28 +183,27 @@ executor = "bash"
 
 ## The authoring loop
 
-Whether you're a human iterating by hand or an agent driving this
-programmatically, the loop is the same:
+The same five steps, by hand or driven by an agent:
 
-1. **Understand the task.** What command needs to run, what does it
-   require (interpreter, OS, network, secrets), and which parts of that
-   genuinely vary between runs versus which are fixed defaults?
-2. **Check existing context.** Glob the configured `tasks.typesPaths` for
-   similar types worth copying from, and run
-   `blanket task-validate --dump-known-tags` to see the real tag
-   vocabulary in use, not just the seed list.
-3. **Write the TOML** — `description`, `documentation`, namespaced tags,
-   a template'd `command`, and 2-5 declared inputs.
+1. **Understand the task.** What command runs, what it needs
+   (interpreter, OS, network, secrets), and which parts vary between
+   runs versus which are fixed defaults.
+2. **Check existing context.** Look through the configured
+   `tasks.typesPaths` for similar types worth copying, and run
+   `blanket task-validate --dump-known-tags` for the tag vocabulary
+   actually in use, not just the seed list.
+3. **Write the TOML**: `description`, `documentation`, namespaced tags,
+   a templated `command`, and 2-5 declared inputs.
 4. **Validate.**
    ```bash
    blanket task-validate --json <type-name>
    ```
-   Fix every error. For each warning, either fix it or have a specific
-   reason not to (e.g. a code-004 warning where the referenced variable
-   is intentionally inherited from the worker's environment).
-5. **Smoke-test it** — submit a real task against the type and confirm it
-   runs to `SUCCESS`, then check the result directory and log output
-   actually look right, not just that the process exited 0.
+   Fix every error. For each warning, fix it or have a specific reason
+   not to (a code-004 warning where the variable is intentionally
+   inherited from the worker's environment, for example).
+5. **Smoke-test it.** Submit a real task against the type, confirm it
+   reaches `SUCCESS`, then check that the result directory and log
+   output look right, not just that the process exited 0.
 
 ## Validating
 
@@ -222,7 +214,6 @@ blanket task-validate --json             # structured findings — drive tooling
 blanket task-validate --strict           # exit non-zero on warnings too, not just errors
 ```
 
-See [task_type_definitions.md#validation](task_type_definitions.md#validation)
-for the full check table and every flag, including the opt-in tag-lint
-strictness flags (`--warn-new-tag`, `--warn-undeclared-tag`,
-`--check-workers`).
+The check table and every flag, including the opt-in tag-lint flags
+(`--warn-new-tag`, `--warn-undeclared-tag`, `--check-workers`), are in
+[task_type_definitions.md](task_type_definitions.md#validation-blanket-task-validate).
