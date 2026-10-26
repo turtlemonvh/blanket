@@ -59,7 +59,8 @@ const (
 	ExitNothingToDo = 10
 	// ExitStagedOnly: the new binary is staged or installed, and no
 	// restart was attempted (--stage-only, --no-restart, or a server that
-	// was not running).
+	// was not running) -- including an installed binary that is current
+	// while the server on the port still runs another version.
 	ExitStagedOnly = 11
 	// ExitVerificationFailed: a checksum did not match, or the server that
 	// came back is not the one we installed. The install is left in a
@@ -279,6 +280,48 @@ func serverAnswers(port int) bool {
 	defer res.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(res.Body, 4096))
 	return res.StatusCode == http.StatusOK
+}
+
+// fetchServerVersion asks the server on the port for GET /version and
+// returns the release tag in its banner. "" means unknown: nothing
+// answered, the answer was not readable, or the server is a dev build --
+// none of which contradicts "already up to date".
+func fetchServerVersion(port int) string {
+	b, err := opsCallTimeout(port, http.MethodGet, "/version", nil, 2*time.Second)
+	if err != nil {
+		return ""
+	}
+	var v struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(b, &v) != nil {
+		return ""
+	}
+	return upgrade.VersionFromBanner(v.Version)
+}
+
+// serverStillOld handles "the binary is current but the server is not".
+// It records the server's version on res and, when that version is known
+// and differs from installedVersion, fills in exit 11 and the next step
+// and returns true.
+//
+// The next step is --resume when the journal describes an attempt that
+// was neither verified nor aborted, and a supervisor restart otherwise.
+func serverStillOld(res *upgradeResult, port int, installedVersion string) bool {
+	got := fetchServerVersion(port)
+	res.ServerVersion = got
+	if got == "" || upgrade.SameVersion(got, installedVersion) {
+		return false
+	}
+	next := "Restart the server under its supervisor (or stop and start it by hand) to run the installed version."
+	if j, err := upgrade.LoadJournal(res.JournalPath); err == nil && j != nil &&
+		j.State != upgrade.JournalVerified && j.State != upgrade.JournalAborted {
+		next = "Run `blanket upgrade --resume --yes` to finish the restart."
+	}
+	res.ExitCode = ExitStagedOnly
+	res.Message = fmt.Sprintf("blanket %s is installed at %s, but the server on :%d is still running %s.\n%s",
+		installedVersion, res.BinaryPath, port, got, next)
+	return true
 }
 
 // statusProbeBudget is how long "is there a server?" keeps asking before

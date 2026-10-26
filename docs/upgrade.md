@@ -318,8 +318,8 @@ before the restart, the CLI warns and verifies on the version alone.
 | Code | Meaning |
 | ---- | ------- |
 | `0` | Done: the new binary is installed and a new server answered on it. For `--check`, **an upgrade is available**. |
-| `10` | **Nothing to do** — already at the target version, or nothing to roll back to. |
-| `11` | **Staged only** — the binary is staged or installed and no restart was attempted (`--stage-only`, `--no-restart`, or no server was running). |
+| `10` | **Nothing to do** — the installed binary is already the target version and the server on the port runs it too (or no server answered, or it is a dev build whose version can't be read), or nothing to roll back to. |
+| `11` | **Staged only** — the binary is staged or installed and no restart was attempted (`--stage-only`, `--no-restart`, or no server was running). Also when the installed binary is already the target version but the server on the port still runs another one; see below. |
 | `12` | **Verification failed** — a checksum did not match, or the server that came back is not the one that was installed. |
 | `13` | **Restart refused** — the binary is in place but the server would not restart: a 409 from the state machine, or a restart already in flight. |
 | `1` | Any other error. |
@@ -329,6 +329,24 @@ before the restart, the CLI warns and verifies on the version alone.
 [`blanket migrate --check`](#blanket-migrate): `migrate --check` is a
 health probe (pending is the abnormal case), while `upgrade --check` asks
 "would this command do something?".
+
+Before it says "nothing to do", with or without `--check`, the CLI asks the
+server on the port for `GET /version`. The CLI is the installed binary, so
+after a swap whose restart failed, or after `--no-restart`, the binary is
+current while the old process is still serving. In that case it exits
+**11** instead of 10:
+
+```
+$ blanket upgrade --yes
+blanket v0.5.0 is installed at /home/you/.local/bin/blanket, but the server on :8773 is still running v0.4.0.
+Run `blanket upgrade --resume --yes` to finish the restart.
+```
+
+The second line is `--resume --yes` when [the journal](#the-upgrade-journal-journaljson)
+records an attempt that is neither `VERIFIED` nor `ABORTED`; otherwise it
+says to restart the server under its supervisor. `--json` reports the
+server's version as `serverVersion` (empty when no server answered or its
+version can't be read).
 
 ### `--print-plan`
 
