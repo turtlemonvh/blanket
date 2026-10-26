@@ -45,7 +45,7 @@ func (s *ServerConfig) getWorkerId(c *gin.Context) (objectid.ObjectId, error) {
 // but isn't in a state that can be canceled (only RUNNING and WAITING
 // are). Kept as a sentinel rather than a formatted error so callers (the
 // REST handler, MCP) can each decide how to present it.
-var ErrTaskNotCancelable = errors.New("task is not in a cancelable state (must be RUNNING or WAITING)")
+var ErrTaskNotCancelable = database.ErrTaskNotCancelable
 
 // ErrRunningTaskRequiresForce is returned by cancelTaskById when a task is
 // RUNNING and the caller didn't opt in to stopping it. Cancelling a WAITING
@@ -55,7 +55,7 @@ var ErrTaskNotCancelable = errors.New("task is not in a cancelable state (must b
 // shouldn't trigger by accident (e.g. by cancelling a task that was claimed
 // a moment after the caller looked at its state). See
 // turtlemonvh/blanket#52.
-var ErrRunningTaskRequiresForce = errors.New("task is RUNNING; pass force=true to stop it")
+var ErrRunningTaskRequiresForce = database.ErrRunningTaskRequiresForce
 
 // cancelTaskById transitions a WAITING, SCHEDULED, RECURRING, or PAUSED
 // task, or a RUNNING task when force is true, to STOPPED. For a RUNNING
@@ -70,22 +70,11 @@ var ErrRunningTaskRequiresForce = errors.New("task is RUNNING; pass force=true t
 // which removes it. Either way, a child the template already spawned
 // keeps running to its own completion, unaffected. See docs/task_flow.md.
 func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.ObjectId, force bool) error {
-	task, err := s.DB.GetTask(taskId)
-	if err != nil {
-		return err
-	}
-	switch task.State {
-	case "WAITING", "SCHEDULED", "RECURRING", "PAUSED":
-		// Not yet queued (SCHEDULED), queued but unclaimed (WAITING), or a
-		// template that never runs itself (RECURRING/PAUSED); no running
-		// subprocess to worry about in any of these cases.
-	case "RUNNING":
-		if !force {
-			return ErrRunningTaskRequiresForce
-		}
-	default:
-		return ErrTaskNotCancelable
-	}
+	// FinishTask checks the state (and the force rule) in the same
+	// transaction as the write, so a claim landing mid-cancel can't leave
+	// a CLAIMED task STOPPED with no pending-stop stamp
+	// (turtlemonvh/blanket#261).
+	//
 	// FinishState leaves both RunId and ExitCode unset. No RunId because
 	// this is a server-issued (user-initiated) transition, not a worker
 	// reporting on a run it owns: an empty token is legacy-permissive, so it
@@ -97,7 +86,7 @@ func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.Objec
 	// stamps StopPendingTs, which keeps DELETE /task/:id from removing the
 	// record before the worker has seen the STOPPED and killed the process
 	// (turtlemonvh/blanket#252).
-	if err := s.DB.FinishTask(taskId, &database.TaskFinishConfig{State: "STOPPED", StopRequested: true}); err != nil {
+	if err := s.DB.FinishTask(taskId, &database.TaskFinishConfig{State: "STOPPED", StopRequested: true, Force: force}); err != nil {
 		return err
 	}
 	s.TaskEvents.Notify()

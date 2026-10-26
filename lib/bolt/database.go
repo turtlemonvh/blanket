@@ -463,12 +463,25 @@ func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, fields *database.T
 				database.ErrRunIdMismatch, taskId.Hex(), t.RunId, fields.RunId)
 		}
 
+		if fields.StopRequested {
+			switch t.State {
+			case "WAITING", "SCHEDULED", "RECURRING", "PAUSED":
+			case "RUNNING":
+				if !fields.Force {
+					return database.ErrRunningTaskRequiresForce
+				}
+			default:
+				return database.ErrTaskNotCancelable
+			}
+		}
+
 		if isTerminalState(t.State) {
-			// A report from the worker (anything but another user cancel)
-			// on a task with a pending stop means the process is gone:
-			// clear the stamp so DELETE /task/:id goes through
-			// (turtlemonvh/blanket#252). The state itself stays put.
-			if t.StopPendingTs != 0 && !fields.StopRequested {
+			// A report from the worker on a task with a pending stop means
+			// the process is gone: clear the stamp so DELETE /task/:id goes
+			// through (turtlemonvh/blanket#252). The state itself stays
+			// put. (A user cancel never gets here; the check above refuses
+			// a terminal task.)
+			if t.StopPendingTs != 0 {
 				t.StopPendingTs = 0
 			}
 			// First terminal state wins. In particular a user-issued

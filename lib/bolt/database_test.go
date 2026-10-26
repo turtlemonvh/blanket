@@ -438,3 +438,51 @@ func TestFinishTask_FirstTerminalStateWins(t *testing.T) {
 	err = DB.FinishTask(tsk.Id, &database.TaskFinishConfig{State: "SUCCESS", RunId: "R2"})
 	assert.ErrorIs(t, err, database.ErrRunIdMismatch)
 }
+
+// TestFinishTask_UserCancelChecksStateInTransaction covers the cancel half
+// of turtlemonvh/blanket#261: a user cancel (StopRequested) decides from
+// the record it is about to write, so a task claimed or started after the
+// caller last looked is refused rather than stopped behind its back.
+func TestFinishTask_UserCancelChecksStateInTransaction(t *testing.T) {
+	DB, closefn := NewTestDB()
+	defer closefn()
+
+	taskIn := func(state string) objectid.ObjectId {
+		tsk := tasks.Task{Id: objectid.NewObjectId(), TypeId: "echo_task", State: state, CreatedTs: time.Now().Unix()}
+		assert.NoError(t, DB.SaveTask(&tsk))
+		return tsk.Id
+	}
+	cancel := func(id objectid.ObjectId, force bool) error {
+		return DB.FinishTask(id, &database.TaskFinishConfig{State: "STOPPED", StopRequested: true, Force: force})
+	}
+
+	claimed := taskIn("CLAIMED")
+	assert.ErrorIs(t, cancel(claimed, true), database.ErrTaskNotCancelable)
+	got, err := DB.GetTask(claimed)
+	assert.NoError(t, err)
+	assert.Equal(t, "CLAIMED", got.State)
+
+	running := taskIn("RUNNING")
+	assert.ErrorIs(t, cancel(running, false), database.ErrRunningTaskRequiresForce)
+	got, _ = DB.GetTask(running)
+	assert.Equal(t, "RUNNING", got.State)
+	assert.NoError(t, cancel(running, true))
+	got, _ = DB.GetTask(running)
+	assert.Equal(t, "STOPPED", got.State)
+	assert.NotZero(t, got.StopPendingTs)
+
+	// A second cancel of the now-terminal task is refused and leaves the
+	// pending-stop stamp alone.
+	assert.ErrorIs(t, cancel(running, true), database.ErrTaskNotCancelable)
+	got, _ = DB.GetTask(running)
+	assert.NotZero(t, got.StopPendingTs)
+
+	waiting := taskIn("WAITING")
+	assert.NoError(t, cancel(waiting, false))
+	got, _ = DB.GetTask(waiting)
+	assert.Equal(t, "STOPPED", got.State)
+	assert.Zero(t, got.StopPendingTs)
+
+	var nf database.ItemNotFoundError
+	assert.ErrorAs(t, cancel(objectid.NewObjectId(), true), &nf)
+}

@@ -233,6 +233,9 @@ queue entry after the task is deleted, because the queue is a separate
 bucket. The claim then finds no record, acks the entry away and answers
 404, so nothing runs. The claim checks the record and marks it `CLAIMED`
 in one transaction, so a delete landing mid-claim can't be undone by it.
+A cancel likewise checks the task's state in the transaction that writes
+`STOPPED`, so a task claimed mid-cancel is refused rather than stopped
+without a pending-stop stamp.
 
 ### Idempotent `run`/`finish` and the `runId` fencing token
 
