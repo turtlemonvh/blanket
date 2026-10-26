@@ -387,9 +387,12 @@ blanket ps
 # Just the ids
 blanket ps -q
 
-# Delete one
+# Delete one (a running task is refused; cancel it first, or use --force)
 curl -s -X DELETE localhost:8773/task/<id> | jq .
 blanket rm <id>
+
+# Cancel a running task, wait for its worker to kill it, then delete it
+blanket rm --force <id>
 
 # Delete the most recent
 blanket ps -q | tail -n1 | xargs blanket rm

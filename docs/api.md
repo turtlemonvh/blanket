@@ -12,9 +12,9 @@ Every `:id` route (task or worker) follows one rule: a malformed id, one
 that fails to parse as an `objectid.ObjectId` (not valid hex, wrong
 length), is a **400**; a well-formed id naming no record is a **404**.
 A malformed id is a bug in the caller and a missing one may just mean
-"already deleted"; neither is ever a 500. `DELETE /task/:id` is the
-deliberate exception: it is an idempotent delete and answers 200 for a
-well-formed id naming nothing.
+"already deleted"; neither is ever a 500. The DELETE routes follow the
+rule too, so a script that doesn't care whether the record was already
+gone can treat 404 as success.
 
 Most JSON handlers report errors as `{"error": "<message>"}`; a few
 (streaming/tail endpoints, the web UI) return plain text.
@@ -55,7 +55,7 @@ has its own section below.
 GET    /task/                   # list tasks; filterable via query string
 GET    /task/:id                # fetch one task
 POST   /task/                   # submit; ?wait blocks, &stream streams
-DELETE /task/:id                # delete; kills a RUNNING task
+DELETE /task/:id                # delete; 400 while running (cancel first), 404 if missing
 PUT    /task/:id/cancel         # -> STOPPED; RUNNING needs ?force=true
 PUT    /task/:id/pause          # RECURRING -> PAUSED
 PUT    /task/:id/resume         # PAUSED -> RECURRING
@@ -277,10 +277,31 @@ never fires again; children it already spawned run to completion.
 
 ### Delete a task: `DELETE /task/:id`
 
-Removes the record and its result dir, killing the task if it is running.
-For a `RECURRING`/`PAUSED` template this removes the series outright;
-`cancel` is the keep-the-record alternative. Returns `{"id": "..."}`,
-200 even if nothing existed.
+Removes the record and its result dir. It never kills anything: a task
+that may still have a process on a worker is refused, so cancel it first
+(`PUT /task/:id/cancel?force=true`). For a `RECURRING`/`PAUSED` template
+this removes the series outright; `cancel` is the keep-the-record
+alternative.
+
+| Task | Response |
+| --- | --- |
+| `WAITING`, `SCHEDULED`, `RECURRING`, `PAUSED` (no process yet) | **200** `{"id": "..."}` |
+| `SUCCESS`, `ERROR`, `TIMEDOUT`, `STOPPED` | **200** `{"id": "..."}` |
+| `CLAIMED`, `RUNNING` | **400** `Cannot delete a task that is still running; cancel it first` |
+| `STOPPED` by a force cancel the worker has not yet confirmed (`stopPendingTs` non-zero) | **400** `Cannot delete a task until its worker confirms it has stopped; try again shortly` |
+| no task with that id (including one already deleted) | **404** |
+| malformed id | **400** |
+
+The second 400 covers the gap between a force cancel and the kill. The
+cancel flips the record to `STOPPED` at once and stamps `stopPendingTs`;
+the worker kills the process on its next poll and reports, which clears
+the stamp, usually within a couple of seconds. Deleting before then
+would remove the record the worker polls, and a worker that reads a 404
+leaves the process running. If the worker never reports (it died), the
+task becomes deletable 60s after the cancel. The check runs in the same
+transaction as the delete. `blanket rm --force` and
+`blanket_cancel_task(force, delete)` cancel, wait for the worker, then
+delete.
 
 ### Pause, resume, or reschedule a series
 

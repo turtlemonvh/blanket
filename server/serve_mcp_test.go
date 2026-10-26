@@ -556,6 +556,31 @@ func TestMcpCancelTask_DeleteOnTerminalTask(t *testing.T) {
 	assert.Error(t, err, "task should have been deleted even though it was already terminal")
 }
 
+// TestMcpCancelTask_DeleteMissingTask: a well-formed id naming no task is
+// a not-found error from the cancel step, before the delete is reached
+// (#249). The agent sees the same "no such task" answer the HTTP route's
+// 404 carries.
+func TestMcpCancelTask_DeleteMissingTask(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	_, _, err := s.mcpCancelTask(context.Background(), nil, blanketCancelTaskArgs{Id: objectid.NewObjectId().Hex(), Delete: true})
+	var nf database.ItemNotFoundError
+	assert.ErrorAs(t, err, &nf)
+}
+
+// TestRemoveTaskById_MissingTask: the shared delete helper reports a
+// missing task as database.ItemNotFoundError, which removeTask maps to
+// 404 rather than 500 (#249).
+func TestRemoveTaskById_MissingTask(t *testing.T) {
+	s, cleanup := NewTestServer()
+	defer cleanup()
+
+	err := s.removeTaskById(context.Background(), objectid.NewObjectId())
+	var nf database.ItemNotFoundError
+	assert.ErrorAs(t, err, &nf)
+}
+
 func TestMcpCancelTask_InvalidId(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()

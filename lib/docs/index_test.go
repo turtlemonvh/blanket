@@ -18,9 +18,7 @@ func TestSearch_RealQuestions(t *testing.T) {
 	}{
 		{"how do I cancel a running task", "api", "#cancel-a-task-put-taskidcancel"},
 		{"how do I cancel a running task", "flow", "#cancel-a-running-task-forcetrue"},
-		// tag_ontology.md never states the matching rule; task_type_definitions.md
-		// (lint 014) and mcp.md do, and rank above it once mcp.md is indexed.
-		{"worker tags superset", "schema", ""},
+		{"worker tags superset", "tags", "#how-tags-match-workers"},
 		{"malformed id 400", "api", "#errors"},
 		{"how do I start a worker", "", "worker"},
 		{"task type required env vars", "schema", ""},

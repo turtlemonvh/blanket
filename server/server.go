@@ -420,7 +420,7 @@ func (s *ServerConfig) GetRouter() *gin.Engine {
 	r.GET("/task/", s.getTasks)                       // list tasks in db
 	r.GET("/task/:id", s.getTask)                     // fetch just 1 by id
 	r.POST("/task/", s.postTask)                      // add a new task to the queue
-	r.DELETE("/task/:id", s.removeTask)               // delete all information from db, including killing if running
+	r.DELETE("/task/:id", s.removeTask)               // delete record + result dir; 400 while running (cancel first)
 	r.GET("/task/:id/log", s.streamTaskLog)           // stream stdout log
 	r.GET("/task/:id/log/tail", s.tailTaskLog)        // last N lines of stdout
 	r.PUT("/task/:id/cancel", s.cancelTask)           // stop execution of a task; will be moved to state STOPPED

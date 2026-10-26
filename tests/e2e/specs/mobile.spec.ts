@@ -240,6 +240,32 @@ test.describe('Desktop', () => {
     await expect(card(page, id).locator('.cell-duration')).toHaveText(/queued \d+s/);
   });
 
+  // DELETE /task/:id answers 404 once the task is gone (#249). Deleting a
+  // row someone else already deleted must still clear the row: htmx skips
+  // the swap on a 4xx, but the row's after-request refresh runs either way.
+  test('deleting an already-deleted task clears its row', async ({ page, request }) => {
+    const done = await finishedTask(request, 'x\n');
+    await page.goto('/ui/');
+    await expect(card(page, done)).toHaveCount(1);
+
+    // Delete it behind the page's back at the moment the click's request
+    // goes out, so the page's own DELETE is the one that gets the 404.
+    await page.route(`**/task/${done}`, async (route) => {
+      if (route.request().method() !== 'DELETE') return route.continue();
+      expect((await request.delete(`/task/${done}`)).status()).toBe(200);
+      await route.continue();
+    });
+    const deleteResponse = page.waitForResponse(
+      (r) => r.request().method() === 'DELETE' && r.url().endsWith(`/task/${done}`),
+    );
+
+    const msg = nextDialog(page, true);
+    await card(page, done).getByText('Delete', { exact: true }).click();
+    await msg;
+    expect((await deleteResponse).status()).toBe(404);
+    await expect(card(page, done)).toHaveCount(0);
+  });
+
   test('cancel and delete both ask first, naming the task type', async ({ page, request }) => {
     await confirmJourney(page, request);
   });
