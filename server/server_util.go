@@ -60,6 +60,10 @@ func statusForDBError(err error, fallback int) int {
 	if _, ok := err.(database.ItemNotFoundError); ok {
 		return http.StatusNotFound
 	}
+	// DELETE /task/:id's still-running guard (turtlemonvh/blanket#252).
+	if errors.Is(err, database.ErrTaskStillRunning) || errors.Is(err, database.ErrTaskStopPending) {
+		return http.StatusBadRequest
+	}
 	return fallback
 }
 

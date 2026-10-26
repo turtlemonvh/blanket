@@ -9,8 +9,27 @@ tag.
 
 ## Unreleased
 
-### Behaviour changes
+### Breaking / behaviour changes
 
+- **`DELETE /task/:id` returns 404 for a missing task** (#249). It used
+  to answer 200 for a well-formed id naming no task; it now follows the
+  same 400/404 rule as every other `:id` route, `DELETE /worker/:id`
+  included. A script deleting tasks that may already be gone should
+  treat 404 as success. `blanket rm` of a missing task now exits 1 with
+  `error: 404 no such task <id>` (`--force` still ignores it).
+- **`DELETE /task/:id` refuses a task that is still running** (#252). A
+  `CLAIMED` or `RUNNING` task is now a 400, `Cannot delete a task that is
+  still running; cancel it first`, and is left alone. The docs said
+  delete killed a running task, but it never did. It removed the record,
+  the worker's next poll got a 404, and the process kept running with
+  nothing left to cancel it by. A force-cancelled task is also a 400 for
+  the moment until its worker reports the kill. The new `stopPendingTs`
+  task field tracks this, and the wait ends after 60s if no report
+  arrives. `blanket rm` prints the 400. `blanket rm --force` now cancels a
+  running task with force, waits for the kill, and deletes it. It no
+  longer hides errors other than "no such task", and it exits 1 if the
+  task survives. `blanket_cancel_task(force=true, delete=true)` waits up
+  to 15s for the kill before deleting.
 - **`powershell` tasks run with `-NoProfile -NonInteractive`.** A task
   no longer inherits the machine owner's PowerShell `$PROFILE`, which
   matches `bash -c` (a non-interactive shell never sourced `~/.bashrc`),

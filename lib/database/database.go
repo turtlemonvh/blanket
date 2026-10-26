@@ -74,6 +74,8 @@ type BlanketDB interface {
 	CleanupStalledWorkers(opts *ReapOptions) (ReapReport, error)
 	// Task functions
 	GetTask(taskId objectid.ObjectId) (tasks.Task, error)
+	// DeleteTask returns ItemNotFoundError for a task that does not exist,
+	// and CheckTaskDeletable's error for one that may still be running.
 	DeleteTask(taskId objectid.ObjectId) error
 	GetTasks(tc *TaskSearchConf) ([]tasks.Task, int, error)
 	SaveTask(t *tasks.Task) error
@@ -305,6 +307,12 @@ type TaskFinishConfig struct {
 	// an idempotent repeat finish, which must not clobber the exit code
 	// the first report already stored.
 	ExitCode *int
+	// StopRequested marks a user's cancel (PUT /task/:id/cancel, never a
+	// worker report). On a RUNNING task it stamps tasks.Task.StopPendingTs,
+	// since the process is still alive until the worker sees the STOPPED.
+	// A finish without it on a task that already has a pending stop is the
+	// worker reporting the process gone, and clears the stamp.
+	StopRequested bool
 }
 
 // FinishState is the common case: a terminal state with no exit code and
@@ -326,4 +334,47 @@ var (
 	// (e.g. asking to start a task a user has already stopped). Maps to
 	// 409.
 	ErrTaskStateConflict = errors.New("task is not in a state this transition can be applied from")
+
+	// ErrTaskStillRunning means DELETE /task/:id was refused because the
+	// task may have a live process: it is CLAIMED or RUNNING
+	// (turtlemonvh/blanket#252). Maps to 400.
+	ErrTaskStillRunning = errors.New("Cannot delete a task that is still running; cancel it first")
+
+	// ErrTaskStopPending means the task was force-cancelled while RUNNING
+	// and its worker has not yet reported the process gone. Deleting the
+	// record now would hide the STOPPED the worker is about to act on and
+	// orphan the process. Maps to 400; retrying a few seconds later works.
+	ErrTaskStopPending = errors.New("Cannot delete a task until its worker confirms it has stopped; try again shortly")
 )
+
+// StopAckGrace bounds how long a pending stop (tasks.Task.StopPendingTs)
+// blocks DELETE /task/:id. A worker notices a STOPPED within one check
+// interval (2s by default) and reports straight after the kill, so this is
+// only reached when the worker died or lost the server. Past it the task
+// is deletable: that rare case risks an orphan, but the record must not
+// become undeletable forever. A var so tests can shorten it.
+var StopAckGrace = 60 * time.Second
+
+// CheckTaskDeletable is DELETE /task/:id's guard (turtlemonvh/blanket#252).
+// A task is deletable unless it has, or may still have, a process on a
+// worker:
+//
+//   - CLAIMED and RUNNING are refused (ErrTaskStillRunning).
+//   - WAITING, SCHEDULED, RECURRING and PAUSED are allowed: no process
+//     exists. A worker that claims a WAITING task deleted from under it
+//     finds no record and acks the queue entry away (claimTask's
+//     not-found branch).
+//   - Terminal states are allowed, except a STOPPED whose kill the worker
+//     has not confirmed yet (ErrTaskStopPending), until StopAckGrace.
+//
+// The bolt DeleteTask calls it inside the delete's own transaction.
+func CheckTaskDeletable(t *tasks.Task, now time.Time) error {
+	switch t.State {
+	case "CLAIMED", "RUNNING":
+		return ErrTaskStillRunning
+	}
+	if t.StopPendingTs != 0 && now.Sub(time.Unix(t.StopPendingTs, 0)) < StopAckGrace {
+		return ErrTaskStopPending
+	}
+	return nil
+}

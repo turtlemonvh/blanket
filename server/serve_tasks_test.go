@@ -7,7 +7,7 @@
 //     TestGetTask_Exists
 //   - GET /task/ + state filter: TestTaskList_FilterByState
 //   - DELETE /task/:id:         TestDeleteTask, TestDeleteTask_InvalidId,
-//     TestDeleteTask_MissingIdIsNoop
+//     TestDeleteTask_MissingIdIs404, TestDeleteTask_TwiceIs404
 //   - PUT /task/:id/cancel from WAITING: TestCancelTask_Waiting
 //   - PUT /task/:id/cancel from RUNNING without force (rejected, no-op):
 //     TestCancelTask_RunningWithoutForce
@@ -417,12 +417,10 @@ func TestDeleteTask_InvalidId(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestDeleteTask_MissingIdIsNoop documents removeTask's long-standing,
-// deliberate idempotent-delete contract (see its "Always returns 200,
-// even if item doesn't exist" doc comment): #115 fixes the malformed-id
-// case above to 400, but leaves this one alone -- a well-formed id naming
-// no task is not an error for DELETE.
-func TestDeleteTask_MissingIdIsNoop(t *testing.T) {
+// TestDeleteTask_MissingIdIs404: a well-formed id naming no task is a 404
+// (#249), like every other :id route. It used to be a 200 idempotent
+// delete.
+func TestDeleteTask_MissingIdIs404(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()
 	r := s.GetRouter()
@@ -431,7 +429,36 @@ func TestDeleteTask_MissingIdIsNoop(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), `"error"`)
+}
+
+// TestDeleteTask_TwiceIs404: the second delete of the same task is a 404,
+// and the first one's 200 carries the id.
+func TestDeleteTask_TwiceIs404(t *testing.T) {
+	cleanup := setupTestTaskType(t)
+	defer cleanup()
+
+	s, scleanup := NewTestServer()
+	defer scleanup()
+	r := s.GetRouter()
+
+	created := postTask(r, "echo_task")
+	assert.Equal(t, http.StatusCreated, created.Code)
+	var createdTask tasks.Task
+	assert.NoError(t, json.Unmarshal(created.Body.Bytes(), &createdTask))
+
+	path := fmt.Sprintf("/task/%s", createdTask.Id.Hex())
+	req, _ := http.NewRequest("DELETE", path, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+	assert.JSONEq(t, `{"id": "`+createdTask.Id.Hex()+`"}`, w.Body.String())
+
+	req, _ = http.NewRequest("DELETE", path, nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 // --- PUT /task/:id/cancel ---
