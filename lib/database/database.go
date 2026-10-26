@@ -79,6 +79,13 @@ type BlanketDB interface {
 	DeleteTask(taskId objectid.ObjectId) error
 	GetTasks(tc *TaskSearchConf) ([]tasks.Task, int, error)
 	SaveTask(t *tasks.Task) error
+	// ClaimTask writes a task a worker just pulled off the queue, but only
+	// if its record still exists and is not STOPPED; the check and the
+	// write share one transaction (turtlemonvh/blanket#261), so a delete or
+	// cancel cannot land between them. A missing record is
+	// ItemNotFoundError, a STOPPED one ErrTaskStopped, and in both cases
+	// nothing is written.
+	ClaimTask(t *tasks.Task) error
 	RunTask(taskId objectid.ObjectId, fields *TaskRunConfig) error
 	FinishTask(taskId objectid.ObjectId, fields *TaskFinishConfig) error
 	UpdateTaskProgress(taskId objectid.ObjectId, progress int) error
@@ -321,6 +328,11 @@ type TaskFinishConfig struct {
 	// A finish without it on a task that already has a pending stop is the
 	// worker reporting the process gone, and clears the stamp.
 	StopRequested bool
+	// Force lets a user's cancel (StopRequested) stop a RUNNING task. The
+	// cancelable-state rule is checked inside FinishTask's transaction, so
+	// a claim or a run start landing between the caller's read and this
+	// write can't slip past it (turtlemonvh/blanket#261).
+	Force bool
 }
 
 // FinishState is the common case: a terminal state with no exit code and
@@ -353,6 +365,20 @@ var (
 	// record now would hide the STOPPED the worker is about to act on and
 	// orphan the process. Maps to 400; retrying a few seconds later works.
 	ErrTaskStopPending = errors.New("Cannot delete a task until its worker confirms it has stopped; try again shortly")
+
+	// ErrTaskStopped means a claim found the task's record STOPPED: it was
+	// cancelled while queued, so the queue entry is acked away and nothing
+	// runs (turtlemonvh/blanket#261).
+	ErrTaskStopped = errors.New("Task was stopped")
+
+	// ErrTaskNotCancelable means a user's cancel found the task in a state
+	// it can't be cancelled from: CLAIMED, or already terminal. Checked in
+	// the cancel's own transaction (turtlemonvh/blanket#261).
+	ErrTaskNotCancelable = errors.New("task is not in a cancelable state (must be RUNNING or WAITING)")
+
+	// ErrRunningTaskRequiresForce means a user's cancel found the task
+	// RUNNING without Force set (turtlemonvh/blanket#52).
+	ErrRunningTaskRequiresForce = errors.New("task is RUNNING; pass force=true to stop it")
 )
 
 // StopAckGrace bounds how long a pending stop (tasks.Task.StopPendingTs)

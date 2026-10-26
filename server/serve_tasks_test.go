@@ -34,7 +34,8 @@
 //     TestFinishTask_RepeatKeepsStoredExitCode
 //   - POST /task/?wait (synchronous submission): server/serve_sync_test.go
 //   - POST /task/claim/:workerid edges: TestClaim_MissingWorker,
-//     TestClaim_NoMatchingTask, TestClaim_DeletedTaskDoesNotPanic
+//     TestClaim_NoMatchingTask, TestClaim_DeletedTaskDoesNotPanic,
+//     TestClaim_DeleteRacingClaimIs404, TestClaim_StopRacingClaimIs404
 //   - claim-task happy path: covered by worker integration test TestProcessOne
 //
 // Not yet covered:
@@ -62,6 +63,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/tasks"
@@ -1036,6 +1038,66 @@ func TestClaim_DeletedTaskDoesNotPanic(t *testing.T) {
 		r.ServeHTTP(w, req)
 	})
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// claimWithHook creates an echo_task and claims it with beforeClaimRecord
+// set to hook, i.e. with hook running after the queue claim but before the
+// task record is written.
+func claimWithHook(t *testing.T, hook func(s *ServerConfig, r http.Handler, id objectid.ObjectId)) (*ServerConfig, objectid.ObjectId, *httptest.ResponseRecorder, func()) {
+	t.Helper()
+	cleanup := setupTestTaskType(t)
+	s, scleanup := NewTestServer()
+	r := s.GetRouter()
+
+	created := postTask(r, "echo_task")
+	require.Equal(t, http.StatusCreated, created.Code)
+	var task tasks.Task
+	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &task))
+
+	beforeClaimRecord = func(id objectid.ObjectId) { hook(s, r, id) }
+	w := claimAnyTask(t, s, r)
+	beforeClaimRecord = nil
+
+	return s, task.Id, w, func() {
+		scleanup()
+		cleanup()
+	}
+}
+
+// A DELETE of a WAITING task that lands between the queue claim and the
+// record write must not be undone by the claim (turtlemonvh/blanket#261):
+// the claim is a 404, the record stays gone, and the queue entry is acked.
+func TestClaim_DeleteRacingClaimIs404(t *testing.T) {
+	s, id, w, cleanup := claimWithHook(t, func(s *ServerConfig, r http.Handler, id objectid.ObjectId) {
+		require.Equal(t, http.StatusOK, deleteTaskReq(r, id).Code)
+	})
+	defer cleanup()
+
+	assert.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "likely stopped and deleted")
+
+	_, err := s.DB.GetTask(id)
+	assert.IsType(t, database.ItemNotFoundError(""), err)
+
+	// Acked, not nacked: nothing left to claim.
+	assert.Equal(t, http.StatusNoContent, claimAnyTask(t, s, s.GetRouter()).Code)
+}
+
+// Same window, but a cancel: the record stays STOPPED rather than being
+// overwritten as CLAIMED.
+func TestClaim_StopRacingClaimIs404(t *testing.T) {
+	s, id, w, cleanup := claimWithHook(t, func(s *ServerConfig, r http.Handler, id objectid.ObjectId) {
+		require.NoError(t, s.cancelTaskById(context.Background(), id, false))
+	})
+	defer cleanup()
+
+	assert.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "Task was stopped")
+
+	got, err := s.DB.GetTask(id)
+	require.NoError(t, err)
+	assert.Equal(t, "STOPPED", got.State)
+	assert.Equal(t, http.StatusNoContent, claimAnyTask(t, s, s.GetRouter()).Code)
 }
 
 // --- GET /task/ with additional filters ---

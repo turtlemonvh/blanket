@@ -327,6 +327,30 @@ func (DB *BlanketBoltDB) SaveTask(t *tasks.Task) error {
 	})
 }
 
+// ClaimTask saves a task just claimed from the queue, refusing a record
+// that is gone (database.ItemNotFoundError) or STOPPED
+// (database.ErrTaskStopped). Doing the check in the write's own
+// transaction is the point (turtlemonvh/blanket#261): with a separate
+// GetTask, a DELETE landing between the read and the save brought a
+// deleted task back as CLAIMED. Like SaveTask, the queue's copy replaces
+// the stored record wholesale.
+func (DB *BlanketBoltDB) ClaimTask(t *tasks.Task) error {
+	return DB.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := fetchTaskBucket(tx)
+		if err != nil {
+			return err
+		}
+		stored, err := fetchTaskFromBucket(&t.Id, bucket)
+		if err != nil {
+			return err
+		}
+		if stored.State == "STOPPED" {
+			return database.ErrTaskStopped
+		}
+		return saveTaskToBucket(t, bucket)
+	})
+}
+
 // runIdConflict reports whether a caller's fencing token contradicts the
 // one already stored on a task.
 //
@@ -439,12 +463,25 @@ func (DB *BlanketBoltDB) FinishTask(taskId objectid.ObjectId, fields *database.T
 				database.ErrRunIdMismatch, taskId.Hex(), t.RunId, fields.RunId)
 		}
 
+		if fields.StopRequested {
+			switch t.State {
+			case "WAITING", "SCHEDULED", "RECURRING", "PAUSED":
+			case "RUNNING":
+				if !fields.Force {
+					return database.ErrRunningTaskRequiresForce
+				}
+			default:
+				return database.ErrTaskNotCancelable
+			}
+		}
+
 		if isTerminalState(t.State) {
-			// A report from the worker (anything but another user cancel)
-			// on a task with a pending stop means the process is gone:
-			// clear the stamp so DELETE /task/:id goes through
-			// (turtlemonvh/blanket#252). The state itself stays put.
-			if t.StopPendingTs != 0 && !fields.StopRequested {
+			// A report from the worker on a task with a pending stop means
+			// the process is gone: clear the stamp so DELETE /task/:id goes
+			// through (turtlemonvh/blanket#252). The state itself stays
+			// put. (A user cancel never gets here; the check above refuses
+			// a terminal task.)
+			if t.StopPendingTs != 0 {
 				t.StopPendingTs = 0
 			}
 			// First terminal state wins. In particular a user-issued

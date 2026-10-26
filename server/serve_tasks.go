@@ -45,7 +45,7 @@ func (s *ServerConfig) getWorkerId(c *gin.Context) (objectid.ObjectId, error) {
 // but isn't in a state that can be canceled (only RUNNING and WAITING
 // are). Kept as a sentinel rather than a formatted error so callers (the
 // REST handler, MCP) can each decide how to present it.
-var ErrTaskNotCancelable = errors.New("task is not in a cancelable state (must be RUNNING or WAITING)")
+var ErrTaskNotCancelable = database.ErrTaskNotCancelable
 
 // ErrRunningTaskRequiresForce is returned by cancelTaskById when a task is
 // RUNNING and the caller didn't opt in to stopping it. Cancelling a WAITING
@@ -55,7 +55,7 @@ var ErrTaskNotCancelable = errors.New("task is not in a cancelable state (must b
 // shouldn't trigger by accident (e.g. by cancelling a task that was claimed
 // a moment after the caller looked at its state). See
 // turtlemonvh/blanket#52.
-var ErrRunningTaskRequiresForce = errors.New("task is RUNNING; pass force=true to stop it")
+var ErrRunningTaskRequiresForce = database.ErrRunningTaskRequiresForce
 
 // cancelTaskById transitions a WAITING, SCHEDULED, RECURRING, or PAUSED
 // task, or a RUNNING task when force is true, to STOPPED. For a RUNNING
@@ -70,22 +70,11 @@ var ErrRunningTaskRequiresForce = errors.New("task is RUNNING; pass force=true t
 // which removes it. Either way, a child the template already spawned
 // keeps running to its own completion, unaffected. See docs/task_flow.md.
 func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.ObjectId, force bool) error {
-	task, err := s.DB.GetTask(taskId)
-	if err != nil {
-		return err
-	}
-	switch task.State {
-	case "WAITING", "SCHEDULED", "RECURRING", "PAUSED":
-		// Not yet queued (SCHEDULED), queued but unclaimed (WAITING), or a
-		// template that never runs itself (RECURRING/PAUSED); no running
-		// subprocess to worry about in any of these cases.
-	case "RUNNING":
-		if !force {
-			return ErrRunningTaskRequiresForce
-		}
-	default:
-		return ErrTaskNotCancelable
-	}
+	// FinishTask checks the state (and the force rule) in the same
+	// transaction as the write, so a claim landing mid-cancel can't leave
+	// a CLAIMED task STOPPED with no pending-stop stamp
+	// (turtlemonvh/blanket#261).
+	//
 	// FinishState leaves both RunId and ExitCode unset. No RunId because
 	// this is a server-issued (user-initiated) transition, not a worker
 	// reporting on a run it owns: an empty token is legacy-permissive, so it
@@ -97,7 +86,7 @@ func (s *ServerConfig) cancelTaskById(ctx context.Context, taskId objectid.Objec
 	// stamps StopPendingTs, which keeps DELETE /task/:id from removing the
 	// record before the worker has seen the STOPPED and killed the process
 	// (turtlemonvh/blanket#252).
-	if err := s.DB.FinishTask(taskId, &database.TaskFinishConfig{State: "STOPPED", StopRequested: true}); err != nil {
+	if err := s.DB.FinishTask(taskId, &database.TaskFinishConfig{State: "STOPPED", StopRequested: true, Force: force}); err != nil {
 		return err
 	}
 	s.TaskEvents.Notify()
@@ -220,39 +209,6 @@ func (s *ServerConfig) claimTask(c *gin.Context) {
 		return
 	}
 
-	// Fetch from database to make sure it wasn't STOPPED
-	dbt, err := s.DB.GetTask(t.Id)
-	if err != nil {
-		if _, ok := err.(database.ItemNotFoundError); ok {
-			status := http.StatusNotFound
-			errMsg = "Could not find task in database, it was likely stopped and deleted"
-			if ackErr := ackCb(); ackErr != nil {
-				errMsg = fmt.Sprintf("%s: Encountered error while trying to ack task :: %s", errMsg, ackErr.Error())
-				status = http.StatusInternalServerError
-			}
-			c.String(status, MakeErrorString(errMsg))
-			return
-		}
-
-		errMsg = fmt.Sprintf("Could not fetch task from database to ensure it was not stopped :: %s", err.Error())
-		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
-		return
-	}
-
-	// Handle tasks that have been canceled when queued
-	if dbt.State == "STOPPED" {
-		// Need to grab a new one
-		errMsg = fmt.Sprintf("Task was stopped")
-		if err = ackCb(); err != nil {
-			errMsg = fmt.Sprintf("Encountered another error while handling stopped task :: %s", err.Error())
-		}
-		// FIXME: Maybe return a status code that indicates the worker should try again immediately?
-		// Or can actually just fetch again
-		// For now we just return a 404 - the worker will try again
-		c.String(http.StatusNotFound, MakeErrorString(errMsg))
-		return
-	}
-
 	// Add fields
 	t.State = "CLAIMED"
 	t.Progress = 0
@@ -265,28 +221,52 @@ func (s *ServerConfig) claimTask(c *gin.Context) {
 	t.Pid = 0
 	t.Timeout = 0
 
-	// Save to database
-	err = s.DB.SaveTask(&t)
-	if err != nil {
+	if beforeClaimRecord != nil {
+		beforeClaimRecord(t.Id)
+	}
+
+	// Save to database, but only if the record still exists and wasn't
+	// STOPPED while queued. DB.ClaimTask checks and writes in one
+	// transaction (turtlemonvh/blanket#261), so a delete racing this claim
+	// can't be undone by it.
+	err = s.DB.ClaimTask(&t)
+	switch {
+	case err == nil:
+	case errors.As(err, new(database.ItemNotFoundError)), errors.Is(err, database.ErrTaskStopped):
+		// Deleted or cancelled while queued: drop the queue entry and run
+		// nothing. The worker treats the 404 as "try again".
+		status := http.StatusNotFound
+		errMsg = "Could not find task in database, it was likely stopped and deleted"
+		if errors.Is(err, database.ErrTaskStopped) {
+			errMsg = err.Error()
+		}
+		if ackErr := ackCb(); ackErr != nil {
+			errMsg = fmt.Sprintf("%s: Encountered error while trying to ack task :: %s", errMsg, ackErr.Error())
+			status = http.StatusInternalServerError
+		}
+		c.String(status, MakeErrorString(errMsg))
+		return
+	default:
 		errMsg = fmt.Sprintf("Error saving to database :: %s", err.Error())
-		err = nackCb()
-		if err != nil {
-			errMsg += fmt.Sprintf("; Subsequent error returning to queue :: %s", err.Error())
+		if nackErr := nackCb(); nackErr != nil {
+			errMsg += fmt.Sprintf("; Subsequent error returning to queue :: %s", nackErr.Error())
 		}
 		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
-	} else {
-		err = ackCb()
-		if err != nil {
-			errMsg = fmt.Sprintf("Error acking task in queue after saving to database; task run may be duplicated :: %s", err.Error())
-			c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
-		} else {
-			// Everything is fine
-			s.TaskEvents.Notify()
-			c.JSON(http.StatusOK, t)
-		}
+		return
 	}
-	return
+
+	if err = ackCb(); err != nil {
+		errMsg = fmt.Sprintf("Error acking task in queue after saving to database; task run may be duplicated :: %s", err.Error())
+		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
+		return
+	}
+	s.TaskEvents.Notify()
+	c.JSON(http.StatusOK, t)
 }
+
+// beforeClaimRecord, when set, runs in claimTask between the queue claim and
+// the task-record write. Tests use it to land a DELETE in that window.
+var beforeClaimRecord func(taskId objectid.ObjectId)
 
 // Transition to RUNNING state
 // FIXME: Should we set ExecEnv and Tags here?

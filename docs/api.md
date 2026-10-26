@@ -409,7 +409,9 @@ set), **204** when nothing in the queue matches the worker's tags (a
 task matches when all its tags are among the worker's, so a worker with
 no tags matches only untagged tasks), or
 **404** when the queue entry's task was stopped or deleted meanwhile (the
-entry is acked away; the worker simply tries again).
+entry is acked away; the worker simply tries again). The record check and
+the write to `CLAIMED` share one transaction, so a claim racing a
+`DELETE` or cancel gets the 404 rather than overwriting it.
 
 ### Run, progress, and finish
 
