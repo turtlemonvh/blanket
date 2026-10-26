@@ -79,6 +79,13 @@ type BlanketDB interface {
 	DeleteTask(taskId objectid.ObjectId) error
 	GetTasks(tc *TaskSearchConf) ([]tasks.Task, int, error)
 	SaveTask(t *tasks.Task) error
+	// ClaimTask writes a task a worker just pulled off the queue, but only
+	// if its record still exists and is not STOPPED; the check and the
+	// write share one transaction (turtlemonvh/blanket#261), so a delete or
+	// cancel cannot land between them. A missing record is
+	// ItemNotFoundError, a STOPPED one ErrTaskStopped, and in both cases
+	// nothing is written.
+	ClaimTask(t *tasks.Task) error
 	RunTask(taskId objectid.ObjectId, fields *TaskRunConfig) error
 	FinishTask(taskId objectid.ObjectId, fields *TaskFinishConfig) error
 	UpdateTaskProgress(taskId objectid.ObjectId, progress int) error
@@ -345,6 +352,11 @@ var (
 	// record now would hide the STOPPED the worker is about to act on and
 	// orphan the process. Maps to 400; retrying a few seconds later works.
 	ErrTaskStopPending = errors.New("Cannot delete a task until its worker confirms it has stopped; try again shortly")
+
+	// ErrTaskStopped means a claim found the task's record STOPPED: it was
+	// cancelled while queued, so the queue entry is acked away and nothing
+	// runs (turtlemonvh/blanket#261).
+	ErrTaskStopped = errors.New("Task was stopped")
 )
 
 // StopAckGrace bounds how long a pending stop (tasks.Task.StopPendingTs)

@@ -327,6 +327,30 @@ func (DB *BlanketBoltDB) SaveTask(t *tasks.Task) error {
 	})
 }
 
+// ClaimTask saves a task just claimed from the queue, refusing a record
+// that is gone (database.ItemNotFoundError) or STOPPED
+// (database.ErrTaskStopped). Doing the check in the write's own
+// transaction is the point (turtlemonvh/blanket#261): with a separate
+// GetTask, a DELETE landing between the read and the save brought a
+// deleted task back as CLAIMED. Like SaveTask, the queue's copy replaces
+// the stored record wholesale.
+func (DB *BlanketBoltDB) ClaimTask(t *tasks.Task) error {
+	return DB.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := fetchTaskBucket(tx)
+		if err != nil {
+			return err
+		}
+		stored, err := fetchTaskFromBucket(&t.Id, bucket)
+		if err != nil {
+			return err
+		}
+		if stored.State == "STOPPED" {
+			return database.ErrTaskStopped
+		}
+		return saveTaskToBucket(t, bucket)
+	})
+}
+
 // runIdConflict reports whether a caller's fencing token contradicts the
 // one already stored on a task.
 //

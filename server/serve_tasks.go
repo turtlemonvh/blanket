@@ -220,39 +220,6 @@ func (s *ServerConfig) claimTask(c *gin.Context) {
 		return
 	}
 
-	// Fetch from database to make sure it wasn't STOPPED
-	dbt, err := s.DB.GetTask(t.Id)
-	if err != nil {
-		if _, ok := err.(database.ItemNotFoundError); ok {
-			status := http.StatusNotFound
-			errMsg = "Could not find task in database, it was likely stopped and deleted"
-			if ackErr := ackCb(); ackErr != nil {
-				errMsg = fmt.Sprintf("%s: Encountered error while trying to ack task :: %s", errMsg, ackErr.Error())
-				status = http.StatusInternalServerError
-			}
-			c.String(status, MakeErrorString(errMsg))
-			return
-		}
-
-		errMsg = fmt.Sprintf("Could not fetch task from database to ensure it was not stopped :: %s", err.Error())
-		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
-		return
-	}
-
-	// Handle tasks that have been canceled when queued
-	if dbt.State == "STOPPED" {
-		// Need to grab a new one
-		errMsg = fmt.Sprintf("Task was stopped")
-		if err = ackCb(); err != nil {
-			errMsg = fmt.Sprintf("Encountered another error while handling stopped task :: %s", err.Error())
-		}
-		// FIXME: Maybe return a status code that indicates the worker should try again immediately?
-		// Or can actually just fetch again
-		// For now we just return a 404 - the worker will try again
-		c.String(http.StatusNotFound, MakeErrorString(errMsg))
-		return
-	}
-
 	// Add fields
 	t.State = "CLAIMED"
 	t.Progress = 0
@@ -265,28 +232,52 @@ func (s *ServerConfig) claimTask(c *gin.Context) {
 	t.Pid = 0
 	t.Timeout = 0
 
-	// Save to database
-	err = s.DB.SaveTask(&t)
-	if err != nil {
+	if beforeClaimRecord != nil {
+		beforeClaimRecord(t.Id)
+	}
+
+	// Save to database, but only if the record still exists and wasn't
+	// STOPPED while queued. DB.ClaimTask checks and writes in one
+	// transaction (turtlemonvh/blanket#261), so a delete racing this claim
+	// can't be undone by it.
+	err = s.DB.ClaimTask(&t)
+	switch {
+	case err == nil:
+	case errors.As(err, new(database.ItemNotFoundError)), errors.Is(err, database.ErrTaskStopped):
+		// Deleted or cancelled while queued: drop the queue entry and run
+		// nothing. The worker treats the 404 as "try again".
+		status := http.StatusNotFound
+		errMsg = "Could not find task in database, it was likely stopped and deleted"
+		if errors.Is(err, database.ErrTaskStopped) {
+			errMsg = err.Error()
+		}
+		if ackErr := ackCb(); ackErr != nil {
+			errMsg = fmt.Sprintf("%s: Encountered error while trying to ack task :: %s", errMsg, ackErr.Error())
+			status = http.StatusInternalServerError
+		}
+		c.String(status, MakeErrorString(errMsg))
+		return
+	default:
 		errMsg = fmt.Sprintf("Error saving to database :: %s", err.Error())
-		err = nackCb()
-		if err != nil {
-			errMsg += fmt.Sprintf("; Subsequent error returning to queue :: %s", err.Error())
+		if nackErr := nackCb(); nackErr != nil {
+			errMsg += fmt.Sprintf("; Subsequent error returning to queue :: %s", nackErr.Error())
 		}
 		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
-	} else {
-		err = ackCb()
-		if err != nil {
-			errMsg = fmt.Sprintf("Error acking task in queue after saving to database; task run may be duplicated :: %s", err.Error())
-			c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
-		} else {
-			// Everything is fine
-			s.TaskEvents.Notify()
-			c.JSON(http.StatusOK, t)
-		}
+		return
 	}
-	return
+
+	if err = ackCb(); err != nil {
+		errMsg = fmt.Sprintf("Error acking task in queue after saving to database; task run may be duplicated :: %s", err.Error())
+		c.String(http.StatusInternalServerError, MakeErrorString(errMsg))
+		return
+	}
+	s.TaskEvents.Notify()
+	c.JSON(http.StatusOK, t)
 }
+
+// beforeClaimRecord, when set, runs in claimTask between the queue claim and
+// the task-record write. Tests use it to land a DELETE in that window.
+var beforeClaimRecord func(taskId objectid.ObjectId)
 
 // Transition to RUNNING state
 // FIXME: Should we set ExecEnv and Tags here?
