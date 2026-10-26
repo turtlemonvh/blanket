@@ -25,14 +25,24 @@ import (
 	"github.com/turtlemonvh/blanket/lib/upgrade"
 )
 
-// startFakeVersion serves GET /version with the given banner and returns
-// the port.
+// startFakeVersion serves GET /version with the given banner, and GET
+// /ops/restart/status with no restart in flight, and returns the port.
 func startFakeVersion(t *testing.T, bannerText string) int {
+	return startFakeVersionInRestart(t, bannerText, "IDLE")
+}
+
+// startFakeVersionInRestart is startFakeVersion with the restart record in
+// the given state.
+func startFakeVersionInRestart(t *testing.T, bannerText, restartState string) int {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"version": bannerText, "name": "blanket"})
+	})
+	mux.HandleFunc("/ops/restart/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"restart": map[string]string{"state": restartState}})
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -96,7 +106,7 @@ func TestServerStillOld_DifferentVersionWithoutJournalSaysRestart(t *testing.T) 
 func TestServerStillOld_UnfinishedJournalPointsAtResume(t *testing.T) {
 	for _, state := range []string{upgrade.JournalFailed, upgrade.JournalSwapped, upgrade.JournalStaged} {
 		t.Run(state, func(t *testing.T) {
-			port := startFakeVersion(t, banner("v9.9.0"))
+			port := startFakeVersionInRestart(t, banner("v9.9.0"), "DRAINING")
 			res := newVersionCheckResult(t)
 			writeJournalInState(t, res.JournalPath, state)
 
@@ -119,4 +129,17 @@ func TestServerStillOld_FinishedJournalSaysRestart(t *testing.T) {
 			assert.NotContains(t, res.Message, "--resume")
 		})
 	}
+}
+
+// With no restart in flight (the watchdog aborted it, or --no-restart never
+// began one) --resume refuses (turtlemonvh/blanket#265), so the hint is the
+// supervisor even when the journal is unfinished.
+func TestServerStillOld_UnfinishedJournalWithNoRestartSaysRestart(t *testing.T) {
+	port := startFakeVersion(t, banner("v9.9.0"))
+	res := newVersionCheckResult(t)
+	writeJournalInState(t, res.JournalPath, upgrade.JournalFailed)
+
+	require.True(t, serverStillOld(res, port, "v9.9.1"))
+	assert.Contains(t, res.Message, "supervisor")
+	assert.NotContains(t, res.Message, "--resume")
 }

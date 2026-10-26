@@ -314,14 +314,25 @@ func serverStillOld(res *upgradeResult, port int, installedVersion string) bool 
 		return false
 	}
 	next := "Restart the server under its supervisor (or stop and start it by hand) to run the installed version."
+	// --resume only finishes a restart the server still has in flight; it
+	// refuses one the watchdog aborted or --no-restart never began
+	// (turtlemonvh/blanket#265), so only point there when one is.
 	if j, err := upgrade.LoadJournal(res.JournalPath); err == nil && j != nil &&
-		j.State != upgrade.JournalVerified && j.State != upgrade.JournalAborted {
+		j.State != upgrade.JournalVerified && j.State != upgrade.JournalAborted &&
+		restartInFlight(port) {
 		next = "Run `blanket upgrade --resume --yes` to finish the restart."
 	}
 	res.ExitCode = ExitStagedOnly
 	res.Message = fmt.Sprintf("blanket %s is installed at %s, but the server on :%d is still running %s.\n%s",
 		installedVersion, res.BinaryPath, port, got, next)
 	return true
+}
+
+// restartInFlight reports whether the server on the port has a restart
+// under way (any state but IDLE). Unknown counts as no.
+func restartInFlight(port int) bool {
+	st, err := fetchRestartStatus(port)
+	return err == nil && st.Restart.State != "" && st.Restart.State != "IDLE"
 }
 
 // statusProbeBudget is how long "is there a server?" keeps asking before
