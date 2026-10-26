@@ -343,8 +343,9 @@ Run `blanket upgrade --resume --yes` to finish the restart.
 ```
 
 The second line is `--resume --yes` when [the journal](#the-upgrade-journal-journaljson)
-records an attempt that is neither `VERIFIED` nor `ABORTED`; otherwise it
-says to restart the server under its supervisor. `--json` reports the
+records an attempt that is neither `VERIFIED` nor `ABORTED` and the server
+still has a restart in flight; otherwise it says to restart the server
+under its supervisor, since `--resume` refuses when nothing is restarting. `--json` reports the
 server's version as `serverVersion` (empty when no server answered or its
 version can't be read).
 
