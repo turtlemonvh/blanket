@@ -7,10 +7,55 @@ body (see `Extract changelog section` in that workflow) — see
 the exact binaries, `SHA256SUMS`, and offline bundle attached to each
 tag.
 
-## Unreleased
+## v0.4.0
+
+Everything merged since `v0.3.0`. No schema change: a v0.3.0 binary can
+still open a database this release has used. The next release adds
+authentication and a schema migration.
+
+### Highlights
+
+- **MCP for agents.** `blanket_docs` searches the docs by section
+  instead of returning whole pages (#230). The new `blanket_task_logs`
+  tool greps and pages a task's log on the server, so an agent no longer
+  pulls a whole log into its context (#231). The `new_task_type` prompt
+  walks an agent through writing a task type (#232). Every tool carries
+  MCP annotations (read-only or destructive), unknown task types and
+  doc pages get "did you mean" suggestions, `blanket_tasks(id=...)`
+  shows the task's `resultDir`, and the opt-in
+  `tasks.requireExplicitTypeOverwrite` makes `blanket_write_task_type`
+  refuse to replace an existing file without `overwrite=true` (#229).
+  See [docs/mcp.md](docs/mcp.md).
+- **Docs in the web UI.** A Docs page lists, renders and searches the
+  same docs the MCP tool serves (#234).
+- **Phones.** Below 640px the task, worker, upcoming and task-type
+  lists become cards, with a bottom tab bar. The UI installs as a PWA.
+  Every cancel and delete asks for confirmation, and a new Duration
+  column shows how long a task ran. `ui.instanceName` names the
+  instance in the top bar; it defaults to the hostname (#216).
+- **Tasks and workers keep their records straight.** Delete refuses a
+  task or worker that is still running, a claim or cancel that races a
+  delete can no longer bring a task back or orphan its process, and a
+  worker with no tags claims only untagged tasks. Details under
+  Breaking / behaviour changes.
+- **Under the hood.** Blanket's own file follower replaces
+  `hpcloud/tail` for log streaming (#142). An in-tree cron describer,
+  stdlib calls and a vendored copy of `tomb.v1` retire four more
+  third-party dependencies. Dependabot,
+  weekly `govulncheck` and `grype`, a license gate, and an SPDX SBOM on
+  every release are in place (#144). CI pulls a prebuilt toolchain image
+  and skips the expensive jobs on docs-only changes (#53). The docs had
+  three concision passes (#242), and
+  [docs/examples/tailscale.md](docs/examples/tailscale.md) covers reaching blanket over
+  Tailscale (#190).
 
 ### Breaking / behaviour changes
 
+- **`DELETE /worker/:id` checks the stored worker, not the request
+  body** (#246). It takes no body. It returns 400 unless the worker is
+  stopped, 404 if there is no such worker (it used to return 200), and
+  200 `{"id": ...}` once deleted. Before, a body claiming
+  `"stopped": true` let a running worker be deleted.
 - **`DELETE /task/:id` returns 404 for a missing task** (#249). It used
   to answer 200 for a well-formed id naming no task; it now follows the
   same 400/404 rule as every other `:id` route, `DELETE /worker/:id`
@@ -61,6 +106,49 @@ tag.
   as an intermittent smoke failure roughly one run in twenty. The resume
   now checks the installed binary's digest against the journal's
   `sha256` and finds the slot by `upgradeId` instead (#203).
+- `blanket upgrade` no longer fails against a server with a forked
+  worker. The server now reaps the workers it forks, so a drain no
+  longer waits out `restart.drainTimeout` on an exited worker's zombie,
+  and the CLI's drain call no longer times out after 5s whatever its
+  deadline (#227).
+- A worker claiming a task checks and writes the task record in one
+  transaction, and so does a user's cancel. A claim racing a delete used
+  to bring the deleted task back as `CLAIMED`. A cancel racing a claim
+  used to leave a `CLAIMED` task `STOPPED`, so it could be deleted while
+  its worker started it (#261).
+
+### Upgrading
+
+- **From v0.3.0:** `blanket upgrade --yes` (or `--check` first). No
+  migration runs and the database is not rewritten; `stopPendingTs` is
+  a new task field that older records simply lack. **Back up first
+  anyway** (`blanket backup`). See [docs/upgrade.md](docs/upgrade.md).
+- **If a server-started worker is running, the v0.3.0 `blanket upgrade`
+  fails.** That means a worker launched from the UI, `POST /worker/` or
+  MCP; workers started with `blanket worker -d`, and upgrades with no
+  worker, are unaffected. After about 5s the CLI exits 13 with
+  `timeout awaiting response headers`. This is the v0.3.0 CLI bug fixed
+  in this release (#227). v0.4.0 is already installed at that point, but
+  the old server is still running with worker spawn paused. To finish:
+  - Don't run `--resume` (it refuses) or `--abort`.
+  - Wait until no task is `RUNNING`. The drained worker finishes its
+    current task first; restarting earlier kills that task.
+  - Restart the server under its supervisor, for example `systemctl
+    --user restart blanket`. v0.4.0 comes up, completes the paused
+    restart and brings the worker back. `blanket rollback --yes` still
+    returns you to v0.3.0.
+  - If you already ran `--abort`, or left it longer than
+    `restart.deadline` (5 minutes by default), restart the server the
+    same way, then restart the worker from the UI or with `curl -X PUT
+    localhost:8773/worker/<id>/restart`.
+- **From before v0.3.0:** use `blanket upgrade --bundle
+  blanket-bundle-v0.4.0.tar.gz --yes`, or replace the binary by hand;
+  see v0.3.0's Upgrading notes below.
+- **Mixed versions work during the swap.** A v0.3.0 worker talks to a
+  v0.4.0 server unchanged.
+- **Downgrading** to v0.3.0 works with `blanket rollback`, since the
+  schema is unchanged. That stops being true after the next release's
+  migration.
 
 ## v0.3.0
 
