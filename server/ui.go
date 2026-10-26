@@ -346,15 +346,7 @@ func (s *ServerConfig) uiNewWorkerPartial(c *gin.Context) {
 // the refreshed rows partial. Mirrors server.launchWorker without the JSON
 // response shape.
 func (s *ServerConfig) uiSubmitWorker(c *gin.Context) {
-	rawTags := strings.TrimSpace(c.PostForm("tags"))
-	tags := []string{}
-	if rawTags != "" {
-		for _, t := range strings.Split(rawTags, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				tags = append(tags, t)
-			}
-		}
-	}
+	tags := worker.ParseTags(c.PostForm("tags"))
 	interval := cast.ToFloat64(c.PostForm("checkInterval"))
 	if interval <= 0 {
 		interval = worker.DEFAULT_CHECK_INTERVAL_SECONDS
@@ -370,7 +362,7 @@ func (s *ServerConfig) uiSubmitWorker(c *gin.Context) {
 		Daemon:        true,
 		CheckInterval: interval,
 	}
-	if err := w.Run(); err != nil {
+	if err := s.startDaemon(&w); err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -39,6 +39,36 @@ func TestBuildDaemonCmd_ForwardsConfigAndPort(t *testing.T) {
 	}
 }
 
+// TestParseTags: `blanket worker` with no -t must register no tags, not
+// [""] (turtlemonvh/blanket#259).
+func TestParseTags(t *testing.T) {
+	cases := map[string][]string{
+		"":             {},
+		" , ":          {},
+		"a":            {"a"},
+		" a, b ,,c ":   {"a", "b", "c"},
+		"exec:bash,os": {"exec:bash", "os"},
+	}
+	for raw, want := range cases {
+		got := ParseTags(raw)
+		if got == nil || strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("ParseTags(%q) = %#v, want %#v", raw, got, want)
+		}
+	}
+}
+
+// TestBuildDaemonCmd_NoTagsOmitsFlag: a tagless worker forks without
+// --tags, and the child's empty default then parses to no tags.
+func TestBuildDaemonCmd_NoTagsOmitsFlag(t *testing.T) {
+	c := &WorkerConf{Tags: NormalizeTags([]string{""})}
+	cmd := c.buildDaemonCmd("/usr/local/bin/blanket")
+	for _, a := range cmd.Args {
+		if a == "--tags" {
+			t.Fatalf("expected no --tags for a tagless worker, got: %v", cmd.Args)
+		}
+	}
+}
+
 // TestBuildDaemonCmd_OmitsConfigWhenUnset covers the (unusual, but
 // possible) case where the parent process resolved no config file at
 // all — the flag should be omitted rather than forwarded as an empty

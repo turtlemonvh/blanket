@@ -37,6 +37,19 @@ tag.
   timeout. A type that relied on something its profile set must set it
   in `environment` or `command`. The `windows_powershell` example's
   timeout rose from 10s to 60s to cover interpreter startup (#169).
+- A worker with no tags now claims only untagged tasks, however it was
+  launched. A worker claims a task only if its tags are a superset of
+  the task's, but the claim filter skipped that check when a worker's
+  tag set was empty, so a tagless worker could claim every task,
+  including tagged ones it may not be able to run. `blanket worker`
+  with no `-t` only escaped this by accident, by registering `[""]`.
+  **Workers launched or registered without tags through
+  `blanket_launch_worker`, `POST /worker/` or `PUT /worker/:id` stop
+  claiming tagged tasks**; give them the tags those tasks need.
+  `blanket_launch_worker` now accepts an empty `tags` list instead of
+  rejecting it, and every launch path stores an empty tag set rather
+  than `[""]`. Task listing is unchanged: an absent or empty `maxTags`
+  still means no tag filter (#259).
 
 ### Fixes
 
