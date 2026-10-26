@@ -321,7 +321,7 @@ before the restart, the CLI warns and verifies on the version alone.
 | `10` | **Nothing to do** — already at the target version, or nothing to roll back to. |
 | `11` | **Staged only** — the binary is staged or installed and no restart was attempted (`--stage-only`, `--no-restart`, or no server was running). |
 | `12` | **Verification failed** — a checksum did not match, or the server that came back is not the one that was installed. |
-| `13` | **Restart refused** — the binary is in place but the server would not restart: a 409 from the state machine, or a restart already in flight. |
+| `13` | **Restart refused** — the binary is in place but the server would not restart: a 409 from the state machine, a restart already in flight, or a `--resume` that found the old server with no restart in flight. |
 | `1` | Any other error. |
 | `2` | Usage: the flags don't make sense, or a precondition a human must fix is unmet (including a missing `--yes`). |
 
@@ -446,7 +446,20 @@ the driver's alone, since the server never sees a download.
 | `PLANNED` | Refuses. A partial download cannot be resumed — the only safe thing to do with an unverified file is throw it away. Run the upgrade again. | Removes the staging file. |
 | `STAGED` | Re-verifies the staged binary against the recorded digest, then continues from `begin`. | Removes it; nothing was installed. |
 | `BACKED_UP`, `PAUSED` | Re-verifies the staged binary and continues, skipping the transitions the server has already made. If the staged file is **gone**, checks whether the installed binary is already the one that was staged (below). | Clears the server-side restart (un-pausing worker spawn); nothing was installed. |
-| `SWAPPED`, `DRAINED`, `EXECED` | The new binary is already installed; finishes the restart. If a server answers, its own `resolvedExecMode` decides whether the CLI has to start the replacement or the server is bringing itself back. | Clears the server-side restart and **leaves the new binary in place**, naming `blanket rollback` as the way back. |
+| `SWAPPED`, `DRAINED`, `EXECED` | The new binary is already installed; finishes the restart. If a server answers, its own `resolvedExecMode` decides whether the CLI has to start the replacement or the server is bringing itself back. If the server answers with **no restart in flight** and is still the old process or version (the watchdog aborted the restart, or `--no-restart` never began one), refuses with exit `13`: restart the server under its supervisor to start the new version. A resume never begins a new restart. | Clears the server-side restart and **leaves the new binary in place**, naming `blanket rollback` as the way back. |
+| `FAILED` | Goes by the furthest state the journal reached (below). Failed **before** the swap: as `STAGED`, re-verifying the staged binary, or refusing if there is none. Failed **after** the swap: as `SWAPPED`, `DRAINED` or `EXECED`, finishing the restart. | Goes by the furthest state reached: before the swap, nothing was installed; after it, the binary is left in place and `blanket rollback` named, as for `SWAPPED`. |
+
+`FAILED` is where an attempt ended, not how far it got, so neither command
+decides from it alone. The journal's `steps` record every transition, and
+the highest-ranked one says whether the binary was swapped. An attempt that
+failed in the drain has consumed its staged file by installing it, and
+`--resume --yes` finishes its restart the same way it would after a
+`kill -9` at `SWAPPED`.
+
+Whenever the restart `--abort` cleared had already drained workers, it
+warns that any worker not back needs `PUT /worker/:id/restart`. A current
+server brings drained workers back on abort; v0.3.0 and earlier cleared
+their respawn intent instead and left them stopped.
 
 Forward-only means "do the transitions that have not happened yet", which
 is both the first-run path and the resume path: the CLI reads the server's

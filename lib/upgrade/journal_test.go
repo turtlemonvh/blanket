@@ -102,3 +102,43 @@ func TestJournalRankAndTerminal(t *testing.T) {
 		t.Error("STAGED is not terminal; --resume has work to do from it")
 	}
 }
+
+// TestJournalFurthestState covers the reason the method exists
+// (turtlemonvh/blanket#265): a journal that ends in FAILED after the swap
+// must still say the swap happened.
+func TestJournalFurthestState(t *testing.T) {
+	j := NewJournal("id", "upgrade", time.Unix(1000, 0))
+	for _, s := range []string{JournalStaged, JournalBackedUp, JournalPaused, JournalSwapped, JournalSwapped, JournalFailed} {
+		j.Advance(s, "")
+	}
+	if got := j.FurthestState(); got != JournalSwapped {
+		t.Errorf("FurthestState = %q, want %q", got, JournalSwapped)
+	}
+	if !j.Reached(JournalSwapped) || !j.Reached(JournalStaged) {
+		t.Errorf("Reached(SWAPPED/STAGED) = false for a journal that recorded SWAPPED")
+	}
+	if j.Reached(JournalDrained) {
+		t.Errorf("Reached(DRAINED) = true for a journal that never drained")
+	}
+	if j.Reached(JournalFailed) {
+		t.Errorf("Reached(FAILED) = true; a terminal state is never reached")
+	}
+
+	// Failed before the swap: not reached.
+	k := NewJournal("id", "upgrade", time.Unix(1000, 0))
+	k.Advance(JournalStaged, "")
+	k.Advance(JournalBackedUp, "")
+	k.Advance(JournalFailed, "")
+	if k.Reached(JournalSwapped) {
+		t.Errorf("Reached(SWAPPED) = true for a journal that failed before the swap")
+	}
+	if got := k.FurthestState(); got != JournalBackedUp {
+		t.Errorf("FurthestState = %q, want %q", got, JournalBackedUp)
+	}
+
+	// No steps at all (hand-edited): fall back to State.
+	empty := &Journal{State: JournalExeced}
+	if got := empty.FurthestState(); got != JournalExeced {
+		t.Errorf("FurthestState with no steps = %q, want %q", got, JournalExeced)
+	}
+}

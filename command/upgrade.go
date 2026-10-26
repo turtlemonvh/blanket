@@ -513,8 +513,8 @@ func finishUpgrade(res *upgradeResult, j *upgrade.Journal, stagedPath string) in
 	if upgradeConf.NoRestart {
 		res.ExitCode = ExitStagedOnly
 		res.State = j.State
-		res.Message = fmt.Sprintf("Installed %s at %s.\nThe running server is still on %s; restart it when you're ready "+
-			"(`blanket upgrade --resume --yes` drives the restart).", j.ToVersion, j.BinaryPath, displayRawVersion())
+		res.Message = fmt.Sprintf("Installed %s at %s.\nThe running server is still on %s; restart it under its supervisor when you're ready.",
+			j.ToVersion, j.BinaryPath, displayRawVersion())
 		return res.emit()
 	}
 
@@ -800,6 +800,27 @@ func adoptUnrecordedSwap(res *upgradeResult, j *upgrade.Journal) (bool, int) {
 	return true, execAndVerify(res, j, port)
 }
 
+// stillOldServer reports whether a server with no restart in flight is
+// provably *not* the replacement: it is the very process the attempt was
+// replacing, or it answers on a version other than the one installed. A
+// server that cannot be told apart (no recorded instance id, no parseable
+// version) is not claimed to be old; verifyRestart gets to decide.
+func stillOldServer(st *restartStatus, j *upgrade.Journal) bool {
+	if j.FromInstanceId != "" && st.InstanceId == j.FromInstanceId {
+		return true
+	}
+	return !serverIsVersion(st, j.ToVersion)
+}
+
+// serverVersionOr is the version a server reports, or fallback when its
+// banner carries none.
+func serverVersionOr(st *restartStatus, fallback string) string {
+	if v := upgrade.VersionFromBanner(st.Version); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func runUpgradeResume(res *upgradeResult, installed string) int {
 	j, err := upgrade.LoadJournal(res.JournalPath)
 	if err != nil {
@@ -818,7 +839,22 @@ func runUpgradeResume(res *upgradeResult, installed string) int {
 		return res.fail(ExitUsage, fmt.Errorf("resuming from %s replaces %s and restarts the server. Re-run with --yes", j.State, installed))
 	}
 
-	switch j.State {
+	// FAILED is where the attempt ended, not how far it got. One that
+	// failed after the swap -- a drain the watchdog cut short, a server
+	// that did not come back in time -- has already consumed its staged
+	// file by installing it, so treating it like STAGED can only refuse
+	// with "no staged binary" while the server sits paused on the old
+	// version (turtlemonvh/blanket#265). Resume it from the furthest state
+	// it reached instead, which sends it down the finish-the-restart path.
+	// A FAILED that never got as far as the swap is unchanged.
+	state := j.State
+	if state == upgrade.JournalFailed && j.Reached(upgrade.JournalSwapped) {
+		state = j.FurthestState()
+		res.Warnings = append(res.Warnings, fmt.Sprintf(
+			"the last attempt failed after installing %s (it got as far as %s); finishing the restart", j.ToVersion, state))
+	}
+
+	switch state {
 	case upgrade.JournalPlanned:
 		return res.fail(ExitUsage, errors.New(
 			"the interrupted attempt never staged a verified binary; a partial download cannot be resumed. Run `blanket upgrade --yes` again"))
@@ -889,6 +925,19 @@ func runUpgradeResume(res *upgradeResult, installed string) int {
 			if st.Restart.State != "" && st.Restart.State != "IDLE" {
 				return execAndVerify(res, j, port)
 			}
+			// IDLE means one of two things. Either the replacement already
+			// came back (the record is cleared by the next boot), and all
+			// that is left is to verify it -- or nothing is restarting at
+			// all: the watchdog aborted the restart, or --no-restart never
+			// began one, and the old server is still serving. Waiting for a
+			// replacement there only fails after the whole verify budget,
+			// and starting a fresh begin -> drain -> exec from a resume is a
+			// new restart nobody asked for. Refuse, and say what will work.
+			if stillOldServer(st, j) {
+				return res.fail(ExitRestartRefused, fmt.Errorf(
+					"%s is installed at %s, but the server on port %d has no restart in flight and is still running %s; restart it under its supervisor to start %s",
+					j.ToVersion, j.BinaryPath, port, serverVersionOr(st, displayVersionOr(j.FromVersion)), j.ToVersion))
+			}
 			if j.FromInstanceId == "" {
 				j.FromInstanceId = st.InstanceId
 			}
@@ -914,7 +963,7 @@ func runUpgradeAbort(res *upgradeResult) int {
 	// Always try to clear the server side, journal or no journal: a
 	// paused server is the failure mode that outlives everything else,
 	// and it is the one an operator typing `--abort` most needs undone.
-	if _, err := opsCallTimeout(port, http.MethodPost, "/ops/restart/abort?reason=blanket+upgrade+--abort", nil, httpx.DefaultRequestTimeout); err != nil {
+	if ab, err := opsCallTimeout(port, http.MethodPost, "/ops/restart/abort?reason=blanket+upgrade+--abort", nil, httpx.DefaultRequestTimeout); err != nil {
 		var oe *opsError
 		if errors.Is(err, errServerDown) {
 			res.Warnings = append(res.Warnings, "no server is running; nothing to un-pause")
@@ -923,6 +972,13 @@ func runUpgradeAbort(res *upgradeResult) int {
 		} else {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("could not abort the server-side restart: %v", err))
 		}
+	} else if abortedAfterDrain(ab) {
+		// A current server brings drained workers back on abort, but an
+		// older one (v0.3.0 and before) cleared their respawn intent
+		// instead and left them stopped for good. The CLI cannot tell
+		// which it is talking to, so it says where to look either way.
+		res.Warnings = append(res.Warnings,
+			"the aborted restart had drained workers; any that are not back need `PUT /worker/:id/restart`")
 	}
 
 	if j == nil {
@@ -940,7 +996,11 @@ func runUpgradeAbort(res *upgradeResult) int {
 	}
 	upgrade.CleanStaging(j.BinaryPath, "")
 
-	if upgrade.JournalRank(j.State) >= upgrade.JournalRank(upgrade.JournalSwapped) {
+	// The furthest state reached, not the current one: a journal that
+	// failed after the swap ends in FAILED, and deciding from that alone
+	// told the operator "nothing was installed" about a binary that was
+	// (turtlemonvh/blanket#265).
+	if j.Reached(upgrade.JournalSwapped) {
 		// The binary is already the new one. Undoing that is a rollback,
 		// which is a separate, deliberate act with its own confirmation --
 		// silently reverting a binary out from under a server that is
@@ -960,6 +1020,24 @@ func runUpgradeAbort(res *upgradeResult) int {
 	res.ExitCode = ExitOK
 	res.Message = "Aborted; nothing was installed."
 	return res.emit()
+}
+
+// abortedAfterDrain reads a POST /ops/restart/abort response and reports
+// whether the restart it cleared had already drained workers. `respawned`
+// is the current server's own answer; older servers do not send it, so the
+// aborted record's state is checked too.
+func abortedAfterDrain(body []byte) bool {
+	var resp struct {
+		Aborted struct {
+			State string `json:"state"`
+		} `json:"aborted"`
+		Respawned bool `json:"respawned"`
+	}
+	if json.Unmarshal(body, &resp) != nil {
+		return false
+	}
+	return resp.Respawned ||
+		database.RestartStateRank(resp.Aborted.State) >= database.RestartStateRank(database.RestartStateDraining)
 }
 
 // ---------------------------------------------------------------------------

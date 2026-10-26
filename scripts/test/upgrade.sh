@@ -36,6 +36,8 @@
 #      resume path is tested from it.
 #   8. A genuine `kill -9` of the CLI mid-upgrade, recovered with
 #      --resume --yes.
+#  8c. An attempt that FAILED after the swap: --resume refuses (13) when
+#      the server has no restart in flight, and finishes one that is.
 #   9. --bundle installs and verifies identically, offline.
 #
 # Usage:
@@ -568,6 +570,119 @@ grep -q "$(basename "$slot_dir")" "$journal_path" \
     || fail "the resume did not recover the rollback slot $slot_dir: $(cat "$journal_path")"
 
 echo "upgrade:   ok — resume detected the unrecorded swap, recovered its slot, mislabelled nothing"
+
+# ---------------------------------------------------------------------------
+# 8c. --resume after an upgrade that FAILED after the swap
+# ---------------------------------------------------------------------------
+# turtlemonvh/blanket#265. An attempt that fails after the swap (a drain the
+# watchdog cut short, say) ends in FAILED, with its staged file consumed by
+# the install. --resume used to read FAILED as STAGED and refuse for want
+# of a staged binary. It now resumes from the furthest state reached.
+#
+# Built deterministically, like 8b: forcing a real post-swap failure means
+# racing the watchdog, which is a flake generator. Two halves, one fixture:
+#   - with no restart in flight on the server (what the watchdog's abort
+#     leaves), the resume refuses with 13 and starts nothing;
+#   - with the server mid-restart, the resume finishes it.
+echo "upgrade: --resume after a failure past the swap"
+
+setup_rb="$(blanket rollback --yes 2>&1)" || fail "could not get back to $OLD_VERSION for the post-swap failure test: $setup_rb"
+harness_wait_ready || fail "no server after the setup rollback"
+installed_version | grep -q "$OLD_VERSION" || fail "setup rollback did not restore $OLD_VERSION"
+
+rm -f "$journal_path"
+set +e
+stage_out="$(blanket upgrade --stage-only --releases-base-url "$BASE_URL" 2>&1)"
+stage_rc=$?
+set -e
+[[ $stage_rc -eq 11 ]] || fail "--stage-only should exit 11, got $stage_rc: $stage_out"
+staged_path="$(json_field "$(cat "$journal_path")" stagedPath)"
+[[ -n "$staged_path" && -f "$staged_path" ]] || fail "no staged file at '$staged_path'"
+journal_id="$(json_field "$(cat "$journal_path")" id)"
+pre_instance="$(json_field "$(curl -fsS -H 'X-Blanket-Restart: 1' "$BASE/ops/restart/status")" instanceId)"
+
+# The rollback slot the real attempt would have written before the swap,
+# holding the old binary, so later cases still have $OLD_VERSION to roll
+# back to. Same .999 naming as 8b, for the same reason; wait out the second
+# if 8b's fixture landed in this one.
+slot_dir="$WORKDIR/upgrade/slots/$(date -u +%Y%m%d%H%M%S).999-$OLD_VERSION"
+if [[ -e "$slot_dir" ]]; then
+    sleep 1
+    slot_dir="$WORKDIR/upgrade/slots/$(date -u +%Y%m%d%H%M%S).999-$OLD_VERSION"
+fi
+[[ -e "$slot_dir" ]] && fail "the fixture slot $slot_dir already exists"
+mkdir -p "$slot_dir"
+cp "$INSTALLED" "$slot_dir/blanket"
+cat > "$slot_dir/slot.json" <<EOF
+{
+  "binaryName": "blanket",
+  "version": "$OLD_VERSION",
+  "sha256": "$(sha256_of "$INSTALLED")",
+  "installedPath": "$INSTALLED",
+  "upgradeId": "$journal_id",
+  "createdTs": $(date -u +%s)
+}
+EOF
+mv "$staged_path" "$INSTALLED"
+installed_version | grep -q "$NEW_VERSION" || fail "the simulated swap did not install $NEW_VERSION"
+
+# The journal the failed attempt left: the steps of a v0.3.0 -> v0.4.0 run
+# that failed in the drain, ending in FAILED, staged path consumed.
+python3 - "$journal_path" "$slot_dir" "$pre_instance" <<'PYEOF'
+import json, sys, time
+p, slot_dir, instance = sys.argv[1], sys.argv[2], sys.argv[3]
+j = json.load(open(p))
+now = int(time.time())
+j["state"] = "FAILED"
+j["stagedPath"] = ""
+j["slotPath"] = slot_dir
+j["fromInstanceId"] = instance
+j["error"] = "simulated drain failure"
+j.setdefault("steps", [])
+j["steps"] += [
+    {"state": "BACKED_UP", "ts": now},
+    {"state": "PAUSED", "ts": now, "note": "worker spawn paused"},
+    {"state": "SWAPPED", "ts": now, "note": "installed"},
+    {"state": "SWAPPED", "ts": now, "note": "server told the binary changed"},
+    {"state": "FAILED", "ts": now, "note": "simulated drain failure"},
+]
+json.dump(j, open(p, "w"), indent=2)
+PYEOF
+
+# Half one: the server has no restart in flight. Refuse, start nothing.
+set +e
+resume4_out="$(blanket upgrade --resume --yes 2>&1)"
+resume4_rc=$?
+set -e
+[[ $resume4_rc -eq 13 ]] || fail "--resume with no restart in flight should exit 13, got $resume4_rc: $resume4_out"
+grep -q "no restart in flight" <<<"$resume4_out" || fail "the refusal does not say why: $resume4_out"
+grep -q "staged binary" <<<"$resume4_out" && fail "--resume still read FAILED-after-swap as STAGED: $resume4_out"
+idle_status="$(curl -fsS -H 'X-Blanket-Restart: 1' "$BASE/ops/restart/status")"
+[[ "$(json_field "$idle_status" instanceId)" == "$pre_instance" ]] || fail "a refused resume restarted the server: $idle_status"
+grep -q '"state":"IDLE"' <<<"$idle_status" || fail "a refused resume began a restart: $idle_status"
+
+# Half two: the server is mid-restart, past the swap, as the failed attempt
+# left it. The resume finishes the restart.
+curl -fsS -H 'X-Blanket-Restart: 1' -X POST "$BASE/ops/restart/begin" -d '{"reason":"post-swap failure test","execMode":"exec"}' >/dev/null \
+    || fail "could not begin a restart for the post-swap failure test"
+curl -fsS -H 'X-Blanket-Restart: 1' -X POST "$BASE/ops/restart/pause" >/dev/null \
+    || fail "could not pause for the post-swap failure test"
+curl -fsS -H 'X-Blanket-Restart: 1' -X POST "$BASE/ops/restart/swapped" >/dev/null \
+    || fail "could not mark swapped for the post-swap failure test"
+
+set +e
+resume5_out="$(blanket upgrade --resume --yes 2>&1)"
+resume5_rc=$?
+set -e
+[[ $resume5_rc -eq 0 ]] || fail "--resume after a post-swap failure exited $resume5_rc: $resume5_out"
+harness_wait_ready || fail "no server after resuming a post-swap failure"
+done_status="$(curl -fsS -H 'X-Blanket-Restart: 1' "$BASE/ops/restart/status")"
+grep -q "$NEW_VERSION" <<<"$done_status" || fail "the server did not come back on $NEW_VERSION: $done_status"
+[[ "$(json_field "$done_status" instanceId)" != "$pre_instance" ]] || fail "the resume did not restart the server"
+grep -q '"state":"IDLE"' <<<"$done_status" || fail "the restart record was not cleared after the resume: $done_status"
+grep -q '"state": "VERIFIED"' "$journal_path" || fail "the journal does not say VERIFIED: $(cat "$journal_path")"
+
+echo "upgrade:   ok — a post-swap FAILED refuses with no restart in flight, and finishes one that is"
 
 # ---------------------------------------------------------------------------
 # 9. --bundle
