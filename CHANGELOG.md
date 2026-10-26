@@ -7,6 +7,69 @@ body (see `Extract changelog section` in that workflow) — see
 the exact binaries, `SHA256SUMS`, and offline bundle attached to each
 tag.
 
+## v0.4.1
+
+A fast follow to v0.4.0. It makes `blanket upgrade` honest and
+recoverable when an upgrade fails after the new binary is already
+installed, which is how the v0.3.0 → v0.4.0 upgrade fails when a
+server-started worker is running. No schema change.
+
+### Breaking / behaviour changes
+
+- **`blanket upgrade` checks the running server, not only the installed
+  binary** (#264). When the installed binary is already the target but
+  the server on the port still runs an older version, `upgrade` and
+  `upgrade --check` now exit **11** (installed, not restarted) instead
+  of 10 ("nothing to do"). The message names both versions and the next
+  step: `blanket upgrade --resume --yes` when the server has a restart
+  in flight, otherwise a restart under the server's supervisor.
+  `--json` gains `serverVersion`. With no server, or a dev build, the
+  answer is unchanged.
+- **`--no-restart` no longer suggests `--resume`** (#265). It now says
+  to restart the server under its supervisor. Resume never started a
+  restart that hadn't begun; it waited out its verify budget and exited
+  12.
+
+### Fixes
+
+- **`blanket upgrade --abort` after a failed post-swap upgrade** no
+  longer says "nothing was installed" (#265). It says the new binary was
+  left in place and names `blanket rollback --yes`. When the aborted
+  restart had already drained workers, it warns that any worker not
+  back needs `PUT /worker/:id/restart`.
+- **`blanket upgrade --resume --yes` after a failed post-swap upgrade**
+  finishes the restart instead of refusing with "the journal records no
+  staged binary" (#265). If the server no longer has a restart in flight,
+  for example because the watchdog aborted it, resume refuses with exit
+  13 and says to restart the server under its supervisor. It never
+  starts a new restart.
+
+### Upgrading
+
+- **From v0.4.0:** `blanket upgrade --yes`, or `--bundle` offline. The
+  server drains its workers, waits for running tasks, restarts on
+  v0.4.1 and respawns the workers. `blanket rollback --yes` returns you
+  to v0.4.0. Both were tested on a supervised server with a
+  server-started worker, idle and mid-task.
+- **From v0.3.0:** follow v0.4.0's Upgrading notes below. The v0.3.0 CLI
+  does the upgrade, so its bugs apply.
+- **`--no-restart` from v0.4.0** still prints v0.4.0's hint to run
+  `--resume`. Restart the server under its supervisor instead.
+- **Known issue: a task that outlasts the drain is killed** (#271,
+  present since v0.3.0). Under the systemd unit `blanket service
+  install` writes, a restart stops everything in the unit, server-started
+  workers and their tasks included. If a task is still running when
+  `restart.drainTimeout` (60s by default) runs out, the upgrade kills
+  it, the task ends `ERROR`, and the upgrade can exit 12 even though it
+  succeeded. Until #271 is fixed:
+  - Upgrade when no long task is running, or raise
+    `restart.drainTimeout` past your longest task, along with
+    `restart.deadline`.
+  - After `--no-restart` and a supervisor restart, or after an
+    interrupted upgrade, check that your workers came back. If one
+    didn't, run `PUT /worker/:id/restart` or restart it from the UI
+    (#272).
+
 ## v0.4.0
 
 Everything merged since `v0.3.0`. No schema change: a v0.3.0 binary can
