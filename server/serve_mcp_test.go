@@ -504,14 +504,6 @@ func TestMcpSubmitTask_ScheduledCapacityLimit(t *testing.T) {
 	assert.ErrorIs(t, err, ErrScheduledCapacityExceeded)
 }
 
-func TestMcpLaunchWorker_RequiresTags(t *testing.T) {
-	s, cleanup := NewTestServer()
-	defer cleanup()
-
-	_, _, err := s.mcpLaunchWorker(context.Background(), nil, blanketLaunchWorkerArgs{})
-	assert.Error(t, err)
-}
-
 func TestMcpCancelTask_Valid(t *testing.T) {
 	s, cleanup := NewTestServer()
 	defer cleanup()

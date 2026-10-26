@@ -82,14 +82,17 @@ func (Q *BlanketBoltQueue) ClaimTask(worker *worker.WorkerConf) (tasks.Task, fun
 	var nackCallback func() error
 	var err error
 
-	// Find the first task this worker can work with
+	// Find the first task this worker can work with: one whose tags are
+	// all among the worker's. EnforceMaxTags keeps that rule for a worker
+	// with no tags, which may claim only untagged tasks (#259).
 	tc := &database.TaskSearchConf{
-		Limit:         1,
-		ReverseSort:   true,
-		MaxTags:       worker.Tags,
-		JustUnclaimed: true,
-		SmallestId:    objectid.NewObjectIdWithTime(time.Unix(0, 0)),
-		LargestId:     objectid.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),
+		Limit:          1,
+		ReverseSort:    true,
+		MaxTags:        worker.Tags,
+		EnforceMaxTags: true,
+		JustUnclaimed:  true,
+		SmallestId:     objectid.NewObjectIdWithTime(time.Unix(0, 0)),
+		LargestId:      objectid.NewObjectIdWithTime(time.Unix(database.FAR_FUTURE_SECONDS, 0)),
 	}
 	ts, _, err := FindTasksInBoltDB(Q.db, BOLTDB_TASK_QUEUE_BUCKET, tc)
 	if err != nil {

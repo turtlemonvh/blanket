@@ -197,7 +197,7 @@ func (s *ServerConfig) registerCreateMCPTools(srv *mcp.Server, mode string) {
 	}, s.mcpRunTask)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "blanket_launch_worker",
-		Description: "Launch one or more workers with given tags.",
+		Description: "Launch one or more workers with given tags. A worker claims only tasks whose tags are all in its own set; with no tags it claims only untagged tasks.",
 		Annotations: mcpAdditiveAnnotations,
 	}, s.mcpLaunchWorker)
 }

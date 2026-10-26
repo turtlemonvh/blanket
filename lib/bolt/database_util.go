@@ -230,8 +230,10 @@ func FindTasksInBoltDB(db *bolt.DB, bucketName string, tc *database.TaskSearchCo
 				}
 			}
 
-			// All tags on each task must be present in tc.maxTags
-			if len(tc.MaxTags) > 0 {
+			// All tags on each task must be present in tc.MaxTags. With
+			// EnforceMaxTags an empty MaxTags still filters, leaving only
+			// untagged tasks; without it, empty means no filter.
+			if tc.EnforceMaxTags || len(tc.MaxTags) > 0 {
 				taskHasExtraTags := false
 				for _, existingTag := range t.Tags {
 					found := false
