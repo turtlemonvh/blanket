@@ -112,7 +112,8 @@ the binary being replaced is kept in a rollback slot -- see ` + "`blanket rollba
   blanket upgrade --abort              unwind an attempt that was interrupted
 
 Exit codes: 0 done (or, for --check, an upgrade is available), 10 nothing to
-do, 11 staged/installed without a restart, 12 verification failed, 13 the
+do, 11 staged/installed without a restart (including: installed, but the
+server on the port still runs a different version), 12 verification failed, 13 the
 restart was refused, 1 error, 2 usage.`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -164,6 +165,7 @@ type upgradeResult struct {
 	BackupPath       string   `json:"backupPath,omitempty"`
 	JournalPath      string   `json:"journalPath,omitempty"`
 	InstanceId       string   `json:"instanceId,omitempty"`
+	ServerVersion    string   `json:"serverVersion,omitempty"`
 	Message          string   `json:"message,omitempty"`
 	Error            string   `json:"error,omitempty"`
 	Warnings         []string `json:"warnings,omitempty"`
@@ -252,6 +254,14 @@ func runUpgrade(targetVersion string) int {
 	if upgradeConf.PrintPlan {
 		res.ExitCode = ExitOK
 		res.Message = printPlan(installed, src)
+		return res.emit()
+	}
+
+	// "Nothing to do" is a claim about the server as much as the binary:
+	// once a swap has landed, the installed CLI is the new version while
+	// the server on the port can still be the old process (a restart that
+	// failed after the swap, or --no-restart).
+	if upToDate && serverStillOld(res, viper.GetInt("port"), src.Version) {
 		return res.emit()
 	}
 
