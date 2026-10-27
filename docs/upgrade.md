@@ -275,6 +275,16 @@ running the old one. `--drain-mode never` keeps a long task running
 instead; see
 [`--drain-mode`](#--drain-mode-whether-a-restart-stops-its-workers).
 
+A drained worker finishes the task it is running before it exits, and the
+CLI **never execs over a worker that is still running one**. One drain
+call waits up to `restart.drainTimeout`; if workers are still busy when it
+returns, the CLI says how many and calls the drain again, for up to the
+restart's `restart.deadline` more. If they are still busy after that, it
+stops with exit `13`, leaving the server draining and the new binary
+installed: `blanket upgrade --resume --yes` picks the wait back up, and
+`blanket upgrade --abort` calls the restart off. Interrupting the CLI
+during the wait is safe for the same reason.
+
 ### Verification against `SHA256SUMS` (there is no `--no-verify`)
 
 Every binary is checked against the release's `SHA256SUMS` asset before it
@@ -300,8 +310,12 @@ A *third* process can pass the instance-id half: an abandoned blanket
 parked on the database lock, which wins the port the moment the real
 server lets go — but it runs the old binary, and the version catches it.
 The wait keeps waiting while something on the wrong version answers, up to
-its 90-second budget, then reports the version it saw (see
-[troubleshooting](#upgrade-and-restart-errors)).
+its 3-minute budget, then reports the version it saw (see
+[troubleshooting](#upgrade-and-restart-errors)). The budget covers the
+supervisor as well as the server's boot: a systemd stop that has to wait
+out `TimeoutStopSec` (90s by default), the unit's `RestartSec` (5s), and
+launchd's 10s respawn throttle. It ends the moment the replacement
+answers.
 
 The CLI avoids creating such a process itself: when it has to start the
 replacement (`--exec-mode=exit` on an unsupervised box) it waits for the
@@ -321,7 +335,7 @@ before the restart, the CLI warns and verifies on the version alone.
 | `10` | **Nothing to do** — the installed binary is already the target version and the server on the port runs it too (or no server answered, or it is a dev build whose version can't be read), or nothing to roll back to. |
 | `11` | **Staged only** — the binary is staged or installed and no restart was attempted (`--stage-only`, `--no-restart`, or no server was running). Also when the installed binary is already the target version but the server on the port still runs another one; see below. |
 | `12` | **Verification failed** — a checksum did not match, or the server that came back is not the one that was installed. |
-| `13` | **Restart refused** — the binary is in place but the server would not restart: a 409 from the state machine, a restart already in flight, or a `--resume` that found the old server with no restart in flight. |
+| `13` | **Restart refused** — the binary is in place but the server was not restarted: a 409 from the state machine, a restart already in flight, a `--resume` that found the old server with no restart in flight, or drained workers still running their tasks when the drain wait ran out (the server is left draining; `--resume --yes` waits again). |
 | `1` | Any other error. |
 | `2` | Usage: the flags don't make sense, or a precondition a human must fix is unmet (including a missing `--yes`). |
 
@@ -465,7 +479,7 @@ the driver's alone, since the server never sees a download.
 | `PLANNED` | Refuses. A partial download cannot be resumed — the only safe thing to do with an unverified file is throw it away. Run the upgrade again. | Removes the staging file. |
 | `STAGED` | Re-verifies the staged binary against the recorded digest, then continues from `begin`. | Removes it; nothing was installed. |
 | `BACKED_UP`, `PAUSED` | Re-verifies the staged binary and continues, skipping the transitions the server has already made. If the staged file is **gone**, checks whether the installed binary is already the one that was staged (below). | Clears the server-side restart (un-pausing worker spawn); nothing was installed. |
-| `SWAPPED`, `DRAINED`, `EXECED` | The new binary is already installed; finishes the restart. If a server answers, its own `resolvedExecMode` decides whether the CLI has to start the replacement or the server is bringing itself back. If the server answers with **no restart in flight** and is still the old process or version (the watchdog aborted the restart, or `--no-restart` never began one), refuses with exit `13`: restart the server under its supervisor to start the new version. A resume never begins a new restart. | Clears the server-side restart and **leaves the new binary in place**, naming `blanket rollback` as the way back. |
+| `SWAPPED`, `DRAINED`, `EXECED` | The new binary is already installed; finishes the restart. If the server is still `DRAINING`, waits on the drain again until the drained workers have exited (or refuses with exit `13`, as above), and only then execs. If a server answers, its own `resolvedExecMode` decides whether the CLI has to start the replacement or the server is bringing itself back. If the server answers with **no restart in flight** and is still the old process or version (the watchdog aborted the restart, or `--no-restart` never began one), refuses with exit `13`: restart the server under its supervisor to start the new version. A resume never begins a new restart. | Clears the server-side restart and **leaves the new binary in place**, naming `blanket rollback` as the way back. |
 | `FAILED` | Goes by the furthest state the journal reached (below). Failed **before** the swap: as `STAGED`, re-verifying the staged binary, or refusing if there is none. Failed **after** the swap: as `SWAPPED`, `DRAINED` or `EXECED`, finishing the restart. | Goes by the furthest state reached: before the swap, nothing was installed; after it, the binary is left in place and `blanket rollback` named, as for `SWAPPED`. |
 
 `FAILED` is where an attempt ended, not how far it got, so neither command
@@ -589,14 +603,19 @@ journal](#the-upgrade-journal-journaljson).
 | `BACKED_UP` | `POST /ops/backup` while a record is at `STAGED` | A backup exists, and the record names it. | As `STAGED`. |
 | `PAUSED` | `POST /ops/restart/pause` | Worker spawn is refused with 409. | + no new workers. |
 | `SWAPPED` | `POST /ops/restart/swapped` | The caller reports the binary on disk is the new one. The only state the server cannot observe for itself. | As `PAUSED`. |
-| `DRAINING` | `POST /ops/restart/drain` | Every running worker has been stopped with a respawn intent — in **one transaction** with this state change. | + workers stopping. |
+| `DRAINING` | `POST /ops/restart/drain` | Every running worker has been stopped with a respawn intent — in **one transaction** with this state change. Each finishes its current task, then exits. | + workers stopping. |
 | `EXECING` | `POST /ops/restart/exec` | The shutdown has begun. | Going away. |
 | `VERIFIED` | the next process's boot | The replacement found the record, brought back what the drain stopped, and cleared it. | Logged on the way back to `IDLE`; never left in the file. |
 
 Transitions are **forward-only**, and skipping ahead is the normal case: a
 routine restart takes no backup, swaps no binary and drains nothing —
 `begin` then `exec` is a complete, valid sequence. Going backwards, or
-repeating a state, is a 409. `abort` goes to `IDLE` from anywhere.
+repeating a state, is a 409, with one exception: `POST /ops/restart/drain`
+on a restart that is already `DRAINING` stops nothing new and waits, like
+the first drain, for the workers that drain stopped to exit. That is how a
+driver whose first drain timed out, or one resuming an attempt that died
+mid-drain, finds out whether it may exec yet. `abort` goes to `IDLE` from
+anywhere.
 
 ### Every transition is one transaction
 
@@ -655,7 +674,10 @@ from becoming "forever":
 The driver is a separate process and can be `kill -9`ed. The record
 therefore carries a deadline that **every transition refreshes** (a
 watchdog, not a budget), and the server aborts the restart when it lapses,
-lifting the pause and bringing back anything the drain stopped. That is
+lifting the pause and bringing back anything the drain stopped. A drain
+call that is still waiting refreshes it too, every few seconds, as does
+each repeat drain call: a driver still waiting on long tasks is a driver
+that is alive, so a drain is never aborted for being long. That is
 the same code `POST /ops/restart/abort` runs, so the recovery a human
 triggers is the one every timeout has already exercised.
 
@@ -691,7 +713,10 @@ curl -sS "${OPS[@]}" -X POST $BASE/ops/restart/swapped
 
 # 5. Drain — only if the new binary changes worker behaviour; a routine
 #    restart skips this. Waits up to restart.drainTimeout; answers
-#    `drained: false` with a list if something is still running.
+#    `drained: false` with a list if something is still running. Call it
+#    again to keep waiting, and do not go on to step 6 until it answers
+#    `drained: true`: a worker still running a task when the server goes
+#    away loses the task under a supervisor that stops the whole service.
 curl -sS "${OPS[@]}" -X POST $BASE/ops/restart/drain
 
 # 6. Go. 202, then the server tears down and either re-execs in place or
@@ -778,8 +803,8 @@ the *worker* code changes — an upgrade — which `blanket upgrade` does and
 | `storage.backupRetention` | `3` | How many backups to keep. |
 | `restart.execMode` | `auto` | How a requested restart replaces the process: `auto`, `exec`, `exit`. Also `--exec-mode`. |
 | `restart.drainMode` | `auto` | Whether a restart stops its workers: `auto`, `always`, `never`. Also `--drain-mode`. |
-| `restart.drainTimeout` | `60s` | How long a drain waits for stopped workers to exit before reporting the stragglers. A bound on the *wait*, never on the task — a worker finishes what it is running first. Also `--drain-timeout`. |
-| `restart.deadline` | `5m` | How long the watchdog gives the restart's driver between transitions before aborting. Generous: the steps it spans include a human swapping a binary by hand. The drain is one transition, so **if you raise `restart.drainTimeout` past this, raise this too** (to the drain timeout plus a few minutes): otherwise the watchdog aborts the restart mid-drain and `blanket upgrade` exits 13 once the drain returns. |
+| `restart.drainTimeout` | `60s` | How long one `POST /ops/restart/drain` waits for the stopped workers to exit before answering with the stragglers. A bound on the *wait*, never on the task: a worker finishes what it is running first, and `blanket upgrade` calls the drain again rather than exec over it (see [the upgrade sequence](#the-upgrade-sequence)). Also `--drain-timeout`. |
+| `restart.deadline` | `5m` | How long the watchdog gives the restart's driver between transitions before aborting. Generous: the steps it spans include a human swapping a binary by hand. A drain that is still waiting keeps it refreshed, so a long drain is not aborted. Also how much longer `blanket upgrade` keeps waiting on busy workers after the first drain times out, before it refuses with exit 13. |
 | `upgrade.checkForUpdates` | `true` | Whether the CLI prints [the update notice](#the-update-notice-blanket-ps). |
 | `upgrade.stateDir` | `""` | Where the journal, the rollback slots and the notice cache live. Empty means `<database dir>/upgrade`, beside the backups the slots pair with. |
 | `upgrade.slots` | `3` | How many [rollback slots](#rollback-slots-blanket-rollback) to keep. |

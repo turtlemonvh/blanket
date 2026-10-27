@@ -449,6 +449,16 @@ type DrainResult struct {
 // lib/bolt/restart.go). Everything after it — signalling, waiting — is
 // best-effort on top of a record that is already correct.
 func (s *ServerConfig) drainRestart(ctx context.Context, wait bool) (DrainResult, error) {
+	// A second drain while one is in place waits on the first rather than
+	// being a 409. The stop already happened and DRAINING cannot be
+	// re-entered, but "wait until the workers that drain stopped have
+	// exited" is still a question with an answer, and it is the one a
+	// driver needs before it may exec: one whose first wait timed out, or
+	// one resuming an attempt that died mid-drain.
+	if rr, err := s.DB.RestartRecord(); err == nil && rr.Active() && rr.State == database.RestartStateDraining {
+		return s.rewaitDrain(ctx, wait)
+	}
+
 	if s.drainMode() == database.DrainModeNever {
 		return DrainResult{}, &RestartStateError{
 			Requested: database.RestartStateDraining,
@@ -492,8 +502,87 @@ func (s *ServerConfig) drainRestart(ctx context.Context, wait bool) (DrainResult
 	return res, nil
 }
 
+// rewaitDrain answers a drain request on a restart that is already
+// DRAINING: nothing new is stopped, the watchdog deadline is refreshed (a
+// driver asking is a driver alive), and it waits, like the first drain, for
+// the workers the drain stopped to exit. Stopped lists those workers, so a
+// caller reads the response the same way either time.
+func (s *ServerConfig) rewaitDrain(ctx context.Context, wait bool) (DrainResult, error) {
+	rr, err := s.refreshDrainDeadline()
+	if err != nil {
+		return DrainResult{}, err
+	}
+	ws, err := s.DB.GetWorkers()
+	if err != nil {
+		return DrainResult{}, err
+	}
+	var drained []worker.WorkerConf
+	for _, w := range ws {
+		if w.Stopped && w.RespawnIntent {
+			drained = append(drained, w)
+		}
+	}
+
+	res := DrainResult{Record: rr, Drained: true}
+	for _, w := range drained {
+		res.Stopped = append(res.Stopped, w.Id.Hex())
+	}
+	log.WithFields(log.Fields{
+		"restartId": rr.Id,
+		"workers":   len(drained),
+		"wait":      wait,
+	}).Warn("restart: already draining; waiting for the drained workers")
+
+	if wait && len(drained) > 0 {
+		started := time.Now()
+		res.StillRunning = s.waitForDrain(ctx, drained)
+		res.Drained = len(res.StillRunning) == 0
+		res.WaitedMs = time.Since(started).Milliseconds()
+	}
+	return res, nil
+}
+
+// refreshDrainDeadline pushes a DRAINING restart's watchdog deadline out by
+// its full length, without a transition. Refreshing only on transitions
+// would let the watchdog abort a drain that is going fine merely because
+// its tasks are long: the driver is still connected and waiting, which is
+// exactly the evidence of life the watchdog is looking for.
+func (s *ServerConfig) refreshDrainDeadline() (database.RestartRecord, error) {
+	rr, err := s.DB.UpdateRestartRecord(func(rr *database.RestartRecord) error {
+		if !rr.Active() || rr.State != database.RestartStateDraining {
+			return &RestartStateError{
+				Current:   rr.State,
+				Requested: database.RestartStateDraining,
+				Detail:    "the restart is no longer draining",
+			}
+		}
+		if rr.DeadlineSeconds <= 0 {
+			rr.DeadlineSeconds = int64(s.restartDeadline() / time.Second)
+		}
+		rr.DeadlineTs = time.Now().Unix() + rr.DeadlineSeconds
+		return nil
+	})
+	if err != nil {
+		return rr, err
+	}
+	s.applyRestartRecord(rr)
+	return rr, nil
+}
+
+// drainDeadlineRefreshInterval is how often a drain that is waiting
+// refreshes the watchdog deadline. Unscaled. Far below any sensible
+// restart.deadline; the refresh is one small bolt write. A var so tests
+// can shorten it.
+var drainDeadlineRefreshInterval = 5 * time.Second
+
 // waitForDrain polls until every worker in ws has demonstrably exited, or
 // the drain timeout runs out. Returns the ids still running.
+//
+// While it waits it keeps the watchdog deadline fresh (see
+// refreshDrainDeadline), so a drainTimeout longer than restart.deadline
+// does not get the restart aborted underneath its own drain. If the record
+// has moved on (an abort, say), the wait ends early: there is no longer a
+// drain to wait for.
 //
 // "Demonstrably exited" is two independent signals, either of which is
 // enough, because neither is available everywhere:
@@ -508,6 +597,8 @@ func (s *ServerConfig) drainRestart(ctx context.Context, wait bool) (DrainResult
 func (s *ServerConfig) waitForDrain(ctx context.Context, ws []worker.WorkerConf) []string {
 	deadline := time.Now().Add(s.drainTimeout())
 	poll := timing.Scale(250 * time.Millisecond)
+	refreshEvery := timing.Scale(drainDeadlineRefreshInterval)
+	lastRefresh := time.Now()
 
 	for {
 		var remaining []string
@@ -519,6 +610,13 @@ func (s *ServerConfig) waitForDrain(ctx context.Context, ws []worker.WorkerConf)
 		}
 		if len(remaining) == 0 || time.Now().After(deadline) {
 			return remaining
+		}
+		if time.Since(lastRefresh) >= refreshEvery {
+			if _, err := s.refreshDrainDeadline(); err != nil {
+				log.WithField("err", err).Warn("restart: stopped waiting for the drain; the restart is no longer draining")
+				return remaining
+			}
+			lastRefresh = time.Now()
 		}
 		select {
 		case <-ctx.Done():

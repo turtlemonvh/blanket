@@ -326,6 +326,81 @@ func TestRestart_DrainModeNeverRefuses(t *testing.T) {
 	assert.Contains(t, body["error"], "drain-mode=never")
 }
 
+// addLiveWorker registers a running worker whose pid is this test process,
+// so pid liveness answers "conclusively alive" until the test reports the
+// worker gone.
+func addLiveWorker(t *testing.T, s *ServerConfig) worker.WorkerConf {
+	t.Helper()
+	startTs, ok := proclive.StartTime(os.Getpid())
+	if !ok || startTs == 0 {
+		t.Skip("pid start time is unavailable on this platform")
+	}
+	w := worker.WorkerConf{
+		Id:         objectid.NewObjectId(),
+		Pid:        os.Getpid(),
+		PidStartTs: startTs,
+		StartedTs:  time.Now().Unix(),
+	}
+	require.NoError(t, s.DB.UpdateWorker(&w))
+	return w
+}
+
+// A drain that timed out leaves the restart DRAINING. Asking again must
+// wait on the workers that drain stopped -- a driver needs that answer
+// before it may exec -- not refuse with a forward-only 409.
+func TestRestart_SecondDrainWaitsOnTheFirst(t *testing.T) {
+	s, r, cleanup := restartTestServer(t)
+	defer cleanup()
+	s.DrainTimeout = 300 * time.Millisecond
+	busy := addLiveWorker(t, s)
+
+	require.Equal(t, http.StatusOK, mustCode(doOps(t, r, "POST", "/ops/restart/begin", "")))
+	code, body := doOps(t, r, "POST", "/ops/restart/drain", "")
+	require.Equal(t, http.StatusOK, code)
+	assert.Equal(t, false, body["drained"])
+
+	code, body = doOps(t, r, "POST", "/ops/restart/drain", "")
+	require.Equal(t, http.StatusOK, code, "a repeat drain waits, it does not conflict: %v", body)
+	assert.Equal(t, false, body["drained"])
+	assert.Equal(t, []interface{}{busy.Id.Hex()}, body["stopped"])
+	assert.Equal(t, []interface{}{busy.Id.Hex()}, body["stillRunning"])
+
+	// The worker finishes its task and reports itself gone.
+	_, err := s.DB.StopWorker(busy.Id, worker.StopReasonSelf)
+	require.NoError(t, err)
+
+	code, body = doOps(t, r, "POST", "/ops/restart/drain", "")
+	require.Equal(t, http.StatusOK, code)
+	assert.Equal(t, true, body["drained"])
+
+	rr, err := s.DB.RestartRecord()
+	require.NoError(t, err)
+	assert.Equal(t, database.RestartStateDraining, rr.State)
+	assert.Equal(t, 1, rr.DrainedWorkers, "a re-wait must not overwrite what the drain recorded")
+}
+
+// The watchdog must not abort a drain that is still being waited on, even
+// when the drain is longer than restart.deadline.
+func TestRestart_DrainWaitKeepsTheWatchdogAway(t *testing.T) {
+	s, r, cleanup := restartTestServer(t)
+	defer cleanup()
+	old := drainDeadlineRefreshInterval
+	drainDeadlineRefreshInterval = 200 * time.Millisecond
+	defer func() { drainDeadlineRefreshInterval = old }()
+	s.DrainTimeout = 2500 * time.Millisecond
+	addLiveWorker(t, s)
+
+	require.Equal(t, http.StatusOK, mustCode(doOps(t, r, "POST", "/ops/restart/begin", `{"deadlineSeconds": 1}`)))
+	code, body := doOps(t, r, "POST", "/ops/restart/drain", "")
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, false, body["drained"])
+
+	// Without the refresh the deadline would be the drain's start + 1s,
+	// well in the past by now.
+	assert.False(t, s.restartDeadlinePassed(time.Now()),
+		"a drain still being waited on must keep refreshing the watchdog deadline")
+}
+
 // A driver that is killed must not leave the server unable to spawn a
 // worker with no way out but the restart that just failed.
 func TestRestart_WatchdogAbortsAnAbandonedRestart(t *testing.T) {
