@@ -1,3 +1,5 @@
+//go:build !windows
+
 package worker_test
 
 import (
@@ -10,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -54,9 +55,6 @@ const shutdownExitBound = 8 * time.Second
 //     server mid-restart behind a stuck proxy, or a wedged one, looks
 //     like. Calls in flight must not hold the shutdown up.
 func TestRun_SIGTERM(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("SIGTERM subprocess harness is unix-only")
-	}
 	for _, mode := range []string{"up", "down", "hung"} {
 		t.Run(mode, func(t *testing.T) { runSIGTERMScenario(t, mode) })
 	}
