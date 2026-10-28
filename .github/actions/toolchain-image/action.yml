@@ -113,7 +113,7 @@ runs:
     # Buildx is required for the gha cache backend used below. Skipped on a
     # pull hit along with the build itself: setting it up costs a few
     # seconds and nothing downstream reads it when there is no build.
-    - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       if: inputs.push == 'true' || steps.pull.outputs.hit != 'true'
 
     # Cold builds take ~5m; cached builds settle to ~60s (mean 65s, p50 61s,
@@ -122,7 +122,7 @@ runs:
     # 10GB per-repo cache budget today.
     - name: Build and load blanket-dev:latest
       if: inputs.push != 'true' && steps.pull.outputs.hit != 'true'
-      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
       with:
         context: .
         tags: blanket-dev:latest
@@ -145,7 +145,7 @@ runs:
     # up on the repo page rather than floating loose under the user account.
     - name: Build and push to GHCR
       if: inputs.push == 'true'
-      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
       with:
         context: .
         tags: |
