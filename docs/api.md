@@ -517,14 +517,19 @@ The worker state machine is in
 and forks a daemon from the server's own binary; **200** with the
 registered record once it has reported a pid, **400** for a
 `checkInterval` under the minimum (0.5s), **408** if it never registers.
-`PUT /worker/:id/restart` clears the server-side `stopped` flag, then
-relaunches the same way. Both answer **409** while a server restart holds
-the spawn pause (see [`POST /ops/restart/pause`](#post-opsrestartpause)).
+`PUT /worker/:id/restart` clears the server-side `stopped` flag and any
+respawn intent a restart's drain left, then relaunches the same way. Both
+answer **409** while a server restart holds the spawn pause (see
+[`POST /ops/restart/pause`](#post-opsrestartpause)). `PUT
+/worker/:id/restart` also answers **409** while the worker's process is
+still alive: a stopped worker exits only after its current task, and a
+second process for the same id would claim tasks alongside it.
 
 `PUT /worker/:id` merges at the field level: the worker owns `pid`,
 `pidStartTs`, `logfile`, `startedTs`, `tags`, `checkInterval`; the server
 owns `stopped`, `stoppedReason`, `lastHeardTs`, `lost`, and the respawn
-bookkeeping (`respawnIntent`, `respawnAttempts`, `lastRespawnTs`). A
+bookkeeping (`respawnIntent`, `respawnAttempts`, `lastRespawnTs`,
+`spawnPid`, `spawnPidStartTs`). A
 re-registration clears `lost`, the one server-owned field it may touch.
 
 `DELETE /worker/:id` takes no body. It is **400** unless the stored

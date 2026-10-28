@@ -149,6 +149,9 @@ harness_write_config() {
     "taskStaleAfter": "3s",
     "maxRequeues": 3
   },
+  "restart": {
+    "respawnRetryInterval": "1s"
+  },
   "logLevel": "${log_level}"
 }
 EOF

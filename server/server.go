@@ -88,6 +88,11 @@ type ServerConfig struct {
 	// silently acquire a loop that rewrites task state underneath it.
 	// command/serve.go is the one place that reads the config key.
 	ReaperEnabled bool
+
+	// RespawnRetryInterval, when positive, runs a respawn pass on that
+	// interval (respawnRetryLoop). Zero turns it off, so a ServerConfig
+	// built by hand in a test never forks a worker on its own.
+	RespawnRetryInterval time.Duration
 	// ReaperInterval is how often a reaper pass runs; the remaining
 	// Reaper* fields are the thresholds each pass measures against. All
 	// are unscaled durations — timeMultiplier is applied at use, via
@@ -133,6 +138,11 @@ type ServerConfig struct {
 	// Tests only: the real one resolves os.Executable(), which under
 	// `go test` is the test binary. See spawnRespawnedWorker.
 	spawnWorkerFn func(*worker.WorkerConf) (worker.WorkerConf, error)
+
+	// respawnMu serializes every decision to fork a process for an
+	// existing worker id: each respawnWorker call, and PUT
+	// /worker/:id/restart. See respawnWorker.
+	respawnMu sync.Mutex
 
 	// startDaemonFn replaces w.Run() in startDaemon, the fork behind
 	// POST /worker/, the UI form and blanket_launch_worker. Tests only,

@@ -151,6 +151,8 @@ func (DB *BlanketBoltDB) UpdateWorker(w *worker.WorkerConf) error {
 			merged.RespawnIntent = current.RespawnIntent
 			merged.RespawnAttempts = current.RespawnAttempts
 			merged.LastRespawnTs = current.LastRespawnTs
+			merged.SpawnPid = current.SpawnPid
+			merged.SpawnPidStartTs = current.SpawnPidStartTs
 			// Lost is server-owned too, but a re-registering worker is
 			// itself evidence of life, so this is the one server-owned
 			// field an update clears rather than preserves. Leaving it set
@@ -180,12 +182,24 @@ func (DB *BlanketBoltDB) UpdateWorker(w *worker.WorkerConf) error {
 // sends, so restarting one (PUT /worker/:id/restart) has to be an explicit
 // server-side act rather than something the relaunched worker does to
 // itself by re-registering.
+//
+// The caller has already established that no process for this worker is
+// alive (turtlemonvh/blanket#278), so the restart takes over any respawn a
+// drain still owes — leaving the intent set would have the next respawn
+// pass fork a second process for this id — and the pids are cleared for
+// the same reason ClaimWorkerRespawn clears them.
 func (DB *BlanketBoltDB) StartWorker(workerId objectid.ObjectId) (worker.WorkerConf, error) {
 	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
 		w.Stopped = false
 		w.StoppedReason = ""
 		w.Lost = false
 		w.LastHeardTs = time.Now().Unix()
+		w.RespawnIntent = false
+		w.RespawnAttempts = 0
+		w.Pid = 0
+		w.PidStartTs = 0
+		w.SpawnPid = 0
+		w.SpawnPidStartTs = 0
 		return nil
 	})
 }

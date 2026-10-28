@@ -165,6 +165,19 @@ type WorkerConf struct {
 	// to spawn this worker.
 	LastRespawnTs int64 `json:"lastRespawnTs,omitempty"`
 
+	// SpawnPid and SpawnPidStartTs are the process the server last forked
+	// for this worker, recorded the moment the fork returns rather than
+	// when the child registers (turtlemonvh/blanket#278). Server-owned.
+	//
+	// Pid is only written once the child registers, which can take
+	// seconds. A server that died inside that window used to leave a
+	// record whose Pid was zero (ClaimWorkerRespawn clears it) and whose
+	// intent was still set, so the next boot saw no process and forked a
+	// second one for the same id. With the fork's own pid on the record,
+	// the next pass sees a process still registering and leaves it alone.
+	SpawnPid        int   `json:"spawnPid,omitempty"`
+	SpawnPidStartTs int64 `json:"spawnPidStartTs,omitempty"`
+
 	// stopping is a purely local shutdown flag, set by the SIGTERM/SIGINT
 	// handler (turtlemonvh/blanket#23 phase 1). The claim loop's exit
 	// condition used to be Stopped alone, which the worker only learns
@@ -280,6 +293,8 @@ func (c *WorkerConf) Run() error {
 		// parent exits straight away and init reaps instead, so this
 		// goroutine simply never finishes there.
 		go func() { _ = cmd.Wait() }()
+		c.SpawnPid = cmd.Process.Pid
+		c.SpawnPidStartTs, _ = proclive.StartTime(cmd.Process.Pid)
 
 		log.WithFields(log.Fields{
 			"tags":          c.Tags,
@@ -460,6 +475,36 @@ func StopWorkerById(workerId objectid.ObjectId, reason string) error {
 	_, err := httpx.Do(context.Background(), "PUT", workerURL(workerId, suffix), nil,
 		httpx.Policy{Deadline: ShutdownRetryDeadline})
 	return err
+}
+
+// Running reports whether the process that registered as this worker is
+// still alive. It is what the respawn pass and PUT /worker/:id/restart
+// mean by "this worker is already running".
+func (c WorkerConf) Running() bool {
+	if c.Pid == 0 {
+		return false
+	}
+	alive, _ := proclive.IsAlive(c.Pid, c.PidStartTs)
+	return alive
+}
+
+// StillDrained reports whether this record is exactly as a restart's
+// drain left it: stopped by the drain, with the respawn still owed. A
+// running process behind such a record is the drained worker finishing
+// its last task, not a worker that was brought back.
+func (c WorkerConf) StillDrained() bool {
+	return c.Stopped && c.StoppedReason == StopReasonRestart && c.RespawnIntent
+}
+
+// Registering reports whether a process the server forked for this worker
+// is alive but has not registered yet: neither running nor gone, so
+// neither safe to fork again nor done.
+func (c WorkerConf) Registering() bool {
+	if c.SpawnPid == 0 || c.Running() {
+		return false
+	}
+	alive, _ := proclive.IsAlive(c.SpawnPid, c.SpawnPidStartTs)
+	return alive
 }
 
 func (c *WorkerConf) Stop() error {

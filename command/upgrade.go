@@ -774,11 +774,7 @@ func displayVersionOr(v string) string {
 // It returns (false, 0) when the swap cannot be confirmed, so the caller
 // owns the error message.
 func adoptUnrecordedSwap(res *upgradeResult, j *upgrade.Journal) (bool, int) {
-	if j.SHA256 == "" {
-		return false, 0
-	}
-	sum, err := upgrade.FileSHA256(j.BinaryPath)
-	if err != nil || sum != j.SHA256 {
+	if !installedIsStaged(j) {
 		return false, 0
 	}
 
@@ -808,6 +804,18 @@ func adoptUnrecordedSwap(res *upgradeResult, j *upgrade.Journal) (bool, int) {
 		port = viper.GetInt("port")
 	}
 	return true, execAndVerify(res, j, port)
+}
+
+// installedIsStaged reports whether the installed binary is the one this
+// attempt staged, by digest. It is how both --resume and --abort recognise
+// turtlemonvh/blanket#203's window, where Swap() renamed the staged file
+// into place but the journal never recorded SWAPPED.
+func installedIsStaged(j *upgrade.Journal) bool {
+	if j.SHA256 == "" {
+		return false
+	}
+	sum, err := upgrade.FileSHA256(j.BinaryPath)
+	return err == nil && sum == j.SHA256
 }
 
 // stillOldServer reports whether a server with no restart in flight is
@@ -951,6 +959,17 @@ func runUpgradeResume(res *upgradeResult, installed string) int {
 			if j.FromInstanceId == "" {
 				j.FromInstanceId = st.InstanceId
 			}
+			if !j.Reached(upgrade.JournalDrained) {
+				// The server came back on the new binary without this
+				// attempt ever draining it -- it crashed, or its supervisor
+				// restarted it, between the swap and the drain. That
+				// restart stopped no workers, so the ones started before
+				// it are still running the old binary
+				// (turtlemonvh/blanket#278).
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"no drain was recorded before the server came back; workers started before the upgrade may still be running %s. Stop and restart them to move them onto %s",
+					displayVersionOr(j.FromVersion), j.ToVersion))
+			}
 			return verifyRestart(res, j, port, st.ResolvedExecMode)
 		}
 		// Nothing answered for the whole probe: the server really is
@@ -1010,7 +1029,11 @@ func runUpgradeAbort(res *upgradeResult) int {
 	// failed after the swap ends in FAILED, and deciding from that alone
 	// told the operator "nothing was installed" about a binary that was
 	// (turtlemonvh/blanket#265).
-	if j.Reached(upgrade.JournalSwapped) {
+	//
+	// The disk too, not just the journal: a crash between the swap and
+	// the journal recording it leaves a journal that never reached SWAPPED
+	// over a binary that did (turtlemonvh/blanket#203, #278).
+	if j.Reached(upgrade.JournalSwapped) || installedIsStaged(j) {
 		// The binary is already the new one. Undoing that is a rollback,
 		// which is a separate, deliberate act with its own confirmation --
 		// silently reverting a binary out from under a server that is

@@ -129,6 +129,11 @@ running_worker_count() {
     curl -fsS "$BASE/worker/" 2>/dev/null | grep -o '"stopped":false' | wc -l | tr -d ' '
 }
 
+# worker_json ID — the one worker's record, compact.
+worker_json() {
+    curl -fsS "$BASE/worker/$1" 2>/dev/null | jq -c '{stopped, respawnIntent, pid}'
+}
+
 respawn_intent_count() {
     curl -fsS "$BASE/worker/" 2>/dev/null | grep -o '"respawnIntent":true' | wc -l | tr -d ' '
 }
@@ -150,9 +155,11 @@ crash_at_state() {
     BLANKET_TEST_CRASH_AT="$state" harness_start_server
     harness_wait_ready || exit 1
 
+    local drained_id=""
     if [[ "$with_worker" == "worker" ]]; then
         start_worker "test"
         [[ "$(running_worker_count)" == "1" ]] || fail "$state: expected 1 running worker before the restart"
+        drained_id="$(curl -fsS "$BASE/worker/" | jq -r '.[0].id')"
     fi
 
     # Walk the machine. Each call may be the one that kills the server, so
@@ -204,17 +211,23 @@ crash_at_state() {
         || fail "$state: worker spawn is still refused after the replacement booted (got $spawn_code)"
 
     if [[ "$with_worker" == "worker" ]]; then
-        # The debt survives the record: workers the drain stopped come back.
+        # The debt survives the record: the worker the drain stopped comes
+        # back. Asserted on that worker's own record, not on a count: the
+        # spawn check above starts a second worker, which used to satisfy
+        # "at least one running" on its own whether or not the drained one
+        # ever returned (turtlemonvh/blanket#278). If the boot pass found it
+        # still exiting, the periodic retry (1s in the harness) brings it
+        # back.
         local i back=0
-        for ((i = 0; i < 100; i++)); do
-            if [[ "$(respawn_intent_count)" == "0" ]] && [[ "$(running_worker_count)" -ge 1 ]]; then
+        for ((i = 0; i < 150; i++)); do
+            if [[ "$(worker_json "$drained_id")" =~ \"stopped\":false,\"respawnIntent\":(false|null),\"pid\":[1-9] ]]; then
                 back=1
                 break
             fi
             sleep 0.1
         done
         [[ "$back" -eq 1 ]] \
-            || fail "$state: the drained worker was never respawned (intents: $(respawn_intent_count), running: $(running_worker_count))"
+            || fail "$state: the drained worker $drained_id was never respawned ($(worker_json "$drained_id"))"
     fi
 
     harness_stop_server TERM

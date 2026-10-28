@@ -237,6 +237,11 @@ func SetConfigDefaults() {
 	// transitions before deciding it is gone and aborting. Generous: the
 	// steps it spans include a human swapping a binary by hand.
 	viper.SetDefault("restart.deadline", "5m")
+	// How often a running server retries respawns a restart still owes
+	// (turtlemonvh/blanket#278): one skipped by the minimum interval, a
+	// spawn that failed, a drained worker that was still finishing its
+	// task when the boot pass ran. 0 turns the retry off.
+	viper.SetDefault("restart.respawnRetryInterval", "30s")
 
 	// `blanket upgrade` / `blanket rollback` (turtlemonvh/blanket#23
 	// phase 6). See docs/upgrade.md.

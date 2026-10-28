@@ -651,8 +651,10 @@ func (s *ServerConfig) adoptRestartRecordOnBoot() {
 // respawnWorkers brings back every worker carrying a respawn intent.
 //
 // Called once after the listener is up (a worker registers itself over
-// HTTP, so there is nothing for it to register with before then) and again
-// by abortRestart. `trigger` is only for the log.
+// HTTP, so there is nothing for it to register with before then), again
+// by abortRestart, and periodically by respawnRetryLoop. `trigger` is
+// only for the log, except that "abort" is what lets a pass undo a drain
+// (see respawnWorker).
 func (s *ServerConfig) respawnWorkers(trigger string) {
 	if s.DB == nil {
 		return
@@ -666,30 +668,82 @@ func (s *ServerConfig) respawnWorkers(trigger string) {
 		if !w.RespawnIntent {
 			continue
 		}
-		s.respawnWorker(w, trigger)
+		s.respawnWorker(w.Id, trigger)
 	}
 }
 
-// respawnWorker runs the three storm guards over one worker and, if they
-// all pass, brings it back.
+// respawnWorker decides what one worker's respawn intent calls for and,
+// if that is a spawn, brings it back.
 //
-// The guards are ordered cheapest-and-most-conclusive first:
+// It holds respawnMu throughout, the same lock PUT /worker/:id/restart
+// takes, and decides from the record as it is under that lock rather than
+// from the listing the pass started with. Two passes (boot and abort, or
+// either and the periodic one) or a pass and an operator's restart used
+// to be able to act on the same worker from two stale copies of its
+// record, and each fork a process for it (turtlemonvh/blanket#278).
 //
-//  1. **pid liveness.** The worker is already running — which is the
-//     normal outcome of the at-least-once design, when the server died
-//     after spawning but before clearing the intent. Clear and move on;
-//     spawning a second process for one worker id is the one outcome
-//     worse than not spawning at all.
-//  2. **the generation cap.** This worker has been tried enough times.
+// The checks, in order:
+//
+//  0. **nothing to do yet.** A restart is in flight (its drain owns the
+//     intents now), the intent has been settled since the listing, or a
+//     process forked for this worker has not registered yet. Leave it;
+//     the periodic pass looks again.
+//  1. **a drained worker still finishing its task.** Its record is
+//     exactly as the drain left it, and its process is alive. On abort,
+//     undo the drain so it carries on; on any other pass, leave the
+//     intent so a later pass brings it back once it has exited. Clearing
+//     the intent here, as the plain liveness check below does, left the
+//     worker stopped with nothing intending to restart it: it finished
+//     its task, saw it was stopped, and was gone for good.
+//  2. **already running.** The normal outcome of the at-least-once
+//     design, when the server died after spawning but before settling
+//     the intent. Clear and move on.
+//  3. **the generation cap.** This worker has been tried enough times.
 //     Record why and leave it down, so the operator finds a reason on the
 //     record rather than a worker that is mysteriously absent.
-//  3. **the minimum interval.** It was tried very recently, so this is a
+//  4. **the minimum interval.** It was tried very recently, so this is a
 //     server restarting in a tight loop rather than a restart completing.
-//     Leave the intent alone and let a later boot try.
-func (s *ServerConfig) respawnWorker(w worker.WorkerConf, trigger string) {
-	fields := log.Fields{"workerId": w.Id.Hex(), "trigger": trigger, "attempts": w.RespawnAttempts}
+//     Leave the intent alone and let a later pass try.
+func (s *ServerConfig) respawnWorker(id objectid.ObjectId, trigger string) {
+	s.respawnMu.Lock()
+	defer s.respawnMu.Unlock()
 
-	if alive, _ := proclive.IsAlive(w.Pid, w.PidStartTs); alive {
+	fields := log.Fields{"workerId": id.Hex(), "trigger": trigger}
+	w, err := s.DB.GetWorker(id)
+	if err != nil {
+		log.WithFields(fields).WithField("err", err).Warn("restart: could not read a worker to respawn")
+		return
+	}
+	fields["attempts"] = w.RespawnAttempts
+
+	if !w.RespawnIntent {
+		return
+	}
+	if rr, err := s.DB.RestartRecord(); err != nil || rr.Active() {
+		log.WithFields(fields).Info("restart: a restart is in flight; leaving the respawn for a later pass")
+		return
+	}
+	if w.Registering() {
+		log.WithFields(fields).WithField("spawnPid", w.SpawnPid).
+			Info("restart: a process for this worker is still registering; leaving the respawn for a later pass")
+		return
+	}
+
+	if w.Running() && w.StillDrained() {
+		if trigger != "abort" {
+			log.WithFields(fields).Info("restart: drained worker is still finishing its task; it will be respawned once it exits")
+			return
+		}
+		if undrained, err := s.DB.UndrainWorker(w.Id); err != nil {
+			log.WithFields(fields).WithField("err", err).Warn("restart: could not undo the drain for a running worker")
+		} else if undrained {
+			log.WithFields(fields).Warn("restart: drained worker was still running; the abort undid its drain")
+			s.WorkerEvents.Notify()
+		}
+		return
+	}
+
+	if w.Running() {
 		log.WithFields(fields).Info("restart: worker is already running; clearing its respawn intent")
 		if _, err := s.DB.ClearWorkerRespawn(w.Id, ""); err != nil {
 			log.WithFields(fields).WithField("err", err).Warn("restart: could not clear a respawn intent")
@@ -717,12 +771,16 @@ func (s *ServerConfig) respawnWorker(w worker.WorkerConf, trigger string) {
 	}
 
 	claimed, err := s.DB.ClaimWorkerRespawn(w.Id)
+	if errors.Is(err, database.ErrRespawnDeferred) {
+		log.WithFields(fields).Info("restart: respawn deferred at the claim; leaving it for a later pass")
+		return
+	}
 	if err != nil {
 		log.WithFields(fields).WithField("err", err).Warn("restart: could not claim a respawn")
 		return
 	}
 	if !claimed.RespawnIntent {
-		// Cleared underneath us between the listing and the claim: an
+		// Cleared underneath us between the read and the claim: an
 		// operator stopped this worker explicitly. They win.
 		log.WithFields(fields).Info("restart: respawn intent was cleared before the spawn; leaving the worker stopped")
 		return
@@ -732,18 +790,41 @@ func (s *ServerConfig) respawnWorker(w worker.WorkerConf, trigger string) {
 		// The attempt is already counted (ClaimWorkerRespawn counts before
 		// the fork), so the cap still converges even if this failure is
 		// the kind that takes the server with it. The intent stays set on
-		// purpose: a later boot tries again, up to the cap.
+		// purpose: the periodic pass tries again, up to the cap.
 		log.WithFields(fields).WithField("err", err).Error("restart: respawn failed; the intent stays set for a later attempt")
 		return
 	}
 
-	// Only now. See worker.WorkerConf.RespawnIntent for why this is the
+	// Only now, and only if nothing has stopped the worker again since
+	// the claim. See worker.WorkerConf.RespawnIntent for why this is the
 	// direction to be wrong in.
-	if _, err := s.DB.ClearWorkerRespawn(claimed.Id, ""); err != nil {
+	if _, err := s.DB.SettleWorkerRespawn(claimed.Id); err != nil {
 		log.WithFields(fields).WithField("err", err).Warn("restart: worker respawned but its intent could not be cleared")
 	}
 	log.WithFields(fields).Warn("restart: worker respawned")
 	s.WorkerEvents.Notify()
+}
+
+// respawnRetryLoop runs a respawn pass every interval while no restart is
+// in flight, so an intent the boot or abort pass left behind — skipped by
+// the minimum interval, a spawn that failed, a drained worker that was
+// still finishing its task — is paid while the server is up rather than
+// at some future restart (turtlemonvh/blanket#278). Started from
+// startBackgroundLoops when RespawnRetryInterval is set.
+func (s *ServerConfig) respawnRetryLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if rr, err := s.DB.RestartRecord(); err != nil || rr.Active() {
+				continue
+			}
+			s.respawnWorkers("periodic")
+		}
+	}
 }
 
 // spawnRespawnedWorker forks the worker daemon, or calls the test hook.

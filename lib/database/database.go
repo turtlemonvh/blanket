@@ -141,7 +141,18 @@ type BlanketDB interface {
 	// attempt and stamps the clock, in one transaction immediately before
 	// the server spawns it. Counting before the fork rather than after is
 	// what makes the generation cap survive a spawn that kills the server.
+	// It returns ErrRespawnDeferred, writing nothing, if a restart is in
+	// flight or a process for the worker is running or registering.
 	ClaimWorkerRespawn(workerId objectid.ObjectId) (worker.WorkerConf, error)
+	// RecordWorkerSpawn records the pid of a process just forked for a
+	// worker, before it registers.
+	RecordWorkerSpawn(workerId objectid.ObjectId, pid int, pidStartTs int64) (worker.WorkerConf, error)
+	// SettleWorkerRespawn drops a respawn intent after the spawn
+	// registered, unless the worker has been stopped again since.
+	SettleWorkerRespawn(workerId objectid.ObjectId) (worker.WorkerConf, error)
+	// UndrainWorker un-stops a worker a drain stopped whose process is
+	// still running, keeping its intent; reports whether it did.
+	UndrainWorker(workerId objectid.ObjectId) (bool, error)
 	// ClearWorkerRespawn drops a respawn intent. An empty reason means the
 	// spawn succeeded; a non-empty one records why the server gave up and
 	// leaves the worker stopped.
@@ -347,6 +358,11 @@ var (
 	// ErrRunIdMismatch means the caller's fencing token doesn't match the
 	// one stored on the task: two runners believe they own it. The caller
 	// must not retry — this maps to 409.
+	// ErrRespawnDeferred is returned by ClaimWorkerRespawn when the claim
+	// would race a restart in flight or a process that is still alive.
+	// Nothing was written; a later respawn pass decides again.
+	ErrRespawnDeferred = errors.New("respawn deferred: a restart is in flight or the worker's process is still alive")
+
 	ErrRunIdMismatch = errors.New("task is owned by a different run (runId mismatch)")
 
 	// ErrTaskStateConflict means the task exists but is not in a state this

@@ -478,6 +478,9 @@ func TestRespawn_GenerationCapStopsTrying(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
+	// A respawn pass only ever runs once the record is cleared: by the
+	// next boot, as here, or by an abort.
+	s.adoptRestartRecordOnBoot()
 	for i := 0; i < MaxRespawnAttempts; i++ {
 		claimed, err := s.DB.ClaimWorkerRespawn(w.Id)
 		require.NoError(t, err)
@@ -512,6 +515,9 @@ func TestRespawn_MinimumIntervalSkipsARecentAttempt(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
+	// A respawn pass only ever runs once the record is cleared: by the
+	// next boot, as here, or by an abort.
+	s.adoptRestartRecordOnBoot()
 	// One attempt just now: this is a server restarting in a tight loop,
 	// not a restart completing.
 	_, err = s.DB.ClaimWorkerRespawn(w.Id)
@@ -544,6 +550,12 @@ func TestRespawn_LiveWorkerIsNotSpawnedTwice(t *testing.T) {
 		rr.State = database.RestartStateDraining
 		return nil
 	})
+	require.NoError(t, err)
+
+	s.adoptRestartRecordOnBoot()
+	// The previous process claimed the respawn (which un-stops the
+	// record) and forked; the worker registered; then the server died.
+	_, err = s.DB.ClaimWorkerRespawn(live.Id)
 	require.NoError(t, err)
 
 	livePid, liveStart := selfPidAndStart(t)

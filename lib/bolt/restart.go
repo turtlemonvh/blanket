@@ -176,10 +176,35 @@ func (DB *BlanketBoltDB) StopWorkersForRestart(reason string, fn func(*database.
 // cleared — an operator stop that landed between the decision and the
 // claim wins, which is the point of routing an explicit stop through
 // StopWorker with no reason.
+//
+// It also re-checks, inside the transaction, what the caller checked
+// before it (turtlemonvh/blanket#278), and returns
+// database.ErrRespawnDeferred without writing if either has changed: a
+// newer restart is in flight (its drain owns the intents now), or a
+// process for this worker is running or still registering.
 func (DB *BlanketBoltDB) ClaimWorkerRespawn(workerId objectid.ObjectId) (worker.WorkerConf, error) {
-	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
+	var w worker.WorkerConf
+	err := DB.db.Update(func(tx *bolt.Tx) error {
+		rr, err := readRestartRecord(tx)
+		if err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(BOLTDB_WORKER_BUCKET))
+		if b == nil {
+			return MakeBucketDNEError(BOLTDB_WORKER_BUCKET)
+		}
+		bts, err := fetchWorkerBytes(workerId, tx)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(bts, &w); err != nil {
+			return err
+		}
 		if !w.RespawnIntent {
 			return nil
+		}
+		if rr.Active() || w.Running() || w.Registering() {
+			return database.ErrRespawnDeferred
 		}
 		w.Stopped = false
 		w.StoppedReason = ""
@@ -187,15 +212,71 @@ func (DB *BlanketBoltDB) ClaimWorkerRespawn(workerId objectid.ObjectId) (worker.
 		w.RespawnAttempts++
 		w.LastRespawnTs = time.Now().Unix()
 		w.LastHeardTs = time.Now().Unix()
-		// The recorded pid belongs to a process that is gone (the caller
-		// checked before claiming). Clearing it is not tidiness: the
-		// server waits for the new process by polling this record for a
-		// nonzero Pid, and a stale one would make that wait return
-		// instantly and declare a spawn successful that had not happened.
+		// The recorded pid belongs to a process that is gone (checked
+		// just above). Clearing it is not tidiness: the server waits for
+		// the new process by polling this record for a nonzero Pid, and a
+		// stale one would make that wait return instantly and declare a
+		// spawn successful that had not happened.
 		w.Pid = 0
 		w.PidStartTs = 0
+		w.SpawnPid = 0
+		w.SpawnPidStartTs = 0
+		out, err := json.Marshal(&w)
+		if err != nil {
+			return err
+		}
+		return b.Put(IdBytes(w.Id), out)
+	})
+	return w, err
+}
+
+// RecordWorkerSpawn writes the pid of the process the server just forked
+// for a worker. Called as soon as the fork returns, so a server that dies
+// before the child registers leaves a record that says a process is on
+// its way (see worker.WorkerConf.SpawnPid).
+func (DB *BlanketBoltDB) RecordWorkerSpawn(workerId objectid.ObjectId, pid int, pidStartTs int64) (worker.WorkerConf, error) {
+	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
+		w.SpawnPid = pid
+		w.SpawnPidStartTs = pidStartTs
 		return nil
 	})
+}
+
+// SettleWorkerRespawn drops a respawn intent once the spawn it paid for
+// has registered — unless the worker has been stopped again since the
+// claim (a newer drain, the reaper). That stop is newer than the claim,
+// and the intent it carries belongs to it (turtlemonvh/blanket#278).
+func (DB *BlanketBoltDB) SettleWorkerRespawn(workerId objectid.ObjectId) (worker.WorkerConf, error) {
+	return ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
+		if w.Stopped {
+			return nil
+		}
+		w.RespawnIntent = false
+		w.RespawnAttempts = 0
+		return nil
+	})
+}
+
+// UndrainWorker reverses a drain for one worker whose process is still
+// running: the abort path's answer to a drained worker that has not exited
+// yet (turtlemonvh/blanket#278). It only acts on a record the drain
+// stopped and nothing has touched since, and it keeps the intent: if the
+// process had already seen the stop and is exiting, the next pass
+// respawns it, and if it carries on, the next pass finds it running and
+// clears the intent. Reports whether it un-stopped the worker.
+func (DB *BlanketBoltDB) UndrainWorker(workerId objectid.ObjectId) (bool, error) {
+	undrained := false
+	_, err := ModifyWorkerInBoltTransaction(DB.db, &workerId, func(w *worker.WorkerConf) error {
+		if !w.StillDrained() {
+			return nil
+		}
+		w.Stopped = false
+		w.StoppedReason = ""
+		w.RespawnAttempts = 0
+		undrained = true
+		return nil
+	})
+	return undrained, err
 }
 
 // ClearWorkerRespawn drops a worker's respawn intent, with an optional

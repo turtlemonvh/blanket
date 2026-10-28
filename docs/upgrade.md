@@ -477,8 +477,19 @@ failed in the drain has consumed its staged file by installing it, and
 
 Whenever the restart `--abort` cleared had already drained workers, it
 warns that any worker not back needs `PUT /worker/:id/restart`. A current
-server brings drained workers back on abort; v0.3.0 and earlier cleared
-their respawn intent instead and left them stopped.
+server brings drained workers back on abort: one that has exited is
+respawned, and one still finishing its task is un-stopped and carries on.
+v0.3.0 and earlier cleared their respawn intent instead and left them
+stopped. `PUT /worker/:id/restart` answers 409 while the worker's process
+is still alive, so the advice is safe to follow early.
+
+`--abort` also checks the installed binary's digest, as `--resume` does:
+after a crash between the swap and the journal recording it, the journal
+never reached `SWAPPED` but the new binary is in place, and `--abort` says
+so rather than "nothing was installed". When `--resume` finds the new
+server already up but the journal records no drain (the server was
+restarted between the swap and the drain), it warns that workers started
+before the upgrade may still be running the old binary.
 
 Forward-only means "do the transitions that have not happened yet", which
 is both the first-run path and the resume path: the CLI reads the server's
@@ -622,7 +633,7 @@ intents are the debt.
 | `BACKED_UP` | Clears the record. The backup is still on disk, in `backups/`. | Start again; you can reuse the backup. |
 | `PAUSED` | Clears the record, so spawn works again. | Start again. |
 | `SWAPPED` | Clears the record. **The binary on disk may be the new one and the running server the old one** — now simply "a server running an old image", which the next restart fixes. | Start again; it will be a very short one. |
-| `DRAINING` | Clears the record, then respawns every worker carrying an intent. | Nothing, unless a worker is missing — check its `stoppedReason`. |
+| `DRAINING` | Clears the record, then respawns every worker carrying an intent. A drained worker still finishing its task keeps its intent and is respawned by the periodic retry once it exits. | Nothing, unless a worker is missing — check its `stoppedReason`. |
 | `EXECING` | Same as `DRAINING`. The exec never happened; the debt to the workers did. | Nothing. |
 
 `scripts/test/restart_machine.sh` asserts every row of that table against
@@ -634,14 +645,25 @@ a real process, by killing the server at each state in turn
 A drain records a respawn intent on each worker it stops. The intent is
 cleared **after** a successful spawn, which makes respawn at-least-once:
 losing a worker on an upgrade is a silent, lasting failure, while spawning
-one twice is loud and self-correcting. Three guards keep "at least once"
-from becoming "forever":
+one twice is loud and self-correcting. Respawn passes run at boot, on
+abort, and every `restart.respawnRetryInterval` (30s) while no restart is
+in flight, so an intent a pass had to skip is paid while the server is up.
+Every decision to fork a process for an existing worker id — each
+respawn, and `PUT /worker/:id/restart` — is made under one lock, from the
+record as it is under that lock. Three guards keep "at least once" from
+becoming "forever":
 
 1. **Pid liveness.** Before spawning, the server checks whether the worker
    is already running (pid paired with the pid's start time, so a recycled
    pid cannot masquerade). If it is — the normal outcome when the previous
    process died after forking but before clearing the intent — the intent
-   is settled by observation rather than a second fork.
+   is settled by observation rather than a second fork. Two cases are not
+   that: a worker whose record is still exactly as the drain left it is
+   the drained process finishing its task (on abort it is un-stopped; on
+   any other pass it keeps its intent until it exits), and a process the
+   server forked that has not registered yet (`spawnPid`, recorded when
+   the fork returns) is left alone until it does. The claim re-checks
+   liveness and that no restart is in flight in its own transaction.
 2. **A generation cap.** Three attempts, counted *before* the fork so the
    cap converges even when the spawn is what kills the server. Past that
    the intent is dropped and the worker left stopped with `stoppedReason:
@@ -756,6 +778,7 @@ the *worker* code changes — an upgrade — which `blanket upgrade` does and
 | `restart.drainMode` | `auto` | Whether a restart stops its workers: `auto`, `always`, `never`. Also `--drain-mode`. |
 | `restart.drainTimeout` | `60s` | How long a drain waits for stopped workers to exit before reporting the stragglers. A bound on the *wait*, never on the task — a worker finishes what it is running first. Also `--drain-timeout`. |
 | `restart.deadline` | `5m` | How long the watchdog gives the restart's driver between transitions before aborting. Generous: the steps it spans include a human swapping a binary by hand. The drain is one transition, so **if you raise `restart.drainTimeout` past this, raise this too** (to the drain timeout plus a few minutes): otherwise the watchdog aborts the restart mid-drain and `blanket upgrade` exits 13 once the drain returns. |
+| `restart.respawnRetryInterval` | `30s` | How often a running server retries a respawn a restart still owes: one the boot or abort pass had to skip (a drained worker still finishing its task, the minimum interval between respawns of one worker) or one whose spawn failed. `0` turns the retry off, and a skipped respawn then waits for the next restart. |
 | `upgrade.checkForUpdates` | `true` | Whether the CLI prints [the update notice](#the-update-notice-blanket-ps). |
 | `upgrade.stateDir` | `""` | Where the journal, the rollback slots and the notice cache live. Empty means `<database dir>/upgrade`, beside the backups the slots pair with. |
 | `upgrade.slots` | `3` | How many [rollback slots](#rollback-slots-blanket-rollback) to keep. |
