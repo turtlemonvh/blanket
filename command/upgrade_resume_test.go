@@ -42,6 +42,17 @@ type stubRestartServer struct {
 	execed      bool
 	posts       []string
 	abortedResp string
+
+	// stragglers is how many drain calls answer "not drained" before one
+	// answers drained; -1 means never.
+	stragglers int
+	// oldDrain makes a drain of a DRAINING restart a 409, as a server
+	// from before repeat drains answered; workers is then what GET
+	// /worker/ returns for the CLI to watch.
+	oldDrain bool
+	workers  string
+	// deadlineSeconds is reported as the restart's watchdog deadline.
+	deadlineSeconds int64
 }
 
 func (s *stubRestartServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -59,8 +70,27 @@ func (s *stubRestartServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			st = status("old-instance", s.oldVersion)
 			st.Restart.State = s.state
+			st.Restart.DeadlineSeconds = s.deadlineSeconds
+			st.DrainTimeoutMs = 100
 		}
 		_ = json.NewEncoder(w).Encode(st)
+	case "/ops/restart/drain":
+		if s.oldDrain && s.state == "DRAINING" {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":"cannot move a restart from DRAINING to DRAINING"}`))
+			return
+		}
+		s.state = "DRAINING"
+		if s.stragglers != 0 {
+			if s.stragglers > 0 {
+				s.stragglers--
+			}
+			_, _ = w.Write([]byte(`{"drained":false,"stillRunning":["w1"]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"drained":true}`))
+	case "/worker/":
+		_, _ = w.Write([]byte(s.workers))
 	case "/ops/restart/exec":
 		s.execed = true
 		w.WriteHeader(http.StatusAccepted)
@@ -136,7 +166,8 @@ func reloadJournal(t *testing.T, p string) *upgrade.Journal {
 
 // The observed failure: FAILED after SWAPPED, with the server still
 // DRAINING. --resume must finish the restart rather than demand a staged
-// binary, and must not repeat the swapped/drain transitions.
+// binary. It must not repeat `swapped`, and must wait on the drain again
+// rather than take DRAINING as drained.
 func TestResume_FailedAfterSwapFinishesTheRestart(t *testing.T) {
 	withUpgradeFlags(t)
 	stub := &stubRestartServer{state: "DRAINING", oldVersion: "v0.3.0", newVersion: "v0.4.0"}
@@ -148,9 +179,63 @@ func TestResume_FailedAfterSwapFinishesTheRestart(t *testing.T) {
 
 	assert.Equal(t, ExitOK, code, "error: %s", res.Error)
 	assert.Equal(t, upgrade.JournalVerified, res.State)
-	assert.Equal(t, []string{"/ops/restart/exec"}, stub.postedPaths(),
-		"a resume past the drain should only exec")
+	assert.Equal(t, []string{"/ops/restart/drain", "/ops/restart/exec"}, stub.postedPaths(),
+		"a resume from DRAINING waits on the drain, then execs")
 	assert.Equal(t, upgrade.JournalVerified, reloadJournal(t, p).State)
+}
+
+// A resume from DRAINING whose workers are still finishing their tasks
+// keeps waiting until they are done, and only then execs.
+func TestResume_FromDrainingWaitsForStragglers(t *testing.T) {
+	withUpgradeFlags(t)
+	stub := &stubRestartServer{state: "DRAINING", oldVersion: "v0.3.0", newVersion: "v0.4.0",
+		stragglers: 2, deadlineSeconds: 60}
+	port := startStubRestartServer(t, stub)
+	p, _ := failedJournal(t, port, stepsThroughSwap...)
+
+	res := &upgradeResult{Action: "upgrade", JournalPath: p}
+	code := runUpgradeResume(res, "blanket")
+
+	assert.Equal(t, ExitOK, code, "error: %s", res.Error)
+	assert.Equal(t, []string{"/ops/restart/drain", "/ops/restart/drain", "/ops/restart/drain", "/ops/restart/exec"},
+		stub.postedPaths())
+}
+
+// Workers that are still running when the wait runs out are never exec'd
+// over: the CLI refuses with exit 13 and leaves the server draining, for
+// --resume to pick up.
+func TestResume_RefusesToExecOverLiveWorkers(t *testing.T) {
+	withUpgradeFlags(t)
+	stub := &stubRestartServer{state: "DRAINING", oldVersion: "v0.3.0", newVersion: "v0.4.0",
+		stragglers: -1, deadlineSeconds: 1}
+	port := startStubRestartServer(t, stub)
+	p, _ := failedJournal(t, port, stepsThroughSwap...)
+
+	res := &upgradeResult{Action: "upgrade", JournalPath: p}
+	code := runUpgradeResume(res, "blanket")
+
+	assert.Equal(t, ExitRestartRefused, code)
+	assert.Contains(t, res.Error, "1 worker(s) were still running their tasks")
+	assert.Contains(t, res.Error, "blanket upgrade --resume --yes")
+	assert.NotContains(t, stub.postedPaths(), "/ops/restart/exec", "must never exec over a running worker")
+}
+
+// A server from before repeat drains answers the second drain with 409.
+// The CLI then watches the worker records itself, applying the server's
+// rule: a drained worker that reported its own shutdown has exited.
+func TestResume_FromDrainingOnAnOlderServerWatchesTheWorkers(t *testing.T) {
+	withUpgradeFlags(t)
+	stub := &stubRestartServer{state: "DRAINING", oldVersion: "v0.3.0", newVersion: "v0.4.0",
+		oldDrain: true, deadlineSeconds: 60,
+		workers: `[{"id":"5f0000000000000000000001","stopped":true,"respawnIntent":true,"stoppedReason":"worker-shutdown","pid":4242,"pidStartTs":1}]`}
+	port := startStubRestartServer(t, stub)
+	p, _ := failedJournal(t, port, stepsThroughSwap...)
+
+	res := &upgradeResult{Action: "upgrade", JournalPath: p}
+	code := runUpgradeResume(res, "blanket")
+
+	assert.Equal(t, ExitOK, code, "error: %s", res.Error)
+	assert.Equal(t, []string{"/ops/restart/drain", "/ops/restart/exec"}, stub.postedPaths())
 }
 
 // The watchdog already aborted the restart: the server is IDLE and still

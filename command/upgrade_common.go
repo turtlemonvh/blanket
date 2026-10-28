@@ -150,12 +150,16 @@ type restartStatus struct {
 		Id         string `json:"id"`
 		Reason     string `json:"reason"`
 		BackupPath string `json:"backupPath"`
+		// DeadlineSeconds is the watchdog's deadline for this restart,
+		// already scaled by the server's timeMultiplier.
+		DeadlineSeconds int64 `json:"deadlineSeconds"`
 	} `json:"restart"`
 	Active           bool   `json:"active"`
 	SpawnPaused      bool   `json:"spawnPaused"`
 	ExecMode         string `json:"execMode"`
 	ResolvedExecMode string `json:"resolvedExecMode"`
 	DrainMode        string `json:"drainMode"`
+	DrainTimeoutMs   int64  `json:"drainTimeoutMs"`
 	Supervised       bool   `json:"supervised"`
 	InstanceId       string `json:"instanceId"`
 	Pid              int    `json:"pid"`
