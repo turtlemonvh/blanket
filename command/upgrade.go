@@ -90,7 +90,16 @@ var upgradeConf struct {
 
 // verifyBudget is how long the CLI waits for a replacement server to
 // answer. Unscaled constant through timing.Scale, per lib/timing's rule.
-const verifyBudget = 90 * time.Second
+//
+// It has to cover the supervisor, not just the server's own boot. A
+// systemd unit whose stop leaves something running waits out
+// TimeoutStopSec (90s by default) before it SIGKILLs and restarts; then
+// RestartSec (5s in the generated unit) passes, and launchd throttles
+// respawns to one per 10s. 90s + 5s + 10s, plus a boot that may migrate
+// the database, is past 2 minutes; 3 minutes covers it with room. The wait
+// returns the moment the replacement answers, so a long budget only delays
+// the report of a restart that has genuinely failed.
+const verifyBudget = 3 * time.Minute
 
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade [version]",
@@ -112,7 +121,8 @@ the binary being replaced is kept in a rollback slot -- see ` + "`blanket rollba
   blanket upgrade --abort              unwind an attempt that was interrupted
 
 Exit codes: 0 done (or, for --check, an upgrade is available), 10 nothing to
-do, 11 staged/installed without a restart, 12 verification failed, 13 the
+do, 11 staged/installed without a restart (including: installed, but the
+server on the port still runs a different version), 12 verification failed, 13 the
 restart was refused, 1 error, 2 usage.`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -164,6 +174,7 @@ type upgradeResult struct {
 	BackupPath       string   `json:"backupPath,omitempty"`
 	JournalPath      string   `json:"journalPath,omitempty"`
 	InstanceId       string   `json:"instanceId,omitempty"`
+	ServerVersion    string   `json:"serverVersion,omitempty"`
 	Message          string   `json:"message,omitempty"`
 	Error            string   `json:"error,omitempty"`
 	Warnings         []string `json:"warnings,omitempty"`
@@ -252,6 +263,14 @@ func runUpgrade(targetVersion string) int {
 	if upgradeConf.PrintPlan {
 		res.ExitCode = ExitOK
 		res.Message = printPlan(installed, src)
+		return res.emit()
+	}
+
+	// "Nothing to do" is a claim about the server as much as the binary:
+	// once a swap has landed, the installed CLI is the new version while
+	// the server on the port can still be the old process (a restart that
+	// failed after the swap, or --no-restart).
+	if upToDate && serverStillOld(res, viper.GetInt("port"), src.Version) {
 		return res.emit()
 	}
 
@@ -513,8 +532,8 @@ func finishUpgrade(res *upgradeResult, j *upgrade.Journal, stagedPath string) in
 	if upgradeConf.NoRestart {
 		res.ExitCode = ExitStagedOnly
 		res.State = j.State
-		res.Message = fmt.Sprintf("Installed %s at %s.\nThe running server is still on %s; restart it when you're ready "+
-			"(`blanket upgrade --resume --yes` drives the restart).", j.ToVersion, j.BinaryPath, displayRawVersion())
+		res.Message = fmt.Sprintf("Installed %s at %s.\nThe running server is still on %s; restart it under its supervisor when you're ready.",
+			j.ToVersion, j.BinaryPath, displayRawVersion())
 		return res.emit()
 	}
 
@@ -554,36 +573,34 @@ func execAndVerify(res *upgradeResult, j *upgrade.Journal, port int) int {
 
 	// Drain unless told not to. An upgrade changes worker code, which is
 	// exactly the case brief decision row 3 says to drain for.
+	//
+	// A restart already DRAINING is an attempt that died mid-drain: its
+	// workers may still be finishing their tasks, so it is waited on again
+	// rather than taken as drained. Only past DRAINING is the drain done.
 	drainMode := viper.GetString("restart.drainMode")
+	draining := rank == database.RestartStateRank(database.RestartStateDraining)
 	switch {
-	case rank >= database.RestartStateRank(database.RestartStateDraining):
-		// Already drained by the attempt this one is resuming.
-	case drainMode == database.DrainModeNever:
+	case rank > database.RestartStateRank(database.RestartStateDraining):
+		// Past the drain already; the exec below decides what happens.
+	case !draining && drainMode == database.DrainModeNever:
 		res.Warnings = append(res.Warnings, "--drain-mode never: workers keep running the old binary until they are restarted")
 	default:
 		j.DrainRequested = true
-		budget := viper.GetDuration("restart.drainTimeout")
-		if budget <= 0 {
-			budget = 60 * time.Second
-		}
-		db, err := opsCallLong(port, http.MethodPost, "/ops/restart/drain", nil, timing.Scale(budget)+30*time.Second)
+		still, waited, err := drainWorkers(port)
 		if err != nil {
 			return failWith(ExitRestartRefused, err)
 		}
-		var drain struct {
-			Drained bool     `json:"drained"`
-			Running []string `json:"stillRunning"`
-			Stopped int      `json:"stopped"`
+		if len(still) > 0 {
+			// Never exec over a worker that is still running a task: under
+			// a supervisor that kills the whole service on exit, that kills
+			// the task. Stop here with the server still draining, which is
+			// the state --resume picks the wait back up from.
+			return failWith(ExitRestartRefused, fmt.Errorf(
+				"%d worker(s) were still running their tasks after waiting %s, so the server was not restarted; it is still draining. "+
+					"Run `blanket upgrade --resume --yes` to keep waiting, or `blanket upgrade --abort` to call the restart off",
+				len(still), waited.Round(time.Second)))
 		}
-		_ = json.Unmarshal(db, &drain)
-		if !drain.Drained {
-			// Information, not failure -- the server's own view (see
-			// opsRestartDrain). A worker three hours into a render is a
-			// reason for a human to reconsider, not for the CLI to decide.
-			res.Warnings = append(res.Warnings,
-				fmt.Sprintf("the drain timed out with %d worker(s) still running; they carry respawn intent and will be brought back", len(drain.Running)))
-		}
-		j.Advance(upgrade.JournalDrained, fmt.Sprintf("drained=%v", drain.Drained))
+		j.Advance(upgrade.JournalDrained, "drained=true")
 		save()
 	}
 
@@ -800,6 +817,27 @@ func adoptUnrecordedSwap(res *upgradeResult, j *upgrade.Journal) (bool, int) {
 	return true, execAndVerify(res, j, port)
 }
 
+// stillOldServer reports whether a server with no restart in flight is
+// provably *not* the replacement: it is the very process the attempt was
+// replacing, or it answers on a version other than the one installed. A
+// server that cannot be told apart (no recorded instance id, no parseable
+// version) is not claimed to be old; verifyRestart gets to decide.
+func stillOldServer(st *restartStatus, j *upgrade.Journal) bool {
+	if j.FromInstanceId != "" && st.InstanceId == j.FromInstanceId {
+		return true
+	}
+	return !serverIsVersion(st, j.ToVersion)
+}
+
+// serverVersionOr is the version a server reports, or fallback when its
+// banner carries none.
+func serverVersionOr(st *restartStatus, fallback string) string {
+	if v := upgrade.VersionFromBanner(st.Version); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func runUpgradeResume(res *upgradeResult, installed string) int {
 	j, err := upgrade.LoadJournal(res.JournalPath)
 	if err != nil {
@@ -818,7 +856,22 @@ func runUpgradeResume(res *upgradeResult, installed string) int {
 		return res.fail(ExitUsage, fmt.Errorf("resuming from %s replaces %s and restarts the server. Re-run with --yes", j.State, installed))
 	}
 
-	switch j.State {
+	// FAILED is where the attempt ended, not how far it got. One that
+	// failed after the swap -- a drain the watchdog cut short, a server
+	// that did not come back in time -- has already consumed its staged
+	// file by installing it, so treating it like STAGED can only refuse
+	// with "no staged binary" while the server sits paused on the old
+	// version (turtlemonvh/blanket#265). Resume it from the furthest state
+	// it reached instead, which sends it down the finish-the-restart path.
+	// A FAILED that never got as far as the swap is unchanged.
+	state := j.State
+	if state == upgrade.JournalFailed && j.Reached(upgrade.JournalSwapped) {
+		state = j.FurthestState()
+		res.Warnings = append(res.Warnings, fmt.Sprintf(
+			"the last attempt failed after installing %s (it got as far as %s); finishing the restart", j.ToVersion, state))
+	}
+
+	switch state {
 	case upgrade.JournalPlanned:
 		return res.fail(ExitUsage, errors.New(
 			"the interrupted attempt never staged a verified binary; a partial download cannot be resumed. Run `blanket upgrade --yes` again"))
@@ -889,6 +942,19 @@ func runUpgradeResume(res *upgradeResult, installed string) int {
 			if st.Restart.State != "" && st.Restart.State != "IDLE" {
 				return execAndVerify(res, j, port)
 			}
+			// IDLE means one of two things. Either the replacement already
+			// came back (the record is cleared by the next boot), and all
+			// that is left is to verify it -- or nothing is restarting at
+			// all: the watchdog aborted the restart, or --no-restart never
+			// began one, and the old server is still serving. Waiting for a
+			// replacement there only fails after the whole verify budget,
+			// and starting a fresh begin -> drain -> exec from a resume is a
+			// new restart nobody asked for. Refuse, and say what will work.
+			if stillOldServer(st, j) {
+				return res.fail(ExitRestartRefused, fmt.Errorf(
+					"%s is installed at %s, but the server on port %d has no restart in flight and is still running %s; restart it under its supervisor to start %s",
+					j.ToVersion, j.BinaryPath, port, serverVersionOr(st, displayVersionOr(j.FromVersion)), j.ToVersion))
+			}
 			if j.FromInstanceId == "" {
 				j.FromInstanceId = st.InstanceId
 			}
@@ -914,7 +980,7 @@ func runUpgradeAbort(res *upgradeResult) int {
 	// Always try to clear the server side, journal or no journal: a
 	// paused server is the failure mode that outlives everything else,
 	// and it is the one an operator typing `--abort` most needs undone.
-	if _, err := opsCallTimeout(port, http.MethodPost, "/ops/restart/abort?reason=blanket+upgrade+--abort", nil, httpx.DefaultRequestTimeout); err != nil {
+	if ab, err := opsCallTimeout(port, http.MethodPost, "/ops/restart/abort?reason=blanket+upgrade+--abort", nil, httpx.DefaultRequestTimeout); err != nil {
 		var oe *opsError
 		if errors.Is(err, errServerDown) {
 			res.Warnings = append(res.Warnings, "no server is running; nothing to un-pause")
@@ -923,6 +989,13 @@ func runUpgradeAbort(res *upgradeResult) int {
 		} else {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("could not abort the server-side restart: %v", err))
 		}
+	} else if abortedAfterDrain(ab) {
+		// A current server brings drained workers back on abort, but an
+		// older one (v0.3.0 and before) cleared their respawn intent
+		// instead and left them stopped for good. The CLI cannot tell
+		// which it is talking to, so it says where to look either way.
+		res.Warnings = append(res.Warnings,
+			"the aborted restart had drained workers; any that are not back need `PUT /worker/:id/restart`")
 	}
 
 	if j == nil {
@@ -940,7 +1013,11 @@ func runUpgradeAbort(res *upgradeResult) int {
 	}
 	upgrade.CleanStaging(j.BinaryPath, "")
 
-	if upgrade.JournalRank(j.State) >= upgrade.JournalRank(upgrade.JournalSwapped) {
+	// The furthest state reached, not the current one: a journal that
+	// failed after the swap ends in FAILED, and deciding from that alone
+	// told the operator "nothing was installed" about a binary that was
+	// (turtlemonvh/blanket#265).
+	if j.Reached(upgrade.JournalSwapped) {
 		// The binary is already the new one. Undoing that is a rollback,
 		// which is a separate, deliberate act with its own confirmation --
 		// silently reverting a binary out from under a server that is
@@ -960,6 +1037,24 @@ func runUpgradeAbort(res *upgradeResult) int {
 	res.ExitCode = ExitOK
 	res.Message = "Aborted; nothing was installed."
 	return res.emit()
+}
+
+// abortedAfterDrain reads a POST /ops/restart/abort response and reports
+// whether the restart it cleared had already drained workers. `respawned`
+// is the current server's own answer; older servers do not send it, so the
+// aborted record's state is checked too.
+func abortedAfterDrain(body []byte) bool {
+	var resp struct {
+		Aborted struct {
+			State string `json:"state"`
+		} `json:"aborted"`
+		Respawned bool `json:"respawned"`
+	}
+	if json.Unmarshal(body, &resp) != nil {
+		return false
+	}
+	return resp.Respawned ||
+		database.RestartStateRank(resp.Aborted.State) >= database.RestartStateRank(database.RestartStateDraining)
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,7 +1095,7 @@ func printPlan(installed string, src *upgradeSource) string {
 	if viper.GetString("restart.drainMode") == "never" {
 		fmt.Fprintf(&b, "# 6. Drain: SKIPPED (--drain-mode never).\n\n")
 	} else {
-		fmt.Fprintf(&b, "# 6. Drain: an upgrade changes worker code, so the fleet is stopped\n#    with respawn intent. Waits up to restart.drainTimeout (%s).\ncurl -sS \"${OPS[@]}\" -X POST $BASE/ops/restart/drain\n\n", viper.GetDuration("restart.drainTimeout"))
+		fmt.Fprintf(&b, "# 6. Drain: an upgrade changes worker code, so the fleet is stopped\n#    with respawn intent. Waits up to restart.drainTimeout (%s); repeat\n#    until it answers \"drained\": true, and do not exec before then.\ncurl -sS \"${OPS[@]}\" -X POST $BASE/ops/restart/drain\n\n", viper.GetDuration("restart.drainTimeout"))
 	}
 	fmt.Fprintf(&b, "# 7. Go. 202, then the server re-execs in place or exits 75 for its\n#    supervisor -- see --exec-mode (configured: %s).\ncurl -sS \"${OPS[@]}\" -X POST $BASE/ops/restart/exec\n\n", viper.GetString("restart.execMode"))
 	fmt.Fprintf(&b, "# 8. Verify. A different instanceId means a different process came back.\nuntil curl -fsS $BASE/version >/dev/null 2>&1; do sleep 0.5; done\ncurl -sS \"${OPS[@]}\" $BASE/ops/restart/status   # -> IDLE\ncurl -sS $BASE/config/ | grep instanceId\n\n")
