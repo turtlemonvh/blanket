@@ -731,6 +731,30 @@ thing a supervised server must not do when it wants to come back.
 On **Windows** `exec` degrades to `exit`, and you or the upgrade CLI start
 the server again; see [Windows](#windows-the-cli-restarts-the-server).
 
+### Workers outlive the server under a supervisor
+
+Workers the server starts are its child processes, so a supervisor that
+stops "the service" could take them, and the tasks they run, down with
+it. The definitions `blanket service install` writes prevent that: the
+systemd unit sets **`KillMode=process`** and the launchd plist sets
+**`AbandonProcessGroup`**, so stopping or restarting the service signals
+only the server. Its workers keep running their tasks, retry the server
+with backoff while it is away, and reconnect when it is back, which is
+what a routine restart relies on.
+
+The other side of that: **`systemctl --user stop blanket` leaves
+server-started workers running.** To stop them as well, stop them first:
+from the Workers page or with `PUT /worker/:id/stop` (each finishes its
+current task, then exits), or with `kill <pid>` using the pid on the
+worker record (the worker stops its running task, reports it `STOPPED`,
+and exits; see [task_flow.md](task_flow.md#worker-claim-loop)).
+
+A unit or plist written by an older blanket has neither setting. On
+Linux, run `blanket service install` again: it rewrites the unit and
+reloads systemd. On macOS, run `blanket service uninstall` and then
+`blanket service install`, because launchd keeps using the plist it
+loaded until the agent is booted out.
+
 ### `--drain-mode`: whether a restart stops its workers
 
 | Value | Behaviour |

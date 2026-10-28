@@ -53,7 +53,14 @@ func taskURL(taskId objectid.ObjectId, suffix string) string {
 // try again on its own schedule, and the callers that matter (the task
 // monitoring goroutine) must fail open on an error rather than wait.
 func (t *Task) Refresh() error {
-	res, err := httpx.DoOnce(context.Background(), "GET", taskURL(t.Id, ""), nil, httpx.DefaultRequestTimeout)
+	return t.RefreshContext(context.Background())
+}
+
+// RefreshContext is Refresh bounded by ctx as well as by the request
+// timeout. The worker passes a context its shutdown cancels, so a refresh
+// in flight against a hung server can't hold up a SIGTERM.
+func (t *Task) RefreshContext(ctx context.Context) error {
+	res, err := httpx.DoOnce(ctx, "GET", taskURL(t.Id, ""), nil, httpx.DefaultRequestTimeout)
 	if err != nil {
 		return err
 	}
@@ -66,6 +73,12 @@ func (t *Task) Refresh() error {
 // runId is the fencing token for this execution attempt; see Task.RunId. It
 // is passed as a query parameter alongside the other run fields.
 func MarkAsRunning(t *Task, runId string, extraVars map[string]string) error {
+	return MarkAsRunningContext(context.Background(), t, runId, extraVars)
+}
+
+// MarkAsRunningContext is MarkAsRunning whose retries also stop when ctx
+// is done.
+func MarkAsRunningContext(ctx context.Context, t *Task, runId string, extraVars map[string]string) error {
 	urlParams := url.Values{}
 	urlParams.Set("state", "RUNNING")
 	for k, v := range extraVars {
@@ -74,7 +87,7 @@ func MarkAsRunning(t *Task, runId string, extraVars map[string]string) error {
 	urlParams.Set("runId", runId)
 
 	reqURL := taskURL(t.Id, "/run") + "?" + urlParams.Encode()
-	_, err := httpx.Do(context.Background(), "PUT", reqURL, nil, httpx.Policy{Deadline: RunRetryDeadline})
+	_, err := httpx.Do(ctx, "PUT", reqURL, nil, httpx.Policy{Deadline: RunRetryDeadline})
 	return err
 }
 
@@ -97,6 +110,12 @@ func MarkAsFinished(t *Task, state string, runId string, exitCode *int) error {
 
 // MarkAsFinishedWithin is MarkAsFinished with an explicit retry budget.
 func MarkAsFinishedWithin(t *Task, state string, runId string, exitCode *int, deadline time.Duration) error {
+	return MarkAsFinishedContext(context.Background(), t, state, runId, exitCode, deadline)
+}
+
+// MarkAsFinishedContext is MarkAsFinishedWithin whose retries also stop
+// when ctx is done, whichever comes first.
+func MarkAsFinishedContext(ctx context.Context, t *Task, state string, runId string, exitCode *int, deadline time.Duration) error {
 	urlParams := url.Values{}
 	urlParams.Set("state", state)
 	urlParams.Set("runId", runId)
@@ -105,19 +124,25 @@ func MarkAsFinishedWithin(t *Task, state string, runId string, exitCode *int, de
 	}
 
 	reqURL := taskURL(t.Id, "/finish") + "?" + urlParams.Encode()
-	_, err := httpx.Do(context.Background(), "PUT", reqURL, nil, httpx.Policy{Deadline: deadline})
+	_, err := httpx.Do(ctx, "PUT", reqURL, nil, httpx.Policy{Deadline: deadline})
 	return err
 }
 
 // Find the oldest task we are eligible to run
 func MarkAsClaimed(workerId objectid.ObjectId) (Task, error) {
+	return MarkAsClaimedContext(context.Background(), workerId)
+}
+
+// MarkAsClaimedContext is MarkAsClaimed bounded by ctx as well as by the
+// request timeout.
+func MarkAsClaimedContext(ctx context.Context, workerId objectid.ObjectId) (Task, error) {
 	// Call the REST api and get a task with the required tags
 	// The worker needs to make sure it has all the tags of whatever task it requests
 	reqURL := fmt.Sprintf("http://localhost:%d/task/claim/%s", viper.GetInt("port"), workerId.Hex())
 
 	// No retry here: the worker's claim loop is itself the retry, with its
 	// own jittered backoff (see WorkerConf.ProcessTasks).
-	res, err := httpx.DoOnce(context.Background(), "POST", reqURL, nil, httpx.DefaultRequestTimeout)
+	res, err := httpx.DoOnce(ctx, "POST", reqURL, nil, httpx.DefaultRequestTimeout)
 	if err != nil {
 		if httpx.StatusCodeOf(err) == http.StatusNotFound {
 			log.WithFields(log.Fields{

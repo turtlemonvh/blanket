@@ -23,6 +23,7 @@ func TestSystemdUnit_ContainsExecStartAndRestartPolicy(t *testing.T) {
 		"[Install]",
 		"ExecStart=/home/alice/.local/bin/blanket --config /home/alice/.config/blanket/config.json --port 8773",
 		"Restart=on-failure",
+		"KillMode=process",
 		"StandardOutput=append:/home/alice/.local/share/blanket/logs/blanket-service.log",
 		"StandardError=append:/home/alice/.local/share/blanket/logs/blanket-service.log",
 		"WantedBy=default.target",
@@ -71,6 +72,7 @@ func TestLaunchdPlist_ContainsLabelAndProgramArguments(t *testing.T) {
 		"<string>8773</string>",
 		"<key>RunAtLoad</key>",
 		"<true/>",
+		"<key>AbandonProcessGroup</key>\n\t<true/>",
 		"<key>StandardOutPath</key>",
 		"<string>/home/alice/.local/share/blanket/logs/blanket-service.log</string>",
 	}
