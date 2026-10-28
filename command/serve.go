@@ -82,6 +82,7 @@ var RootCmd = &cobra.Command{
 			// the one place the config key is read, so a hand-built
 			// ServerConfig in a test never acquires the loop implicitly.
 			ReaperEnabled:          viper.GetBool("reaper.enabled"),
+			RespawnRetryInterval:   viper.GetDuration("restart.respawnRetryInterval"),
 			ReaperInterval:         viper.GetDuration("reaper.interval"),
 			ReaperWorkerStaleAfter: viper.GetDuration("reaper.workerStaleAfter"),
 			ReaperWorkerDeadAfter:  viper.GetDuration("reaper.workerDeadAfter"),

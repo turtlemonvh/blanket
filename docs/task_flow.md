@@ -407,10 +407,10 @@ stateDiagram-v2
     RUNNING --> STOPPED: process exits (SIGTERM, crash)
     RUNNING --> STOPPED: reaper, pid conclusively gone
     RUNNING --> STOPPED_PENDING_RESPAWN: POST /ops/restart/drain
-    STOPPED_PENDING_RESPAWN --> RUNNING: the next server's boot, or an abort
+    STOPPED_PENDING_RESPAWN --> RUNNING: a respawn pass (boot, abort, periodic)
     STOPPED_PENDING_RESPAWN --> STOPPED: PUT /worker/:id/stop (an operator)
     STOPPED_PENDING_RESPAWN --> STOPPED: 3 failed respawns
-    STOPPED --> RUNNING: PUT /worker/:id/restart
+    STOPPED --> RUNNING: PUT /worker/:id/restart (409 while the process lives)
     STOPPED --> [*]: DELETE /worker/:id
 ```
 

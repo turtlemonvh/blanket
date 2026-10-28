@@ -142,6 +142,14 @@ func (s *ServerConfig) startBackgroundLoops(ctx context.Context) func() {
 		s.restartWatchdogLoop(loopCtx, timing.Scale(RestartWatchdogInterval))
 	}()
 
+	if s.RespawnRetryInterval > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.respawnRetryLoop(loopCtx, timing.Scale(s.RespawnRetryInterval))
+		}()
+	}
+
 	return func() {
 		cancel()
 		wg.Wait()

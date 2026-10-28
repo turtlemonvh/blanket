@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
+	"github.com/turtlemonvh/blanket/lib/database"
 	"github.com/turtlemonvh/blanket/lib/objectid"
 	"github.com/turtlemonvh/blanket/lib/tailed_file"
 	"github.com/turtlemonvh/blanket/worker"
@@ -200,6 +201,25 @@ func (s *ServerConfig) restartWorker(c *gin.Context) {
 		return
 	}
 
+	// One process per worker id (turtlemonvh/blanket#278). A stopped
+	// worker's process keeps running until its current task ends, and a
+	// drained one until the drain's wait is long over; forking another
+	// for the same id meanwhile left two processes claiming tasks as one
+	// worker. Under respawnMu so a respawn pass cannot fork one between
+	// this check and the launch below.
+	s.respawnMu.Lock()
+	defer s.respawnMu.Unlock()
+	cur, err := s.DB.GetWorker(workerId)
+	if err != nil {
+		c.String(statusForDBError(err, http.StatusInternalServerError), MakeErrorString(err.Error()))
+		return
+	}
+	if cur.Running() || cur.Registering() {
+		c.String(http.StatusConflict, MakeErrorString(
+			"this worker's process is still running (a stopped worker exits after its current task); try again once it has exited"))
+		return
+	}
+
 	// Clear Stopped server-side before relaunching. UpdateWorker merges at
 	// the field level now (turtlemonvh/blanket#23 phase 1) and Stopped is
 	// server-owned, so the relaunched process can no longer un-stop itself
@@ -307,6 +327,16 @@ func (s *ServerConfig) launchWorkerAndWait(ctx context.Context, w *worker.Worker
 
 	if err := s.startDaemon(w); err != nil {
 		return worker.WorkerConf{}, err
+	}
+	// Record the fork before waiting for the registration, so a server
+	// that dies in between leaves a record saying a process is on its way
+	// rather than one a later respawn pass forks a second process for
+	// (turtlemonvh/blanket#278). A brand-new worker has no record to write
+	// to yet, and needs none: nothing respawns a worker with no record.
+	if w.SpawnPid != 0 {
+		if _, err := s.DB.RecordWorkerSpawn(w.Id, w.SpawnPid, w.SpawnPidStartTs); err != nil && !errors.As(err, new(database.ItemNotFoundError)) {
+			log.WithFields(log.Fields{"workerId": w.Id.Hex(), "err": err}).Warn("could not record a worker's spawn pid")
+		}
 	}
 
 	deadline := time.NewTimer(time.Duration(MAX_REQUEST_TIME_SECONDS*s.TimeMultiplier) * time.Second)

@@ -38,6 +38,22 @@ func makeWorker(t *testing.T, DB database.BlanketDB, stopped bool) worker.Worker
 	return w
 }
 
+// drainThenBoot drains every running worker and then clears the record,
+// as the next boot does: the state a respawn claim runs in.
+func drainThenBoot(t *testing.T, DB database.BlanketDB) {
+	t.Helper()
+	_, _, err := DB.StopWorkersForRestart(worker.StopReasonRestart, func(rr *database.RestartRecord) error {
+		rr.State = database.RestartStateDraining
+		return nil
+	})
+	require.NoError(t, err)
+	_, err = DB.UpdateRestartRecord(func(rr *database.RestartRecord) error {
+		rr.State = database.RestartStateIdle
+		return nil
+	})
+	require.NoError(t, err)
+}
+
 func TestRestartRecord_AbsentReadsAsIdle(t *testing.T) {
 	DB, closer := NewTestDB()
 	defer closer()
@@ -215,11 +231,7 @@ func TestUpdateWorker_PreservesRespawnBookkeeping(t *testing.T) {
 	defer closer()
 
 	w := makeWorker(t, DB, false)
-	_, _, err := DB.StopWorkersForRestart(worker.StopReasonRestart, func(rr *database.RestartRecord) error {
-		rr.State = database.RestartStateDraining
-		return nil
-	})
-	require.NoError(t, err)
+	drainThenBoot(t, DB)
 
 	claimed, err := DB.ClaimWorkerRespawn(w.Id)
 	require.NoError(t, err)
@@ -243,11 +255,7 @@ func TestClaimWorkerRespawn_CountsBeforeTheForkAndClearsThePid(t *testing.T) {
 	defer closer()
 
 	w := makeWorker(t, DB, false)
-	_, _, err := DB.StopWorkersForRestart(worker.StopReasonRestart, func(rr *database.RestartRecord) error {
-		rr.State = database.RestartStateDraining
-		return nil
-	})
-	require.NoError(t, err)
+	drainThenBoot(t, DB)
 
 	claimed, err := DB.ClaimWorkerRespawn(w.Id)
 	require.NoError(t, err)
@@ -317,4 +325,92 @@ func TestRestartStateRank_IsForwardOnlyAndTolerantOfNonsense(t *testing.T) {
 	assert.Equal(t, -1, database.RestartStateRank("BANANA"))
 	assert.Equal(t, -1, database.RestartStateRank(database.RestartStateVerified),
 		"VERIFIED is reached only by the next process's boot, never by a transition")
+}
+
+// turtlemonvh/blanket#278: the claim re-checks, in its own transaction,
+// that no restart is in flight -- a newer drain owns the intents.
+func TestClaimWorkerRespawn_DefersWhileARestartIsInFlight(t *testing.T) {
+	DB, closer := NewTestDB()
+	defer closer()
+
+	w := makeWorker(t, DB, false)
+	_, _, err := DB.StopWorkersForRestart(worker.StopReasonRestart, func(rr *database.RestartRecord) error {
+		rr.State = database.RestartStateDraining
+		return nil
+	})
+	require.NoError(t, err)
+
+	_, err = DB.ClaimWorkerRespawn(w.Id)
+	assert.ErrorIs(t, err, database.ErrRespawnDeferred)
+	got, err := DB.GetWorker(w.Id)
+	require.NoError(t, err)
+	assert.True(t, got.Stopped, "a deferred claim writes nothing")
+	assert.Zero(t, got.RespawnAttempts)
+}
+
+// The pid of a fork is server-owned: the child's registration must not
+// erase it, or a crash right after would leave nothing to say a process
+// is on its way.
+func TestRecordWorkerSpawn_SurvivesRegistration(t *testing.T) {
+	DB, closer := NewTestDB()
+	defer closer()
+
+	w := makeWorker(t, DB, false)
+	_, err := DB.RecordWorkerSpawn(w.Id, 5150, 7)
+	require.NoError(t, err)
+	reg := worker.WorkerConf{Id: w.Id, Pid: 5150, PidStartTs: 7}
+	require.NoError(t, DB.UpdateWorker(&reg))
+
+	got, err := DB.GetWorker(w.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 5150, got.SpawnPid)
+	assert.Equal(t, int64(7), got.SpawnPidStartTs)
+}
+
+// A worker stopped again between the claim and the settle (a newer drain)
+// keeps the intent that stop gave it.
+func TestSettleWorkerRespawn_LeavesANewerStopsIntent(t *testing.T) {
+	DB, closer := NewTestDB()
+	defer closer()
+
+	w := makeWorker(t, DB, false)
+	drainThenBoot(t, DB)
+	_, err := DB.ClaimWorkerRespawn(w.Id)
+	require.NoError(t, err)
+
+	_, _, err = DB.StopWorkersForRestart(worker.StopReasonRestart, func(rr *database.RestartRecord) error {
+		rr.State = database.RestartStateDraining
+		return nil
+	})
+	require.NoError(t, err)
+
+	got, err := DB.SettleWorkerRespawn(w.Id)
+	require.NoError(t, err)
+	assert.True(t, got.RespawnIntent, "the newer drain's intent is not the one this spawn paid")
+}
+
+// UndrainWorker only touches a record exactly as a drain left it, and
+// keeps the intent.
+func TestUndrainWorker_OnlyUndoesADrain(t *testing.T) {
+	DB, closer := NewTestDB()
+	defer closer()
+
+	drained := makeWorker(t, DB, false)
+	drainThenBoot(t, DB)
+	operator := makeWorker(t, DB, true)
+
+	ok, err := DB.UndrainWorker(drained.Id)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	got, err := DB.GetWorker(drained.Id)
+	require.NoError(t, err)
+	assert.False(t, got.Stopped)
+	assert.True(t, got.RespawnIntent)
+
+	ok, err = DB.UndrainWorker(operator.Id)
+	require.NoError(t, err)
+	assert.False(t, ok, "an operator's stop is not a drain")
+	got, err = DB.GetWorker(operator.Id)
+	require.NoError(t, err)
+	assert.True(t, got.Stopped)
 }
