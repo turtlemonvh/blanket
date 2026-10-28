@@ -9,13 +9,37 @@ tag.
 
 ## v0.4.1
 
-A fast follow to v0.4.0. It makes `blanket upgrade` honest and
-recoverable when an upgrade fails after the new binary is already
-installed, which is how the v0.3.0 → v0.4.0 upgrade fails when a
-server-started worker is running. No schema change.
+A fast follow to v0.4.0. Restarts and upgrades no longer kill running
+tasks, a worker stops promptly on SIGTERM, and `blanket upgrade` is
+honest and recoverable when an upgrade fails after the new binary is
+already installed. No schema change.
 
 ### Breaking / behaviour changes
 
+- **Stopping or restarting the service no longer stops its workers**
+  (#271). The systemd unit `blanket service install` writes now sets
+  `KillMode=process`, and the launchd plist sets `AbandonProcessGroup`.
+  Server-started workers keep running their tasks while the server
+  restarts, and reconnect when it's back. In particular, **`systemctl
+  --user stop blanket` leaves them running**; stop them first from the
+  Workers page or with `PUT /worker/:id/stop`. See
+  [docs/upgrade.md](docs/upgrade.md#workers-outlive-the-server-under-a-supervisor).
+- **A worker stops promptly on SIGTERM or SIGINT** (#271). It used to
+  finish its loop and could hang for minutes retrying a server that was
+  down. Now it stops claiming tasks, kills its running task's process
+  and reports it `STOPPED`, marks itself stopped, and exits within a few seconds,
+  whether or not the server answers. For a worker that should finish its
+  task first, use `PUT /worker/:id/stop` instead.
+  As with a cancel or a timeout, only the task's top process is killed,
+  not processes it started; #277 tracks that.
+- **`blanket upgrade` waits out the drain** (#271). When
+  `restart.drainTimeout` runs out with tasks still running, the CLI keeps
+  waiting for up to `restart.deadline`. If tasks are still running after
+  that, it exits **13** and leaves the server draining, rather than
+  restarting over them. While the CLI waits, the server's watchdog no
+  longer aborts the drain. `--resume` from a draining server waits for
+  the drain. After the restart, the CLI waits up to 3 minutes (was 90s)
+  for the new server, which covers a supervisor's stop timeout.
 - **`blanket upgrade` checks the running server, not only the installed
   binary** (#264). When the installed binary is already the target but
   the server on the port still runs an older version, `upgrade` and
@@ -37,6 +61,11 @@ server-started worker is running. No schema change.
   left in place and names `blanket rollback --yes`. When the aborted
   restart had already drained workers, it warns that any worker not
   back needs `PUT /worker/:id/restart`.
+- **A task that outlasted the drain was killed during an upgrade**
+  (#271, since v0.3.0). Under the old systemd unit, a restart stopped
+  everything in the unit, so a task still running when
+  `restart.drainTimeout` ran out ended `ERROR`. The upgrade could also
+  exit 12 even though it had succeeded.
 - **`blanket upgrade --resume --yes` after a failed post-swap upgrade**
   finishes the restart instead of refusing with "the journal records no
   staged binary" (#265). If the server no longer has a restart in flight,
@@ -44,31 +73,44 @@ server-started worker is running. No schema change.
   13 and says to restart the server under its supervisor. It never
   starts a new restart.
 
+- Dependency updates: `@playwright/test` 1.64.1 for the browser suite
+  (#269), and newer pinned GitHub Actions for the toolchain image and
+  code review workflows (#270).
+
 ### Upgrading
 
-- **From v0.4.0:** `blanket upgrade --yes`, or `--bundle` offline. The
-  server drains its workers, waits for running tasks, restarts on
-  v0.4.1 and respawns the workers. `blanket rollback --yes` returns you
-  to v0.4.0. Both were tested on a supervised server with a
-  server-started worker, idle and mid-task.
-- **From v0.3.0:** follow v0.4.0's Upgrading notes below. The v0.3.0 CLI
-  does the upgrade, so its bugs apply.
+- **From v0.4.0 on Linux (systemd):** the first upgrade still runs
+  under v0.4.0's unit and CLI, so a task that outlasts
+  `restart.drainTimeout` is killed on this one upgrade. Before
+  upgrading, add a drop-in, which takes effect without restarting
+  blanket:
+
+  ```
+  mkdir -p ~/.config/systemd/user/blanket.service.d
+  printf '[Service]\nKillMode=process\n' > ~/.config/systemd/user/blanket.service.d/killmode.conf
+  systemctl --user daemon-reload
+  ```
+
+  Then `blanket upgrade --yes` (or `--bundle` offline). Running tasks
+  finish. A worker that was busy during the upgrade is not restarted
+  afterwards (#272), so restart it from the Workers page or with `PUT
+  /worker/:id/restart`. Finally run `blanket service install` again with
+  the flags you first installed it with. That writes `KillMode=process`
+  into the unit itself, and you can delete the drop-in.
+- **From v0.4.0 on macOS, or without touching the unit:** stop your
+  workers first (Workers page or `PUT /worker/:id/stop`); each finishes
+  its current task and exits. Then upgrade, and restart them. On macOS,
+  run `blanket service uninstall` and then `blanket service install` to
+  get the new plist.
+- **With no task running,** `blanket upgrade --yes` from v0.4.0 needs
+  none of the above beyond reinstalling the service afterwards, and the
+  server brings its workers back itself.
+- These paths were tested on throwaway systemd servers on Linux; the
+  macOS steps were not. `blanket rollback --yes` returns you to v0.4.0.
+- **From v0.3.0:** follow v0.4.0's Upgrading notes below, then this
+  section. The v0.3.0 CLI does the first upgrade, so its bugs apply.
 - **`--no-restart` from v0.4.0** still prints v0.4.0's hint to run
   `--resume`. Restart the server under its supervisor instead.
-- **Known issue: a task that outlasts the drain is killed** (#271,
-  present since v0.3.0). Under the systemd unit `blanket service
-  install` writes, a restart stops everything in the unit, server-started
-  workers and their tasks included. If a task is still running when
-  `restart.drainTimeout` (60s by default) runs out, the upgrade kills
-  it, the task ends `ERROR`, and the upgrade can exit 12 even though it
-  succeeded. Until #271 is fixed:
-  - Upgrade when no long task is running, or raise
-    `restart.drainTimeout` past your longest task, along with
-    `restart.deadline`.
-  - After `--no-restart` and a supervisor restart, or after an
-    interrupted upgrade, check that your workers came back. If one
-    didn't, run `PUT /worker/:id/restart` or restart it from the UI
-    (#272).
 
 ## v0.4.0
 
