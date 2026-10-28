@@ -36,11 +36,11 @@ fields, the model needs a look.
 | `Reap` | `lib/bolt/reap.go` `CleanupStalledWorkers`; `server/reaper.go` (the restart-pending skip) |
 | `Tick` | `MinRespawnInterval` in `server/restart.go` |
 
-**Sync commit: `SYNC_COMMIT`.** The model was last confirmed to describe the
+**Sync commit: `14c9767`.** The model was last confirmed to describe the
 code at that commit. To see what has changed since:
 
 ```
-git diff SYNC_COMMIT -- server/restart.go server/serve_restart.go server/lifecycle.go \
+git diff 14c9767 -- server/restart.go server/serve_restart.go server/lifecycle.go \
   server/serve_workers.go server/reaper.go server/scheduler.go lib/bolt/restart.go \
   lib/bolt/database.go lib/bolt/reap.go worker/worker.go
 ```
