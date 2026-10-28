@@ -747,6 +747,14 @@ commits. Either way **200** — a drain that timed out with stragglers is
 information, not a failure: `drained` says whether everything went,
 `stillRunning` names what did not. **409** when `--drain-mode=never`.
 
+Calling it again while the restart is already `DRAINING` is not a 409: it
+stops nothing new and waits the same way for the workers the drain
+stopped (all of them are listed in `stopped`), refreshing the watchdog
+deadline. A driver keeps calling it until `drained` is `true` before it
+calls `exec`. A drain that is waiting also refreshes the deadline every
+few seconds, so the watchdog never aborts a drain that is still being
+waited on.
+
 #### `POST /ops/restart/exec`
 
 ```

@@ -449,7 +449,7 @@ scheduled:
 
 | `reason` on the stop | Sent by | Effect on `respawnIntent` |
 | -------------------- | ------- | ------------------------- |
-| `worker-shutdown` | the worker's own SIGTERM handler | **Preserved.** A drained worker exiting is the drain working. |
+| `worker-shutdown` | the worker shutting itself down after a `SIGTERM`/`SIGINT` | **Preserved.** A drained worker exiting is the drain working. |
 | `restart-drain` | the drain itself, on the record it writes | Set. |
 | `reaper: …` | the reaper | Untouched (the reaper is suppressed during a restart anyway). |
 | *(absent)* | an operator, the UI, the MCP tool | **Cleared.** A deliberate stop mid-restart outranks the restart's plan. |
@@ -588,9 +588,18 @@ poll waits `CheckInterval` plus up to a quarter more; a failed iteration
 waits a **full-jitter** backoff, `rand(0, min(CheckInterval << n, 30s))`.
 This defends against a server restart, which every worker on the machine
 sees at the same instant and would otherwise reconnect from in lockstep.
-A `SIGTERM` sets a local stop flag as well as asking the server to mark
-the worker stopped, so the loop exits even when the server is
-permanently unreachable.
+A `SIGTERM` or `SIGINT` stops the worker **now**, not after its current
+task (that is what a server-side stop, as a restart drain sends, is for).
+The worker stops claiming, kills the running task's process the way an API
+stop does, reports the task `STOPPED`, marks itself stopped with
+`reason=worker-shutdown`, and exits. Every server call on that path is
+bounded: in-flight calls are cancelled at the signal, and the two final
+reports share a 3-second budget, so the worker exits within a few seconds
+even when the server is down or hung. Whatever it could not report, the
+[reaper](#the-reaper) settles: the task from its outcome journal, the
+worker from its dead pid. If anything still holds it up, the worker exits
+10 seconds after the signal regardless, and a second signal exits at
+once.
 
 ```mermaid
 sequenceDiagram

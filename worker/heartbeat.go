@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"context"
 	"encoding/json"
 	"time"
 
@@ -66,7 +65,7 @@ type HeartbeatResponse struct {
 // on PUT /worker/:id instead. That separation is what keeps the reaper's
 // arithmetic honest.
 func (c *WorkerConf) Heartbeat() (*HeartbeatResponse, error) {
-	res, err := httpx.Do(context.Background(), "PUT", workerURL(c.Id, "/heartbeat"), nil,
+	res, err := httpx.Do(c.ctx(), "PUT", workerURL(c.Id, "/heartbeat"), nil,
 		httpx.Policy{Deadline: HeartbeatRetryDeadline})
 	if err != nil {
 		return nil, err

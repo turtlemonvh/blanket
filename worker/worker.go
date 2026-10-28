@@ -22,7 +22,6 @@ import (
 	"path"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"text/template"
 	"time"
@@ -49,13 +48,6 @@ var (
 	// worker started while the server is briefly down (a supervisor
 	// restarting both at once, say) should wait rather than exit.
 	RegisterRetryDeadline = 30 * time.Second
-
-	// ShutdownRetryDeadline bounds how long the SIGTERM handler keeps
-	// trying to register the worker as stopped before giving up. It must
-	// stay finite: the shutdown path has to terminate the process even
-	// when the server is never coming back, which is exactly the case the
-	// pre-fix handler spun on forever.
-	ShutdownRetryDeadline = 10 * time.Second
 )
 
 // ErrCheckIntervalTooLow is returned by Run when CheckInterval is set to
@@ -165,18 +157,19 @@ type WorkerConf struct {
 	// to spawn this worker.
 	LastRespawnTs int64 `json:"lastRespawnTs,omitempty"`
 
-	// stopping is a purely local shutdown flag, set by the SIGTERM/SIGINT
-	// handler (turtlemonvh/blanket#23 phase 1). The claim loop's exit
-	// condition used to be Stopped alone, which the worker only learns
-	// about by asking the server — so a SIGTERM delivered while the server
-	// was unreachable did nothing at all and the worker ran forever.
+	// sd is the purely local shutdown state the SIGTERM/SIGINT handler
+	// drives (see shutdown.go). The claim loop exits on it without asking
+	// the server, which is what lets a signal stop a worker whose server
+	// is unreachable, and every server call the worker makes runs under
+	// its context, so none of them can hold a shutdown up.
 	//
 	// A pointer rather than a value so WorkerConf stays copyable: the
 	// struct is passed and returned by value all over the server, and an
-	// inlined atomic.Bool would trip `go vet`'s copylocks check. Nil means
-	// "nothing has requested a stop" (the zero value for every WorkerConf
-	// that isn't running its own Run loop).
-	stopping *atomic.Bool `json:"-"`
+	// inlined atomic or mutex would trip `go vet`'s copylocks check. Nil
+	// means "nothing can request a stop" (the zero value for every
+	// WorkerConf that isn't running its own Run loop), and every helper
+	// below treats nil as "carry on as normal".
+	sd *shutdown `json:"-"`
 
 	// serverInstanceId is the last server instance id seen on a heartbeat
 	// response (see heartbeat.go). Local to the running worker: it is
@@ -188,7 +181,27 @@ type WorkerConf struct {
 // stopRequested reports whether this process has been asked to shut down by
 // a signal. Safe on a zero-valued WorkerConf.
 func (c *WorkerConf) stopRequested() bool {
-	return c.stopping != nil && c.stopping.Load()
+	return c.sd != nil && c.sd.requested.Load()
+}
+
+// ctx is the context the worker's ordinary server calls run under:
+// cancelled the moment a shutdown is requested.
+func (c *WorkerConf) ctx() context.Context {
+	if c.sd == nil {
+		return context.Background()
+	}
+	return c.sd.ctx
+}
+
+// reportCtx is the context for a report that must still be attempted
+// during a shutdown (a task's final state, the worker's own stop): bounded
+// by the shutdown's ShutdownRetryDeadline once one is requested, and not
+// bounded beyond the call's own retry budget otherwise.
+func (c *WorkerConf) reportCtx() context.Context {
+	if c.sd == nil {
+		return context.Background()
+	}
+	return c.sd.reportContext()
 }
 
 // buildDaemonCmd constructs the exec.Cmd used to relaunch this process as
@@ -289,50 +302,46 @@ func (c *WorkerConf) Run() error {
 		}).Info("Starting daemonized executable")
 
 	} else {
-		// Handle clean shutdown.
+		// Handle a shutdown signal: stop now, not after the current task.
 		//
-		// Two bugs used to live here (turtlemonvh/blanket#23 phase 1). The
-		// retry loop never reassigned err and never incremented its
-		// counter, so a server that was down turned this into an infinite
-		// spin — the exact situation an upgrade creates. And it wrote to
-		// Run's `err` from a second goroutine while the main one was using
-		// it, which is a data race.
+		// The handler itself does nothing slow. It requests the shutdown
+		// (flag, cancelled context, killed task; see shutdown.go) and
+		// returns to waiting; the main goroutine then unwinds ProcessTasks,
+		// which reports the killed task as STOPPED, and reports the worker
+		// stopped below. Both reports share ShutdownRetryDeadline, so the
+		// worker exits within a few seconds even with the server down —
+		// it used to retry a task's finish for minutes against a server
+		// that a supervisor was waiting on this worker to restart.
 		//
-		// Retrying now happens inside StopWorkerById (full-jitter backoff
-		// against a finite deadline), and the handler owns nothing the main
-		// goroutine touches: it reads a copy of the worker id taken before
-		// the goroutine starts, because ProcessTasks overwrites *c on every
-		// Refetch.
-		c.stopping = &atomic.Bool{}
-		workerId := c.Id
-		shutdownChan := make(chan os.Signal, 1)
-		signal.Notify(shutdownChan, os.Interrupt)
-		signal.Notify(shutdownChan, syscall.SIGTERM)
+		// The handler owns nothing the main goroutine touches except the
+		// shutdown state, which is built for it: ProcessTasks overwrites *c
+		// on every Refetch.
+		sd := newShutdown()
+		c.sd = sd
+		shutdownChan := make(chan os.Signal, 2)
+		signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM)
 		go func() {
-			<-shutdownChan
-			log.Warn("Received shutdown signal; attempting to set worker to 'stopped'")
+			sig := <-shutdownChan
+			log.WithFields(log.Fields{
+				"signal": sig.String(),
+			}).Warn("Received shutdown signal; stopping the running task and shutting down")
+			sd.request()
 
-			// StopReasonSelf, not a bare stop: this call is
-			// indistinguishable from an operator's without it, and would
-			// cancel a restart drain's respawn intent for the worker the
-			// drain had just asked to come back
-			// (turtlemonvh/blanket#23 phase 5).
-			if serr := StopWorkerById(workerId, StopReasonSelf); serr != nil {
-				// Worker exits anyway, via the local flag below. Leaving a
-				// record that says "running" is a problem for the server's
-				// reaper to notice, not a reason to stay alive.
+			// Backstop: whatever the main goroutine is stuck on, the
+			// process does not outlive its signal by more than this.
+			exitTimer := time.NewTimer(timing.Scale(ShutdownExitDeadline))
+			select {
+			case sig = <-shutdownChan:
 				log.WithFields(log.Fields{
-					"err":      serr.Error(),
-					"deadline": ShutdownRetryDeadline,
-				}).Error("Failed to register worker as 'stopped'. Will exit anyway.")
-			} else {
-				log.Info("Successfully registered worker as 'stopped'.")
+					"signal": sig.String(),
+				}).Warn("Received a second shutdown signal; exiting now")
+			case <-exitTimer.C:
+				log.WithFields(log.Fields{
+					"deadline": ShutdownExitDeadline,
+				}).Error("Shutdown did not finish in time; exiting now. The server's reaper will settle this worker's records.")
 			}
-
-			// Local stop flag: the claim loop exits on this even if the
-			// server is never reachable again, so SIGTERM always
-			// terminates the worker.
-			c.stopping.Store(true)
+			sd.killChild()
+			os.Exit(1)
 		}()
 
 		c.Pid = os.Getpid()
@@ -383,7 +392,11 @@ func (c *WorkerConf) Run() error {
 		}()
 
 		c.MustRegister()
-		if err := c.ProcessTasks(); err != nil {
+		perr := c.ProcessTasks()
+		if c.stopRequested() {
+			os.Exit(c.reportSelfStopped())
+		}
+		if perr != nil {
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -445,19 +458,19 @@ const (
 // StopWorkerById asks the server to mark a worker stopped, retrying
 // transient failures with full-jitter backoff until ShutdownRetryDeadline.
 //
-// Takes an id rather than a *WorkerConf because its caller is the signal
-// handler, which must not read a struct the claim loop is concurrently
-// overwriting.
-//
 // reason is passed through as the ?reason= query parameter; an empty one
 // means "an operator stopped this worker", which is the only kind of stop
 // that clears a pending respawn intent.
 func StopWorkerById(workerId objectid.ObjectId, reason string) error {
+	return stopWorkerByIdContext(context.Background(), workerId, reason)
+}
+
+func stopWorkerByIdContext(ctx context.Context, workerId objectid.ObjectId, reason string) error {
 	suffix := "/stop"
 	if reason != "" {
 		suffix += "?reason=" + url.QueryEscape(reason)
 	}
-	_, err := httpx.Do(context.Background(), "PUT", workerURL(workerId, suffix), nil,
+	_, err := httpx.Do(ctx, "PUT", workerURL(workerId, suffix), nil,
 		httpx.Policy{Deadline: ShutdownRetryDeadline})
 	return err
 }
@@ -466,12 +479,35 @@ func (c *WorkerConf) Stop() error {
 	return StopWorkerById(c.Id, StopReasonSelf)
 }
 
+// reportSelfStopped is the last thing a signalled worker does: mark its
+// record stopped and pick the process exit status.
+//
+// StopReasonSelf, not a bare stop: this call is indistinguishable from an
+// operator's without it, and would cancel a restart drain's respawn intent
+// for the worker the drain had just asked to come back
+// (turtlemonvh/blanket#23 phase 5).
+//
+// A failure is logged and the worker exits anyway. A record that still
+// says "running" is for the server's reaper to notice (the pid is gone),
+// not a reason to stay alive.
+func (c *WorkerConf) reportSelfStopped() int {
+	if err := stopWorkerByIdContext(c.reportCtx(), c.Id, StopReasonSelf); err != nil {
+		log.WithFields(log.Fields{
+			"err":      err.Error(),
+			"deadline": ShutdownRetryDeadline,
+		}).Error("Failed to register worker as 'stopped'; exiting anyway. The server's reaper will settle the record.")
+		return 1
+	}
+	log.Info("Registered worker as 'stopped'; exiting.")
+	return 0
+}
+
 func (c *WorkerConf) UpdateInDatabase() error {
 	bts, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
-	_, err = httpx.Do(context.Background(), "PUT", workerURL(c.Id, ""), bts,
+	_, err = httpx.Do(c.ctx(), "PUT", workerURL(c.Id, ""), bts,
 		httpx.Policy{Deadline: RegisterRetryDeadline})
 	return err
 }
@@ -482,7 +518,7 @@ func (c *WorkerConf) UpdateInDatabase() error {
 // Deliberately does not retry: the claim loop that calls it is itself the
 // retry, with its own jittered backoff.
 func (c *WorkerConf) Refetch() error {
-	res, err := httpx.DoOnce(context.Background(), "GET", workerURL(c.Id, ""), nil, httpx.DefaultRequestTimeout)
+	res, err := httpx.DoOnce(c.ctx(), "GET", workerURL(c.Id, ""), nil, httpx.DefaultRequestTimeout)
 	if err != nil {
 		return err
 	}
@@ -604,7 +640,7 @@ func (c *WorkerConf) ProcessTasks() error {
 			}
 		}
 
-		t, err = tasks.MarkAsClaimed(c.Id)
+		t, err = tasks.MarkAsClaimedContext(c.ctx(), c.Id)
 		if err != nil {
 			delay := c.backoffSleep(outageAttempts)
 			outageAttempts++
@@ -727,7 +763,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		}).Error("Error starting task execution")
 		// No exit code: the process never started, so there is no exit
 		// status to report.
-		terr := tasks.MarkAsFinished(t, "ERROR", runId, nil)
+		terr := tasks.MarkAsFinishedContext(c.reportCtx(), t, "ERROR", runId, nil, tasks.FinishRetryDeadline)
 		if terr != nil {
 			log.WithFields(log.Fields{
 				"err":    terr.Error(),
@@ -736,6 +772,12 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			return terr
 		}
 		return err
+	}
+
+	// From here until it is reaped, a shutdown signal kills this child.
+	if c.sd != nil {
+		c.sd.track(cmd.Process)
+		defer c.sd.untrack()
 	}
 
 	// The child is running and its two log files are already growing, so
@@ -769,7 +811,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	c.writeJournal(resultDir, journal)
 
 	// FIXME: Move more fields here
-	err = tasks.MarkAsRunning(t, runId, map[string]string{
+	err = tasks.MarkAsRunningContext(c.ctx(), t, runId, map[string]string{
 		"timeout":    tt.Config.GetString("timeout"),
 		"pid":        cast.ToString(cmd.Process.Pid),
 		"typeDigest": tt.ConfigVersionHash,
@@ -788,7 +830,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	// rather than treating an unreachable server as a reason to compute a
 	// deadline of zero and kill the task instantly.
 	maxTime := time.Now().Unix() + cast.ToInt64(tt.Config.GetString("timeout"))
-	if rerr := t.Refresh(); rerr != nil {
+	if rerr := t.RefreshContext(c.ctx()); rerr != nil {
 		log.WithFields(log.Fields{
 			"err":     rerr.Error(),
 			"taskId":  taskId,
@@ -835,7 +877,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 			// killed. Before, the error was dropped on the floor and
 			// snapshot.State kept whatever it had, which happened to be
 			// safe but only by accident — and said nothing in the logs.
-			if rerr := snapshot.Refresh(); rerr != nil {
+			if rerr := snapshot.RefreshContext(c.ctx()); rerr != nil {
 				log.WithFields(log.Fields{
 					"err":    rerr.Error(),
 					"taskId": taskId,
@@ -870,7 +912,7 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 				// No exit code here: the process is about to be killed,
 				// so whatever cmd.Wait() reports is a signal death rather
 				// than the task's own status.
-				if merr := tasks.MarkAsFinishedWithin(&snapshot, "TIMEDOUT", runId, nil, tasks.TimeoutFinishDeadline); merr != nil {
+				if merr := tasks.MarkAsFinishedContext(c.reportCtx(), &snapshot, "TIMEDOUT", runId, nil, tasks.TimeoutFinishDeadline); merr != nil {
 					log.WithFields(log.Fields{
 						"err":    merr.Error(),
 						"taskId": taskId,
@@ -926,7 +968,15 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 	c.writeJournal(resultDir, journal)
 
 	finalState := "SUCCESS"
-	if waitErr != nil {
+	if c.sd != nil && c.sd.killedTask(cmd.Process) {
+		// The worker's own shutdown killed it: that is a stop, the same
+		// state an API stop of a running task ends in, not a failure of
+		// the task.
+		finalState = "STOPPED"
+		log.WithFields(log.Fields{
+			"taskId": taskId,
+		}).Warn("task stopped because the worker is shutting down")
+	} else if waitErr != nil {
 		finalState = "ERROR"
 		log.WithFields(log.Fields{
 			"err":      waitErr.Error(),
@@ -935,7 +985,10 @@ func (c *WorkerConf) ProcessOne(t *tasks.Task) error {
 		}).Error("problems finishing task execution")
 	}
 
-	ferr := tasks.MarkAsFinished(t, finalState, runId, exitCode)
+	// reportCtx: during a shutdown this report gets the shutdown's short
+	// budget rather than FinishRetryDeadline's minutes; if it doesn't
+	// land, the journal below stays put for the reaper.
+	ferr := tasks.MarkAsFinishedContext(c.reportCtx(), t, finalState, runId, exitCode, tasks.FinishRetryDeadline)
 	if ferr != nil {
 		// The outcome is on disk and stays there: the server never
 		// acknowledged it, so the phase 3 reaper is the one that will

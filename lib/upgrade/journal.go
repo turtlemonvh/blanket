@@ -113,6 +113,39 @@ func JournalRank(state string) int {
 	return -1
 }
 
+// FurthestState is the highest-ranked forward state this journal ever
+// recorded, read from Steps (and the current State) rather than from
+// State alone. "" if it recorded none.
+//
+// It exists because State is only where the attempt *ended*. A journal
+// that ends in FAILED says nothing about whether the binary was swapped
+// first, and the two answers lead opposite ways for --abort ("nothing was
+// installed" vs. "the new binary is left in place") and --resume
+// (re-verify the staged file vs. finish the restart). Steps already
+// records every transition, so this needs no new field and reads journals
+// written before it existed.
+func (j *Journal) FurthestState() string {
+	best, bestRank := "", -1
+	consider := func(s string) {
+		if r := JournalRank(s); r > bestRank {
+			best, bestRank = s, r
+		}
+	}
+	for _, st := range j.Steps {
+		consider(st.State)
+	}
+	consider(j.State)
+	return best
+}
+
+// Reached reports whether the journal ever got as far as state: whether
+// state, or any forward state after it, was recorded. A terminal or
+// unknown state is never "reached".
+func (j *Journal) Reached(state string) bool {
+	want := JournalRank(state)
+	return want >= 0 && JournalRank(j.FurthestState()) >= want
+}
+
 // Step is one recorded transition.
 type Step struct {
 	State string `json:"state"`
