@@ -69,7 +69,9 @@ systemctl --user enable --now blanket.service
 Logs go to `blanket-service.log` under blanket's data directory (see
 [installation](install.md#where-files-land) for the exact path), via the
 unit's `StandardOutput`/`StandardError`. `Restart=on-failure` restarts
-the server if it crashes.
+the server if it crashes. `KillMode=process` makes stopping or restarting
+the unit signal only the server, so workers it started keep running their
+tasks; see [upgrade.md](upgrade.md#workers-outlive-the-server-under-a-supervisor).
 
 **If `systemctl --user` isn't usable** — no systemd, or systemd
 present but no user session/D-Bus bus wired up (common under WSL and
@@ -86,7 +88,9 @@ launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/com.turtlemonvh.blanket.pli
 ```
 
 `RunAtLoad` starts it at login; `KeepAlive` (`SuccessfulExit: false`)
-restarts it if it exits unexpectedly. Logs go to the same
+restarts it if it exits unexpectedly. `AbandonProcessGroup` leaves
+workers the server started running when it exits, as `KillMode=process`
+does on Linux. Logs go to the same
 `blanket-service.log` path as Linux, via `StandardOutPath`/
 `StandardErrorPath`.
 

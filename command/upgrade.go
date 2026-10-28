@@ -90,7 +90,16 @@ var upgradeConf struct {
 
 // verifyBudget is how long the CLI waits for a replacement server to
 // answer. Unscaled constant through timing.Scale, per lib/timing's rule.
-const verifyBudget = 90 * time.Second
+//
+// It has to cover the supervisor, not just the server's own boot. A
+// systemd unit whose stop leaves something running waits out
+// TimeoutStopSec (90s by default) before it SIGKILLs and restarts; then
+// RestartSec (5s in the generated unit) passes, and launchd throttles
+// respawns to one per 10s. 90s + 5s + 10s, plus a boot that may migrate
+// the database, is past 2 minutes; 3 minutes covers it with room. The wait
+// returns the moment the replacement answers, so a long budget only delays
+// the report of a restart that has genuinely failed.
+const verifyBudget = 3 * time.Minute
 
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade [version]",
@@ -564,36 +573,34 @@ func execAndVerify(res *upgradeResult, j *upgrade.Journal, port int) int {
 
 	// Drain unless told not to. An upgrade changes worker code, which is
 	// exactly the case brief decision row 3 says to drain for.
+	//
+	// A restart already DRAINING is an attempt that died mid-drain: its
+	// workers may still be finishing their tasks, so it is waited on again
+	// rather than taken as drained. Only past DRAINING is the drain done.
 	drainMode := viper.GetString("restart.drainMode")
+	draining := rank == database.RestartStateRank(database.RestartStateDraining)
 	switch {
-	case rank >= database.RestartStateRank(database.RestartStateDraining):
-		// Already drained by the attempt this one is resuming.
-	case drainMode == database.DrainModeNever:
+	case rank > database.RestartStateRank(database.RestartStateDraining):
+		// Past the drain already; the exec below decides what happens.
+	case !draining && drainMode == database.DrainModeNever:
 		res.Warnings = append(res.Warnings, "--drain-mode never: workers keep running the old binary until they are restarted")
 	default:
 		j.DrainRequested = true
-		budget := viper.GetDuration("restart.drainTimeout")
-		if budget <= 0 {
-			budget = 60 * time.Second
-		}
-		db, err := opsCallLong(port, http.MethodPost, "/ops/restart/drain", nil, timing.Scale(budget)+30*time.Second)
+		still, waited, err := drainWorkers(port)
 		if err != nil {
 			return failWith(ExitRestartRefused, err)
 		}
-		var drain struct {
-			Drained bool     `json:"drained"`
-			Running []string `json:"stillRunning"`
-			Stopped int      `json:"stopped"`
+		if len(still) > 0 {
+			// Never exec over a worker that is still running a task: under
+			// a supervisor that kills the whole service on exit, that kills
+			// the task. Stop here with the server still draining, which is
+			// the state --resume picks the wait back up from.
+			return failWith(ExitRestartRefused, fmt.Errorf(
+				"%d worker(s) were still running their tasks after waiting %s, so the server was not restarted; it is still draining. "+
+					"Run `blanket upgrade --resume --yes` to keep waiting, or `blanket upgrade --abort` to call the restart off",
+				len(still), waited.Round(time.Second)))
 		}
-		_ = json.Unmarshal(db, &drain)
-		if !drain.Drained {
-			// Information, not failure -- the server's own view (see
-			// opsRestartDrain). A worker three hours into a render is a
-			// reason for a human to reconsider, not for the CLI to decide.
-			res.Warnings = append(res.Warnings,
-				fmt.Sprintf("the drain timed out with %d worker(s) still running; they carry respawn intent and will be brought back", len(drain.Running)))
-		}
-		j.Advance(upgrade.JournalDrained, fmt.Sprintf("drained=%v", drain.Drained))
+		j.Advance(upgrade.JournalDrained, "drained=true")
 		save()
 	}
 
@@ -1088,7 +1095,7 @@ func printPlan(installed string, src *upgradeSource) string {
 	if viper.GetString("restart.drainMode") == "never" {
 		fmt.Fprintf(&b, "# 6. Drain: SKIPPED (--drain-mode never).\n\n")
 	} else {
-		fmt.Fprintf(&b, "# 6. Drain: an upgrade changes worker code, so the fleet is stopped\n#    with respawn intent. Waits up to restart.drainTimeout (%s).\ncurl -sS \"${OPS[@]}\" -X POST $BASE/ops/restart/drain\n\n", viper.GetDuration("restart.drainTimeout"))
+		fmt.Fprintf(&b, "# 6. Drain: an upgrade changes worker code, so the fleet is stopped\n#    with respawn intent. Waits up to restart.drainTimeout (%s); repeat\n#    until it answers \"drained\": true, and do not exec before then.\ncurl -sS \"${OPS[@]}\" -X POST $BASE/ops/restart/drain\n\n", viper.GetDuration("restart.drainTimeout"))
 	}
 	fmt.Fprintf(&b, "# 7. Go. 202, then the server re-execs in place or exits 75 for its\n#    supervisor -- see --exec-mode (configured: %s).\ncurl -sS \"${OPS[@]}\" -X POST $BASE/ops/restart/exec\n\n", viper.GetString("restart.execMode"))
 	fmt.Fprintf(&b, "# 8. Verify. A different instanceId means a different process came back.\nuntil curl -fsS $BASE/version >/dev/null 2>&1; do sleep 0.5; done\ncurl -sS \"${OPS[@]}\" $BASE/ops/restart/status   # -> IDLE\ncurl -sS $BASE/config/ | grep instanceId\n\n")

@@ -71,6 +71,14 @@ const SystemdUnitName = "blanket.service"
 
 // SystemdUnit renders the systemd user unit that runs `blanket [--config
 // ...] --port ...` as a simple, auto-restarting service.
+//
+// KillMode=process makes a stop or restart signal only the server itself.
+// Workers the server forked live in the same cgroup, and under the default
+// (control-group) a restart would SIGTERM them and the tasks they run, even
+// though the drain has just promised those tasks may finish. Workers are
+// daemonized into their own process group, heartbeat, and reconnect after a
+// server outage, so leaving them alone is the intended behaviour; the
+// cost is that `systemctl stop blanket` leaves them running too.
 func SystemdUnit(c Config) string {
 	return fmt.Sprintf(`[Unit]
 Description=Blanket task server
@@ -81,6 +89,7 @@ Type=simple
 ExecStart=%s %s
 Restart=on-failure
 RestartSec=5
+KillMode=process
 StandardOutput=append:%s
 StandardError=append:%s
 
@@ -103,6 +112,12 @@ const LaunchdLabel = "com.turtlemonvh.blanket"
 
 // LaunchdPlist renders the macOS LaunchAgent plist that runs blanket at
 // login and restarts it if it exits unexpectedly (KeepAlive).
+//
+// AbandonProcessGroup is the launchd counterpart of the systemd unit's
+// KillMode=process: without it, when the job exits launchd kills whatever
+// is left in the job's process group. Forked workers already call Setpgid,
+// so they normally sit outside that group; the key makes "a server exit
+// never takes the workers with it" explicit rather than a side effect.
 func LaunchdPlist(c Config) string {
 	var argv strings.Builder
 	argv.WriteString("\t\t<string>" + xmlEscape(c.ExecPath) + "</string>\n")
@@ -126,6 +141,8 @@ func LaunchdPlist(c Config) string {
 		<key>SuccessfulExit</key>
 		<false/>
 	</dict>
+	<key>AbandonProcessGroup</key>
+	<true/>
 	<key>StandardOutPath</key>
 	<string>%s</string>
 	<key>StandardErrorPath</key>
