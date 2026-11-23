@@ -73,9 +73,11 @@ already installed. No schema change.
   13 and says to restart the server under its supervisor. It never
   starts a new restart.
 
-- Dependency updates: `@playwright/test` 1.64.1 for the browser suite
-  (#269), and newer pinned GitHub Actions for the toolchain image and
-  code review workflows (#270).
+- Dependency updates. In the binary: goldmark 1.8.7, mongo-driver
+  2.10.0 (used for its BSON object ids) and `golang.org/x/sys` 0.50.0
+  (#284). For tests and CI: `@playwright/test` 1.65.0 with a matching
+  Playwright base image (#269, #282), and newer pinned GitHub Actions
+  (#270, #283).
 
 ### Upgrading
 
